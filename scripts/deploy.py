@@ -45,11 +45,11 @@ def init_command(args: argparse.Namespace) -> None:
         "DB_PASSWORD": args.db_password,
         "DATABASE_URL": database_url,
         "SECRET_KEY": secret_key,
-        "S3_BUCKET": args.s3_bucket or "",
-        "S3_PREFIX": args.s3_prefix or "gec-backups",
-        "S3_REGION": args.s3_region or "",
-        "AWS_ACCESS_KEY_ID": args.aws_access_key_id or "",
-        "AWS_SECRET_ACCESS_KEY": args.aws_secret_access_key or "",
+        "S3_BUCKET": args.s3_bucket or "tt-yasalma",
+        "S3_REGION": args.s3_region or "ru-central-1",
+        "S3_ENDPOINT": args.s3_endpoint or "https://s3.cloud.ru",
+        "S3_KEY": args.s3_key or "",
+        "S3_SECRET": args.s3_secret or "",
     }
 
     script = textwrap.dedent(
@@ -65,13 +65,13 @@ def init_command(args: argparse.Namespace) -> None:
         REMOTE_USER=$(whoami)
 
         sudo apt update
-        sudo apt install -y git rsync python3 python3-venv python3-pip nodejs npm nginx postgresql postgresql-contrib ufw awscli
+        sudo apt install -y git rsync python3 python3-venv python3-pip nodejs npm nginx postgresql postgresql-contrib ufw pgbackrest
 
         PG_CONF="/etc/postgresql/15/main/postgresql.conf"
         PG_HBA=$(sudo -u postgres -H sh -c "cd / && psql -qtAc 'SHOW hba_file;'" | tr -d '[:space:]')
 
         if [[ -n "$PG_CONF" && -f "$PG_CONF" ]]; then
-          ARCHIVE_CMD="test -f /var/lib/postgresql/wal-archive/%f || cp %p /var/lib/postgresql/wal-archive/%f"
+          ARCHIVE_CMD="pgbackrest --stanza=gec archive-push %p"
           WAL_SNIPPET="/etc/postgresql/15/main/conf.d/gec-wal.conf"
           sudo mkdir -p /etc/postgresql/15/main/conf.d
           sudo tee "$WAL_SNIPPET" >/dev/null <<SNIPPET
@@ -80,9 +80,9 @@ wal_level = replica
 archive_mode = on
 archive_command = '$ARCHIVE_CMD'
 SNIPPET
-          sudo mkdir -p /var/lib/postgresql/wal-archive
-          sudo chown -R postgres:postgres /var/lib/postgresql/wal-archive
-          sudo chmod 700 /var/lib/postgresql/wal-archive
+          sudo mkdir -p /var/lib/pgbackrest /var/log/pgbackrest
+          sudo chown -R postgres:postgres /var/lib/pgbackrest /var/log/pgbackrest
+          sudo chmod 700 /var/lib/pgbackrest
         fi
         if [[ -n "$PG_HBA" && -f "$PG_HBA" ]]; then
           if ! sudo grep -q "0.0.0.0/0" "$PG_HBA"; then
@@ -127,42 +127,49 @@ ALTER DATABASE "${DB_NAME}" SET search_path = public;
 ALTER ROLE "${DB_USER}" IN DATABASE "${DB_NAME}" SET search_path = public;
 SQL
 
-        if [[ -n "${S3_BUCKET}" ]]; then
-          echo "Configuring S3 backups..."
-          sudo mkdir -p /var/backups/gec
-          sudo chown "$REMOTE_USER":"$REMOTE_USER" /var/backups/gec
-          sudo tee /usr/local/bin/gec-db-backup.sh >/dev/null <<'BACKUP'
-#!/usr/bin/env bash
-set -euo pipefail
-STAMP=$(date +%Y%m%d_%H%M%S)
-BACKUP_DIR=/var/backups/gec
-mkdir -p "$BACKUP_DIR"
-FILE="$BACKUP_DIR/db_${STAMP}.sql.gz"
-export PGPASSWORD="${DB_PASSWORD}"
-pg_dump -U "${DB_USER}" -d "${DB_NAME}" | gzip > "$FILE"
-aws s3 cp "$FILE" "s3://${S3_BUCKET}/${S3_PREFIX:-gec-backups}/$(basename "$FILE")"
-find "$BACKUP_DIR" -type f -mtime +7 -delete
-BACKUP
-          sudo chmod +x /usr/local/bin/gec-db-backup.sh
+        echo "Configuring pgBackRest..."
+        sudo rm -f /etc/pgbackrest.conf
+        sudo mkdir -p /etc/pgbackrest
+        sudo tee /etc/pgbackrest/pgbackrest.conf >/dev/null <<CONF
+[global]
+repo1-path=/var/lib/pgbackrest
+repo1-retention-full=30
+repo1-retention-full-type=time
+repo1-retention-archive-type=time
+repo1-retention-archive=30
+log-path=/var/log/pgbackrest
+start-fast=y
+[global:archive-push]
+compress-level=3
 
-          CRON_FILE=/etc/cron.d/gec-db-backup
-          sudo tee "$CRON_FILE" >/dev/null <<CRON
+[gec]
+pg1-path=/var/lib/postgresql/15/main
+pg1-port=5432
+pg1-user=postgres
+CONF
+        if [[ -n "$S3_BUCKET" ]]; then
+          sudo tee -a /etc/pgbackrest/pgbackrest.conf >/dev/null <<CONF
+repo1-type=s3
+repo1-s3-bucket=${S3_BUCKET}
+repo1-s3-region=${S3_REGION}
+repo1-s3-endpoint=${S3_ENDPOINT}
+repo1-s3-uri-style=path
+repo1-s3-key=${S3_KEY}
+repo1-s3-key-secret=${S3_SECRET}
+CONF
+        fi
+        sudo chown -R postgres:postgres /etc/pgbackrest /var/lib/pgbackrest /var/log/pgbackrest
+        sudo chmod 750 /etc/pgbackrest
+        sudo chmod 700 /var/lib/pgbackrest
+        sudo -u postgres pgbackrest --stanza=gec --log-level-console=info stanza-create || true
+
+        sudo tee /etc/cron.d/pgbackrest-gec >/dev/null <<'CRON'
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
-AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
-AWS_DEFAULT_REGION=${S3_REGION}
-DB_NAME=${DB_NAME}
-DB_USER=${DB_USER}
-DB_PASSWORD=${DB_PASSWORD}
-S3_BUCKET=${S3_BUCKET}
-S3_PREFIX=${S3_PREFIX}
-0 3 * * * root /usr/local/bin/gec-db-backup.sh >> /var/log/gec-db-backup.log 2>&1
+0 2 * * * postgres pgbackrest --stanza=gec --type=full backup
+0 * * * * postgres pgbackrest --stanza=gec --type=incr backup
 CRON
-          sudo chmod 600 "$CRON_FILE"
-        else
-          echo "S3_BUCKET not set; skipping backup cron setup."
-        fi
+        sudo chmod 644 /etc/cron.d/pgbackrest-gec
 
         cat <<ENV > "$APP_DIR/backend.env"
 DATABASE__URL=$DATABASE_URL
@@ -362,11 +369,11 @@ def build_parser() -> argparse.ArgumentParser:
     init_parser.add_argument("--db-user", default="gec", help="PostgreSQL user")
     init_parser.add_argument("--db-password", default="change-me", help="PostgreSQL password")
     init_parser.add_argument("--secret-key", default=None, help="JWT secret (auto-generated if omitted)")
-    init_parser.add_argument("--s3-bucket", default=None, help="S3 bucket for backups (optional)")
-    init_parser.add_argument("--s3-prefix", default="gec-backups", help="S3 key prefix for backups")
-    init_parser.add_argument("--s3-region", default=None, help="AWS region for backups (optional)")
-    init_parser.add_argument("--aws-access-key-id", default=None, help="AWS access key for backups (optional)")
-    init_parser.add_argument("--aws-secret-access-key", default=None, help="AWS secret key for backups (optional)")
+    init_parser.add_argument("--s3-bucket", default=None, help="S3 bucket for pgBackRest repo (optional)")
+    init_parser.add_argument("--s3-region", default=None, help="S3 region (optional)")
+    init_parser.add_argument("--s3-endpoint", default=None, help="S3 endpoint for non-AWS (optional)")
+    init_parser.add_argument("--s3-key", default=None, help="S3 access key (optional)")
+    init_parser.add_argument("--s3-secret", default=None, help="S3 secret key (optional)")
     init_parser.set_defaults(func=init_command)
 
     deploy_parser = subparsers.add_parser("deploy", help="Sync code and restart services.")

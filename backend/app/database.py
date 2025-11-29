@@ -3,6 +3,7 @@ from contextlib import contextmanager
 from typing import Optional
 
 from sqlalchemy import create_engine
+from sqlalchemy.pool import StaticPool
 from sqlalchemy.orm import scoped_session, sessionmaker
 
 from .config import get_settings
@@ -23,12 +24,20 @@ def configure_engine(
     resolved_overflow = max_overflow if max_overflow is not None else settings.database.max_overflow
 
     global engine, SessionLocal
-    engine = create_engine(
-        database_url,
-        pool_size=resolved_pool,
-        max_overflow=resolved_overflow,
-        future=True,
-    )
+    if database_url.startswith("sqlite"):
+        engine = create_engine(
+            database_url,
+            future=True,
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+    else:
+        engine = create_engine(
+            database_url,
+            pool_size=resolved_pool,
+            max_overflow=resolved_overflow,
+            future=True,
+        )
     SessionLocal = scoped_session(sessionmaker(bind=engine, autoflush=False, autocommit=False))
 
 

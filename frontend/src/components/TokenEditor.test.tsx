@@ -182,6 +182,21 @@ describe("tokenEditorReducer core flows", () => {
     expect(guessCodeFromKey("5")).toBe("Digit5");
     expect(guessCodeFromKey("-")).toBeNull();
   });
+
+  it("tokenizeToTokens preserves parentheses as punctuation tokens", () => {
+    const tokens = tokenizeToTokens("(hello)");
+    expect(tokens.map((t) => t.text)).toEqual(["(", "hello", ")"]);
+    expect(tokens.map((t) => t.kind)).toEqual(["punct", "word", "punct"]);
+  });
+
+  it("buildHotkeyMap ignores inactive types even with hotkeys", () => {
+    const map = buildHotkeyMap([
+      { id: 1, is_active: false, default_hotkey: "shift+a" },
+      { id: 2, is_active: true, default_hotkey: "shift+b" },
+    ] as any);
+    expect(map).toEqual({ "shift+b": 2, "shift+code:KeyB": 2 });
+  });
+
 });
 
 describe("TokenEditor view toggles", () => {

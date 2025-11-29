@@ -24,6 +24,10 @@ dependencies = [
     "python-multipart>=0.0.7"
 ]
 
+[tool.setuptools.packages.find]
+include = ["app*"]
+exclude = ["alembic*", "tests*"]
+
 [project.optional-dependencies]
 dev = [
     "pytest",

@@ -1,0 +1,28 @@
+Metadata-Version: 2.4
+Name: gec_annotation_backend
+Version: 0.1.0
+Summary: Annotation platform backend for Tatar GEC
+Author-email: Codex <codex@example.com>
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: fastapi>=0.109
+Requires-Dist: uvicorn[standard]>=0.27
+Requires-Dist: SQLAlchemy>=2.0
+Requires-Dist: alembic>=1.13
+Requires-Dist: psycopg[binary,pool]>=3.1
+Requires-Dist: python-jose[cryptography]>=3.3
+Requires-Dist: passlib[bcrypt]>=1.7
+Requires-Dist: bcrypt<4.1,>=4.0
+Requires-Dist: pydantic[email]>=2.6
+Requires-Dist: pydantic-settings>=2.2
+Requires-Dist: typer[all]>=0.9
+Requires-Dist: python-multipart>=0.0.7
+Provides-Extra: dev
+Requires-Dist: pytest; extra == "dev"
+Requires-Dist: httpx; extra == "dev"
+Requires-Dist: ruff; extra == "dev"
+Requires-Dist: mypy; extra == "dev"
+
+# Backend
+
+FastAPI backend for the Tatar GEC annotation platform. See repository root README for details.
