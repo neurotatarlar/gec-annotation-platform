@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gec_annotation_backend"
+version = "0.1.0"
+description = "Annotation platform backend for Tatar GEC"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{name = "Codex", email = "codex@example.com"}]
+dependencies = [
+    "fastapi>=0.109",
+    "uvicorn[standard]>=0.27",
+    "SQLAlchemy>=2.0",
+    "alembic>=1.13",
+    "psycopg[binary,pool]>=3.1",
+    "python-jose[cryptography]>=3.3",
+    "passlib[bcrypt]>=1.7",
+    "bcrypt>=4.0,<4.1",
+    "pydantic[email]>=2.6",
+    "pydantic-settings>=2.2",
+    "typer[all]>=0.9",
+    "python-multipart>=0.0.7"
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "httpx",
+    "ruff",
+    "mypy"
+]
+
+[tool.ruff]
+line-length = 100

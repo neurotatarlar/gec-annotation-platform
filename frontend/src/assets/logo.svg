@@ -1,0 +1,14 @@
+<svg width="64" height="64" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="emeraldGlow" cx="50%" cy="50%" r="60%">
+      <stop offset="0%" stop-color="#10b981" stop-opacity="0.7" />
+      <stop offset="100%" stop-color="#064e3b" stop-opacity="0.9" />
+    </radialGradient>
+  </defs>
+  <circle cx="32" cy="32" r="30" fill="url(#emeraldGlow)" stroke="#34d399" stroke-width="2" />
+  <circle cx="32" cy="32" r="22" fill="rgba(15,31,30,0.65)" stroke="#34d399" stroke-width="2" />
+  <text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle"
+        font-family="Inter, sans-serif" font-size="28" font-weight="600" fill="#d1fae5">
+    Т
+  </text>
+</svg>
