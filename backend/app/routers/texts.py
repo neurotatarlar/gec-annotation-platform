@@ -1,11 +1,14 @@
+import hashlib
+import logging
 from datetime import datetime, timedelta, timezone
 from itertools import combinations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
+from pydantic import BaseModel
 
-from ..models import Annotation, AnnotationTask, Category, CrossValidationResult, SkippedText, TextSample
+from ..models import Annotation, AnnotationTask, AnnotationVersion, Category, CrossValidationResult, SkippedText, TextSample
 from ..schemas.common import (
     AnnotationPayload,
     AnnotationRead,
@@ -24,6 +27,16 @@ from ..services.auth import get_current_user, get_db
 
 router = APIRouter(prefix="/api/texts", tags=["texts"])
 LOCK_DURATION = timedelta(minutes=30)
+logger = logging.getLogger(__name__)
+
+
+def _sha256_text(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _sha256_tokens(tokens: list[str]) -> str:
+    joined = "\u241f".join(tokens)  # unit separator to minimize collision with token text
+    return _sha256_text(joined)
 
 
 @router.post("/import", response_model=TextImportResponse, status_code=status.HTTP_201_CREATED)
@@ -143,49 +156,183 @@ def save_annotations(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
+    def _summarize_annotations(items: list[AnnotationPayload]):
+        summary = []
+        for ann in items[:5]:
+            payload = ann.payload
+            op = None
+            before = None
+            after = None
+            text_hash = None
+            if isinstance(payload, BaseModel):
+                payload = payload.model_dump()
+            if isinstance(payload, dict):
+                op = payload.get("operation")
+                before = len(payload.get("before_tokens") or [])
+                after_tokens = payload.get("after_tokens") or []
+                after = len(after_tokens)
+                text_hash = payload.get("text_sha256") or payload.get("text_hash")
+            summary.append(
+                {
+                    "start": ann.start_token,
+                    "end": ann.end_token,
+                    "op": op,
+                    "before_len": before,
+                    "after_len": after,
+                    "hash": text_hash,
+                    "has_id": getattr(ann, "id", None) is not None,
+                }
+            )
+        return summary
+
     text = db.get(TextSample, text_id)
     if not text:
         raise HTTPException(status_code=404, detail="Text not found")
 
-    existing = (
-        db.query(Annotation)
-        .filter(Annotation.text_id == text_id, Annotation.author_id == current_user.id)
-        .all()
-    )
-    existing_map = {
-        (annotation.start_token, annotation.end_token): annotation for annotation in existing
-    }
-
-    seen_keys: set[tuple[int, int]] = set()
-    saved: list[Annotation] = []
-    for item in request.annotations:
-        key = (item.start_token, item.end_token)
-        seen_keys.add(key)
-        annotation = existing_map.get(key)
-        if annotation:
-            annotation.replacement = item.replacement
-            annotation.payload = item.payload
-            annotation.error_type_id = item.error_type_id
-            annotation.version += 1
-        else:
-            annotation = Annotation(
-                text_id=text_id,
-                author_id=current_user.id,
-                start_token=item.start_token,
-                end_token=item.end_token,
-                replacement=item.replacement,
-                payload=item.payload,
-                error_type_id=item.error_type_id,
+    try:
+        existing = (
+            db.query(Annotation)
+            .filter(Annotation.text_id == text_id, Annotation.author_id == current_user.id)
+            .all()
+        )
+        server_version = max((ann.version for ann in existing), default=0)
+        client_version = request.client_version or 0
+        if client_version and client_version < server_version:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Client version is stale. Reload annotations before saving.",
             )
-            db.add(annotation)
-        saved.append(annotation)
+        text_hash = _sha256_text(text.content)
 
-    for key, annotation in existing_map.items():
-        if key not in seen_keys:
-            db.delete(annotation)
+        existing_by_id = {annotation.id: annotation for annotation in existing}
+        existing_by_span = {(annotation.start_token, annotation.end_token): annotation for annotation in existing}
 
-    db.commit()
-    return saved
+        def _ensure_payload_dict(raw: BaseModel | dict | None) -> dict:
+            if isinstance(raw, BaseModel):
+                return raw.model_dump()
+            return dict(raw or {})
+
+        def _validate_payload(payload: dict):
+            op = payload.get("operation")
+            if op not in {"replace", "delete", "insert", "move", "noop"}:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid operation")
+            after_tokens = payload.get("after_tokens", [])
+            if not isinstance(after_tokens, list):
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="after_tokens must be a list")
+            for token in after_tokens:
+                if not isinstance(token, dict):
+                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="after_tokens must contain objects")
+                if "id" not in token or "text" not in token:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="after_tokens entries must include id and text",
+                    )
+                origin = token.get("origin")
+                if origin not in {"base", "inserted"}:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="after_tokens origin must be 'base' or 'inserted'",
+                    )
+            before_tokens = payload.get("before_tokens", [])
+            if not isinstance(before_tokens, list):
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="before_tokens must be a list")
+
+        saved: list[Annotation] = []
+        for item in request.annotations:
+            payload = _ensure_payload_dict(item.payload)
+            _validate_payload(payload)
+
+            payload_hash = payload.get("text_sha256")
+            if payload_hash and payload_hash != text_hash:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Client text hash does not match server text. Reload the text before saving.",
+                )
+            payload["text_sha256"] = payload_hash or text_hash
+            if "text_tokens" not in payload or not isinstance(payload.get("text_tokens"), list):
+                tokens_snapshot = text.content.split()
+                payload["text_tokens"] = tokens_snapshot
+                payload["text_tokens_sha256"] = _sha256_tokens(tokens_snapshot)
+            elif not payload.get("text_tokens_sha256"):
+                payload["text_tokens_sha256"] = _sha256_tokens([str(t) for t in payload["text_tokens"]])
+
+            replacement = item.replacement
+            if replacement is None:
+                after_tokens = payload.get("after_tokens")
+                if isinstance(after_tokens, list):
+                    texts: list[str] = []
+                    for token in after_tokens:
+                        if isinstance(token, dict):
+                            texts.append(str(token.get("text", "") or ""))
+                        else:
+                            text_attr = getattr(token, "text", "")
+                            texts.append(str(text_attr or ""))
+                    candidate = " ".join(texts).strip()
+                    replacement = candidate or None
+            if payload.get("operation") == "noop":
+                replacement = replacement or None
+
+            annotation = None
+            if item.id:
+                annotation = existing_by_id.get(item.id)
+            if not annotation:
+                annotation = existing_by_span.get((item.start_token, item.end_token))
+
+            if annotation:
+                annotation.start_token = item.start_token
+                annotation.end_token = item.end_token
+                annotation.replacement = replacement
+                annotation.payload = payload
+                annotation.error_type_id = item.error_type_id
+                annotation.version += 1
+            else:
+                annotation = Annotation(
+                    text_id=text_id,
+                    author_id=current_user.id,
+                    start_token=item.start_token,
+                    end_token=item.end_token,
+                    replacement=replacement,
+                    payload=payload,
+                    error_type_id=item.error_type_id,
+                )
+                db.add(annotation)
+            saved.append(annotation)
+
+        db.flush()
+        # Persist snapshots for rollback/history
+        for ann in saved:
+            snapshot = {
+                "start_token": ann.start_token,
+                "end_token": ann.end_token,
+                "replacement": ann.replacement,
+                "payload": ann.payload,
+                "error_type_id": ann.error_type_id,
+            }
+            db.add(
+                AnnotationVersion(
+                    annotation_id=ann.id,
+                    version=ann.version,
+                    snapshot=snapshot,
+                )
+            )
+
+        db.commit()
+        return saved
+    except HTTPException as exc:
+        if exc.status_code in {400, 409, 422}:
+            logger.warning(
+                "Annotation save failed",
+                extra={
+                    "text_id": text_id,
+                    "user_id": str(getattr(current_user, "id", "")),
+                    "status": exc.status_code,
+                    "detail": exc.detail,
+                    "client_version": request.client_version,
+                    "count": len(request.annotations),
+                    "summary": _summarize_annotations(request.annotations),
+                },
+            )
+        raise
 
 
 @router.post("/{text_id}/submit", status_code=status.HTTP_202_ACCEPTED)

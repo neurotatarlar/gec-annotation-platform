@@ -11,6 +11,8 @@ import {
   buildTextFromTokens,
   buildTextFromTokensWithBreaks,
   buildM2Preview,
+  computeTokensSha256,
+  buildAnnotationsPayloadStandalone,
   TokenEditor,
   tokenEditorReducer,
   tokenizeToTokens,
@@ -223,6 +225,68 @@ describe("buildM2Preview", () => {
       resolveTypeLabel: (id) => (id === 7 ? "ADJ" : null),
     });
     expect(preview).toContain("A 1 1|||ADJ|||brave|||REQUIRED|||-NONE-|||0");
+  });
+
+  it("emits noop when there are no edits", () => {
+    const originalTokens = tokenizeToTokens("same text");
+    const tokens = tokenizeToTokens("same text");
+    const preview = buildM2Preview({ originalTokens, tokens });
+    expect(preview.split("\n")).toEqual([
+      "S same text",
+      "A -1 -1|||noop|||-NONE-|||REQUIRED|||-NONE-|||0",
+    ]);
+  });
+
+  it("handles deletions with -NONE- replacement", () => {
+    const originalTokens = tokenizeToTokens("hello world");
+    const tokens = tokenizeToTokens("hello");
+    const preview = buildM2Preview({ originalTokens, tokens });
+    expect(preview).toContain("A 1 2|||OTHER|||-NONE-|||REQUIRED|||-NONE-|||0");
+  });
+
+  it("derives type from correction map for insertions", () => {
+    const originalTokens = tokenizeToTokens("hello world");
+    const tokens = tokenizeToTokens("hello kind world");
+    const correctionByIndex = new Map<number, string>([[1, "card-1"]]);
+    const preview = buildM2Preview({
+      originalTokens,
+      tokens,
+      correctionByIndex,
+      correctionTypeMap: { "card-1": 3 },
+      resolveTypeLabel: (id) => (id === 3 ? "INS" : null),
+    });
+    expect(preview).toContain("A 1 1|||INS|||kind|||REQUIRED|||-NONE-|||0");
+  });
+});
+
+describe("buildAnnotationsPayloadStandalone", () => {
+  const baseToken = (id: string, text: string) =>
+    ({ id, text, kind: "word", selected: false } as any);
+
+  it("includes text token hash and carries annotation ids", async () => {
+    const originalTokens = [baseToken("t1", "hello"), baseToken("t2", "world")];
+    const tokens = [baseToken("t1", "hi"), baseToken("t2", "world")];
+    const correctionCards = [{ id: "card-1", rangeStart: 0, rangeEnd: 0, markerId: null }];
+    const correctionTypeMap = { "card-1": 7 };
+    const annotationIdMap = new Map<string, number>([["0-0", 42]]);
+
+    const payloads = await buildAnnotationsPayloadStandalone({
+      initialText: "hello world",
+      tokens,
+      originalTokens,
+      correctionCards,
+      correctionTypeMap,
+      moveMarkers: [],
+      annotationIdMap,
+    });
+
+    expect(payloads).toHaveLength(1);
+    const ann = payloads[0];
+    expect(ann.id).toBe(42);
+    expect(ann.payload.text_tokens).toEqual(["hello", "world"]);
+    const expectedHash = await computeTokensSha256(["hello", "world"]);
+    expect(ann.payload.text_tokens_sha256).toBe(expectedHash);
+    expect(ann.replacement).toBe("hi");
   });
 });
 

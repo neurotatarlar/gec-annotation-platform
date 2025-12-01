@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 
 import { useAuthedApi } from "../api/client";
 import { useI18n } from "../context/I18nContext";
-import { ErrorType } from "../types";
+import { AnnotationDetailPayload, AnnotationDraft, ErrorType, TokenFragmentPayload } from "../types";
 import {
   colorWithAlpha,
   getErrorTypeLabel,
@@ -1062,6 +1062,178 @@ export const buildM2Preview = ({
   return lines.join("\n");
 };
 
+const toHex = (buffer: ArrayBuffer) =>
+  Array.from(new Uint8Array(buffer))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+
+export const computeSha256 = async (text: string): Promise<string | null> => {
+  const subtle = globalThis.crypto?.subtle;
+  if (subtle) {
+    try {
+      const data = new TextEncoder().encode(text);
+      const digest = await subtle.digest("SHA-256", data);
+      return toHex(digest);
+    } catch {
+      // fall through to node crypto
+    }
+  }
+  try {
+    // @ts-ignore - optional in browser
+    const crypto = await import("crypto");
+    const hash = crypto.createHash("sha256");
+    hash.update(text);
+    return hash.digest("hex");
+  } catch {
+    return null;
+  }
+};
+
+export const computeTokensSha256 = async (tokens: string[]): Promise<string | null> => {
+  const joined = tokens.join("\u241f");
+  return computeSha256(joined);
+};
+
+type BuildPayloadInput = {
+  initialText: string;
+  tokens: Token[];
+  originalTokens: Token[];
+  correctionCards: CorrectionCardLite[];
+  correctionTypeMap: Record<string, number | null>;
+  moveMarkers: MoveMarker[];
+  annotationIdMap?: Map<string, number>;
+};
+
+export const buildAnnotationsPayloadStandalone = async ({
+  initialText,
+  tokens,
+  originalTokens,
+  correctionCards,
+  correctionTypeMap,
+  moveMarkers,
+  annotationIdMap,
+}: BuildPayloadInput): Promise<AnnotationDraft[]> => {
+  const textHash = await computeSha256(initialText);
+  const textTokensSnapshot = originalTokens.filter((t) => t.kind !== "empty").map((t) => t.text);
+  const textTokensHash = await computeTokensSha256(textTokensSnapshot);
+  const moveMarkerById = new Map<string, MoveMarker>();
+  moveMarkers.forEach((m) => moveMarkerById.set(m.id, m));
+
+  const seenKeys = new Set<string>();
+  const payloads: AnnotationDraft[] = [];
+  const normalizeBeforeIds = (items: Token[]) => {
+    const seen = new Set<string>();
+    const ids: string[] = [];
+    items.forEach((tok) => {
+      if (tok.kind === "empty") return;
+      if (seen.has(tok.id)) return;
+      seen.add(tok.id);
+      ids.push(tok.id);
+    });
+    return ids;
+  };
+
+  const textForIds = (ids: string[]) =>
+    ids
+      .map((id) => originalTokens.find((t) => t.id === id)?.text ?? "")
+      .filter(Boolean)
+      .join(" ")
+      .trim();
+
+  const fragmentFromToken = (tok: Token): TokenFragmentPayload => ({
+    id: tok.id,
+    text: tok.text,
+    origin: tok.origin === "inserted" ? "inserted" : "base",
+    source_id:
+      tok.origin === "inserted"
+        ? tok.previousTokens?.find((p) => p.kind !== "empty")?.id ?? null
+        : tok.id,
+  });
+
+  correctionCards.forEach((card) => {
+    const typeId = correctionTypeMap[card.id];
+    if (!typeId) return;
+    const key = `${card.rangeStart}-${card.rangeEnd}-${card.markerId ?? "nomove"}`;
+    if (seenKeys.has(key)) return;
+    seenKeys.add(key);
+
+    let beforeIds: string[] = [];
+    let afterFragments: TokenFragmentPayload[] = [];
+    let operation: AnnotationDetailPayload["operation"] = "replace";
+
+    if (card.markerId) {
+      const marker = moveMarkerById.get(card.markerId);
+      if (!marker) return;
+      const placeholder = tokens[marker.fromStart];
+      const historyTokens = placeholder?.previousTokens
+        ? unwindToOriginal(cloneTokens(placeholder.previousTokens))
+        : [];
+      beforeIds = normalizeBeforeIds(historyTokens);
+      afterFragments = tokens
+        .slice(marker.toStart, marker.toEnd + 1)
+        .filter((tok) => tok.kind !== "empty")
+        .map(fragmentFromToken);
+      operation = "move";
+    } else {
+      const historyTokens: Token[] = [];
+      for (let idx = card.rangeStart; idx <= card.rangeEnd; idx += 1) {
+        const tok = tokens[idx];
+        if (tok?.previousTokens?.length) {
+          historyTokens.push(...unwindToOriginal(cloneTokens(tok.previousTokens)));
+        }
+      }
+      if (!historyTokens.length) {
+        historyTokens.push(
+          ...originalTokens.slice(card.rangeStart, card.rangeEnd + 1).filter((tok) => tok.kind !== "empty")
+        );
+      }
+      beforeIds = normalizeBeforeIds(historyTokens);
+      afterFragments = tokens
+        .slice(card.rangeStart, card.rangeEnd + 1)
+        .filter((tok) => tok.kind !== "empty")
+        .map(fragmentFromToken);
+      const beforeText = textForIds(beforeIds);
+      const afterText = afterFragments.map((f) => f.text).join(" ").trim();
+      if (!afterFragments.length || afterText === "") {
+        operation = "delete";
+      } else if (!beforeIds.length) {
+        operation = "insert";
+      } else if (beforeText === afterText) {
+        operation = "noop";
+      } else {
+        operation = "replace";
+      }
+    }
+
+    const replacement = afterFragments.length === 0 ? null : afterFragments.map((f) => f.text).join(" ").trim() || null;
+
+    const payload: AnnotationDetailPayload = {
+      text_sha256: textHash,
+      text_tokens: textTokensSnapshot,
+      text_tokens_sha256: textTokensHash ?? undefined,
+      operation,
+      before_tokens: beforeIds,
+      after_tokens: afterFragments,
+      source: "manual",
+    };
+
+    const draft: AnnotationDraft = {
+      start_token: card.rangeStart,
+      end_token: card.rangeEnd,
+      replacement,
+      error_type_id: typeId,
+      payload,
+    };
+    const spanKey = `${card.rangeStart}-${card.rangeEnd}`;
+    const existingId = annotationIdMap?.get(spanKey);
+    if (existingId !== undefined) {
+      draft.id = existingId;
+    }
+    payloads.push(draft);
+  });
+
+  return payloads;
+};
 // ---------------------------
 // Component
 // ---------------------------
@@ -1070,6 +1242,13 @@ type SelectionRange = { start: number | null; end: number | null };
 export type SaveStatus = { state: "idle" | "saving" | "saved" | "error"; unsaved: boolean };
 
 const PREFS_KEY = "tokenEditorPrefs";
+
+type CorrectionCardLite = {
+  id: string;
+  rangeStart: number;
+  rangeEnd: number;
+  markerId: string | null;
+};
 
 const loadPrefs = (): {
   sidebarOpen?: boolean;
@@ -1227,6 +1406,8 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
   const [activeErrorTypeId, setActiveErrorTypeId] = useState<number | null>(null);
   const [correctionTypeMap, setCorrectionTypeMap] = useState<Record<string, number | null>>({});
   const [hasLoadedTypeState, setHasLoadedTypeState] = useState(false);
+  const [serverAnnotationVersion, setServerAnnotationVersion] = useState(0);
+  const annotationIdMap = useRef<Map<string, number>>(new Map());
   const prevCorrectionCountRef = useRef(0);
   const handleRevert = (rangeStart: number, rangeEnd: number, markerId: string | null = null) => {
     dispatch({ type: "REVERT_CORRECTION", rangeStart, rangeEnd, markerId });
@@ -1234,6 +1415,36 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
 
   const tokens = history.present.tokens;
   const originalTokens = history.present.originalTokens;
+  const baseTokenMap = useMemo(() => {
+    const map = new Map<string, Token>();
+    originalTokens.forEach((tok) => {
+      if (tok.kind !== "empty") {
+        map.set(tok.id, tok);
+      }
+    });
+    return map;
+  }, [originalTokens]);
+  const textForIds = useCallback(
+    (ids: string[]) =>
+      ids
+        .map((id) => baseTokenMap.get(id)?.text ?? "")
+        .filter(Boolean)
+        .join(" ")
+        .trim(),
+    [baseTokenMap]
+  );
+  const toFragment = useCallback(
+    (tok: Token): TokenFragmentPayload => ({
+      id: tok.id,
+      text: tok.text,
+      origin: tok.origin === "inserted" ? "inserted" : "base",
+      source_id:
+        tok.origin === "inserted"
+          ? tok.previousTokens?.find((p) => p.kind !== "empty")?.id ?? null
+          : tok.id,
+    }),
+    []
+  );
 
   const formatError = useCallback((error: any): string => {
     const detail = error?.response?.data?.detail ?? error?.message ?? String(error);
@@ -1292,6 +1503,7 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
     setHasLoadedTypeState(false);
     setActiveErrorTypeId(null);
     setCorrectionTypeMap({});
+    setServerAnnotationVersion(0);
   }, [textId]);
 
   useEffect(() => {
@@ -1323,6 +1535,32 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
     };
     setLineBreaks(computeBreaks(initialText));
   }, [initialText]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadExistingAnnotations = async () => {
+      try {
+        const res = await api.get(`/api/texts/${textId}/annotations`);
+        if (cancelled) return;
+        const items = Array.isArray(res.data) ? res.data : [];
+        const maxVersion = items.reduce((acc: number, ann: any) => Math.max(acc, ann?.version ?? 0), 0);
+        setServerAnnotationVersion(maxVersion);
+        annotationIdMap.current = new Map<string, number>();
+        items.forEach((ann: any) => {
+          if (ann?.id != null && typeof ann.start_token === "number" && typeof ann.end_token === "number") {
+            const key = `${ann.start_token}-${ann.end_token}`;
+            annotationIdMap.current.set(key, ann.id);
+          }
+        });
+      } catch {
+        // ignore load errors; optimistic saves will still work
+      }
+    };
+    loadExistingAnnotations();
+    return () => {
+      cancelled = true;
+    };
+  }, [api, textId]);
 
   useEffect(() => {
     try {
@@ -1439,6 +1677,11 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
     });
     return map;
   }, [correctionCards]);
+  const moveMarkerById = useMemo(() => {
+    const map = new Map<string, MoveMarker>();
+    history.present.moveMarkers.forEach((m) => map.set(m.id, m));
+    return map;
+  }, [history.present.moveMarkers]);
 
   const requestNextText = useCallback(async () => {
     try {
@@ -2236,13 +2479,38 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
     persistCorrectionTypes(textId, { activeErrorTypeId, assignments: correctionTypeMap });
   }, [textId, activeErrorTypeId, correctionTypeMap, hasLoadedTypeState]);
 
-  // Persist current annotations. TODO: map editor state to real annotation payload.
+  const buildAnnotationsPayload = useCallback(
+    () =>
+      buildAnnotationsPayloadStandalone({
+        initialText,
+        tokens,
+        originalTokens,
+        correctionCards: correctionCards.map((c) => ({
+          id: c.id,
+          rangeStart: c.rangeStart,
+          rangeEnd: c.rangeEnd,
+          markerId: c.markerId,
+        })),
+        correctionTypeMap,
+        moveMarkers: history.present.moveMarkers,
+        annotationIdMap: annotationIdMap.current,
+      }),
+    [annotationIdMap, correctionCards, correctionTypeMap, history.present.moveMarkers, initialText, originalTokens, tokens]
+  );
+
   const saveAnnotations = useCallback(async () => {
-    await api.post(`/api/texts/${textId}/annotations`, {
-      annotations: [],
-      client_version: 0,
+    const annotations = await buildAnnotationsPayload();
+    const response = await api.post(`/api/texts/${textId}/annotations`, {
+      annotations,
+      client_version: serverAnnotationVersion,
     });
-  }, [api, textId]);
+    const items = Array.isArray(response.data) ? response.data : [];
+    const maxVersion = items.reduce(
+      (acc: number, ann: any) => Math.max(acc, ann?.version ?? serverAnnotationVersion),
+      serverAnnotationVersion
+    );
+    setServerAnnotationVersion(maxVersion || serverAnnotationVersion + 1);
+  }, [api, buildAnnotationsPayload, serverAnnotationVersion, textId]);
 
   // Autosave on token changes (debounced).
   useEffect(() => {

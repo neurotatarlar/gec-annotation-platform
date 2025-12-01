@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -68,12 +68,37 @@ class TextRead(OrmBase):
     required_annotations: int
 
 
+class TokenFragmentPayload(BaseModel):
+    id: str
+    text: str
+    origin: Literal["base", "inserted"] = "base"
+    source_id: Optional[str] = None
+
+    class Config:
+        extra = "allow"  # tolerate older/untyped payloads
+
+
+class AnnotationDetailPayload(BaseModel):
+    text_sha256: Optional[str] = None  # hash of the full source text to guard against drift
+    operation: Literal["replace", "delete", "insert", "move", "noop"] = "replace"
+    before_tokens: list[str] = Field(default_factory=list)
+    after_tokens: list[TokenFragmentPayload] = Field(default_factory=list)
+    text_tokens: list[str] = Field(default_factory=list)  # token snapshot used by the client
+    text_tokens_sha256: Optional[str] = None
+    note: Optional[str] = None
+    source: Optional[str] = None  # e.g., "import", "manual"
+
+    class Config:
+        extra = "allow"  # keep backward compatibility with arbitrary payloads
+
+
 class AnnotationPayload(BaseModel):
+    id: Optional[int] = None
     start_token: int
     end_token: int
     replacement: Optional[str]
     error_type_id: int
-    payload: dict = Field(default_factory=dict)
+    payload: AnnotationDetailPayload = Field(default_factory=AnnotationDetailPayload)
 
 
 class AnnotationRead(OrmBase, AnnotationPayload):
@@ -84,7 +109,7 @@ class AnnotationRead(OrmBase, AnnotationPayload):
 
 class AnnotationSaveRequest(BaseModel):
     annotations: list[AnnotationPayload]
-    client_version: int
+    client_version: int = 0
 
 
 class TextAssignmentResponse(BaseModel):

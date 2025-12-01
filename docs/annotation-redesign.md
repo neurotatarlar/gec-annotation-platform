@@ -115,11 +115,15 @@ Backend change: extend annotation payload to include both arrays.
   "start_token": 12,
   "end_token": 16,
   "payload": {
-    "beforeTokens": ["base-12","base-13","base-16"],
-    "afterTokens": [
-      {"id":"base-12","text":"to","origin":"base"},
-      {"id":"draft-b83","text":"quickly","origin":"inserted"}
-    ]
+    "operation": "replace",
+    "text_sha256": "<hash-of-original-text>",
+    "before_tokens": ["base-12", "base-13", "base-16"],
+    "after_tokens": [
+      { "id": "base-12", "text": "to", "origin": "base" },
+      { "id": "draft-b83", "text": "quickly", "origin": "inserted" }
+    ],
+    "note": "optional",
+    "source": "manual"
   }
 }
 ```

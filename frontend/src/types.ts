@@ -17,7 +17,7 @@ export interface AnnotationDraft {
   end_token: number;
   replacement?: string | null;
   error_type_id: number;
-  payload: Record<string, unknown>;
+  payload: AnnotationDetailPayload;
 }
 
 export type TokenId = string;
@@ -42,6 +42,23 @@ export interface CorrectionDraftV2 {
   afterTokens: DraftTokenFragment[];
   note?: string | null;
   payload?: Record<string, unknown>;
+}
+
+export interface TokenFragmentPayload {
+  id: string;
+  text: string;
+  origin: "base" | "inserted";
+  source_id?: string | null;
+}
+
+export interface AnnotationDetailPayload {
+  text_sha256?: string | null;
+  operation: "replace" | "delete" | "insert" | "move" | "noop";
+  before_tokens: string[];
+  after_tokens: TokenFragmentPayload[];
+  note?: string | null;
+  source?: string | null;
+  [key: string]: unknown;
 }
 
 export interface TextData {
