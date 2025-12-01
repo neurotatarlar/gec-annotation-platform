@@ -2499,11 +2499,14 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
     });
   }, [correctionCards, activeErrorTypeId, hasLoadedTypeState]);
 
+  const correctionSignatureRef = useRef<string | null>(null);
   useEffect(() => {
-    if (correctionCards.length > prevCorrectionCountRef.current) {
+    const signature = correctionCards.map((c) => `${c.id}:${c.rangeStart}-${c.rangeEnd}`).join("|");
+    if (signature !== correctionSignatureRef.current && correctionCards.length) {
       const last = correctionCards[correctionCards.length - 1];
       setSelection({ start: last.rangeStart, end: last.rangeEnd });
     }
+    correctionSignatureRef.current = signature;
     prevCorrectionCountRef.current = correctionCards.length;
   }, [correctionCards]);
 
