@@ -181,6 +181,7 @@
     "undo": "Undo",
     "original": "Original",
     "corrected": "Corrected",
-    "debugPanel": "Debug"
+    "debugPanel": "Debug",
+    "m2": "M2"
   }
 }

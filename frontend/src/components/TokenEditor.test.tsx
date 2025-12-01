@@ -10,6 +10,7 @@ import {
   EditorHistoryState,
   buildTextFromTokens,
   buildTextFromTokensWithBreaks,
+  buildM2Preview,
   TokenEditor,
   tokenEditorReducer,
   tokenizeToTokens,
@@ -197,6 +198,32 @@ describe("tokenEditorReducer core flows", () => {
     expect(map).toEqual({ "shift+b": 2, "shift+code:KeyB": 2 });
   });
 
+});
+
+describe("buildM2Preview", () => {
+  it("formats replacements into M2 output", () => {
+    const originalTokens = tokenizeToTokens("hello world");
+    const tokens = tokenizeToTokens("hi world");
+    const preview = buildM2Preview({ originalTokens, tokens });
+    expect(preview.split("\n")).toEqual([
+      "S hello world",
+      "A 0 1|||OTHER|||hi|||REQUIRED|||-NONE-|||0",
+    ]);
+  });
+
+  it("uses provided type labels when available", () => {
+    const originalTokens = tokenizeToTokens("hello world");
+    const tokens = tokenizeToTokens("hello brave world");
+    const correctionByIndex = new Map<number, string>([[1, "card-1"]]);
+    const preview = buildM2Preview({
+      originalTokens,
+      tokens,
+      correctionByIndex,
+      correctionTypeMap: { "card-1": 7 },
+      resolveTypeLabel: (id) => (id === 7 ? "ADJ" : null),
+    });
+    expect(preview).toContain("A 1 1|||ADJ|||brave|||REQUIRED|||-NONE-|||0");
+  });
 });
 
 describe("TokenEditor view toggles", () => {

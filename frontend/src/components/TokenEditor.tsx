@@ -885,6 +885,183 @@ export const buildTextFromTokensWithBreaks = (tokens: Token[], breaks: number[])
   return joined.replace(/\s+([.,;:?!-])/g, "$1").replace(/\s*\n\s*/g, "\n").trimEnd();
 };
 
+type DiffOp = { type: "equal" | "delete" | "insert"; values: string[] };
+
+const diffTokenSequences = (a: string[], b: string[]): DiffOp[] => {
+  const dp: number[][] = Array.from({ length: a.length + 1 }, () => new Array(b.length + 1).fill(0));
+  for (let i = a.length - 1; i >= 0; i -= 1) {
+    for (let j = b.length - 1; j >= 0; j -= 1) {
+      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+  const ops: DiffOp[] = [];
+  const push = (type: DiffOp["type"], values: string[]) => {
+    if (!values.length) return;
+    const last = ops[ops.length - 1];
+    if (last && last.type === type) {
+      last.values.push(...values);
+    } else {
+      ops.push({ type, values: [...values] });
+    }
+  };
+  let i = 0;
+  let j = 0;
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) {
+      push("equal", [a[i]]);
+      i += 1;
+      j += 1;
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      push("delete", [a[i]]);
+      i += 1;
+    } else {
+      push("insert", [b[j]]);
+      j += 1;
+    }
+  }
+  while (i < a.length) {
+    push("delete", [a[i]]);
+    i += 1;
+  }
+  while (j < b.length) {
+    push("insert", [b[j]]);
+    j += 1;
+  }
+  return ops;
+};
+
+const pickTypeLabel = (labels: Array<string | null | undefined>) => {
+  const counts = new Map<string, number>();
+  labels.forEach((label) => {
+    if (!label) return;
+    counts.set(label, (counts.get(label) ?? 0) + 1);
+  });
+  let best: string | null = null;
+  let bestCount = -1;
+  counts.forEach((count, label) => {
+    if (count > bestCount) {
+      best = label;
+      bestCount = count;
+    }
+  });
+  return best;
+};
+
+export const buildM2Preview = ({
+  originalTokens,
+  tokens,
+  correctionCards = [],
+  correctionTypeMap = {},
+  correctionByIndex,
+  resolveTypeLabel,
+}: {
+  originalTokens: Token[];
+  tokens: Token[];
+  correctionCards?: Array<{ id: string; rangeStart: number; rangeEnd: number; original: string; updated: string }>;
+  correctionTypeMap?: Record<string, number | null | undefined>;
+  correctionByIndex?: Map<number, string>;
+  resolveTypeLabel?: (typeId: number) => string | null;
+}) => {
+  const visibleOriginal = originalTokens.filter((t) => t.kind !== "empty").map((t) => t.text);
+  const visibleCorrected: string[] = [];
+  const typeLabelsForVisible: Array<string | null> = [];
+  const tokenIndexToVisible: number[] = [];
+  let visibleCounter = 0;
+
+  const resolveType = (typeId: number | null | undefined): string | null => {
+    if (typeId === null || typeId === undefined) return null;
+    return resolveTypeLabel?.(typeId) ?? String(typeId);
+  };
+
+  tokens.forEach((tok, idx) => {
+    tokenIndexToVisible[idx] = visibleCounter;
+    if (tok.kind === "empty") return;
+    visibleCorrected.push(tok.text);
+    const cardId = correctionByIndex?.get(idx);
+    const typeId = cardId ? correctionTypeMap[cardId] : null;
+    typeLabelsForVisible.push(resolveType(typeId));
+    visibleCounter += 1;
+  });
+
+  const placeholderTypeByInsertion = new Map<number, string | null>();
+  tokens.forEach((tok, idx) => {
+    if (tok.kind !== "empty") return;
+    const insertionIdx = tokenIndexToVisible[idx] ?? 0;
+    const cardId = correctionByIndex?.get(idx);
+    const typeId = cardId ? correctionTypeMap[cardId] : null;
+    if (!placeholderTypeByInsertion.has(insertionIdx)) {
+      placeholderTypeByInsertion.set(insertionIdx, resolveType(typeId));
+    }
+  });
+
+  const cardByInsertion = new Map<number, string>();
+  correctionCards.forEach((card) => {
+    const insertionIdx = tokenIndexToVisible[card.rangeStart] ?? 0;
+    if (!cardByInsertion.has(insertionIdx)) {
+      cardByInsertion.set(insertionIdx, card.id);
+    }
+  });
+
+  const ops = diffTokenSequences(visibleOriginal, visibleCorrected);
+  const edits: Array<{ start: number; end: number; startCorr: number; endCorr: number; replacementTokens: string[]; type: string }> = [];
+  let origIdx = 0;
+  let corrIdx = 0;
+  for (let k = 0; k < ops.length; k += 1) {
+    const op = ops[k];
+    if (op.type === "equal") {
+      origIdx += op.values.length;
+      corrIdx += op.values.length;
+      continue;
+    }
+    const startOrig = origIdx;
+    const startCorr = corrIdx;
+    while (k < ops.length && ops[k].type !== "equal") {
+      const current = ops[k];
+      if (current.type === "delete") {
+        origIdx += current.values.length;
+      } else if (current.type === "insert") {
+        corrIdx += current.values.length;
+      }
+      k += 1;
+    }
+    k -= 1; // offset for the for-loop increment
+    const endOrig = origIdx;
+    const endCorr = corrIdx;
+    const replacementTokens = visibleCorrected.slice(startCorr, endCorr);
+    const typeFromReplacement = pickTypeLabel(typeLabelsForVisible.slice(startCorr, endCorr));
+    let typeLabel =
+      typeFromReplacement ??
+      placeholderTypeByInsertion.get(startCorr) ??
+      (() => {
+        const cardId = cardByInsertion.get(startCorr);
+        if (!cardId) return null;
+        const typeId = correctionTypeMap[cardId];
+        return resolveType(typeId);
+      })() ??
+      "OTHER";
+    edits.push({
+      start: startOrig,
+      end: endOrig,
+      startCorr,
+      endCorr,
+      replacementTokens,
+      type: typeLabel ?? "OTHER",
+    });
+  }
+
+  const lines = [`S ${visibleOriginal.join(" ")}`];
+  if (!edits.length) {
+    lines.push("A -1 -1|||noop|||-NONE-|||REQUIRED|||-NONE-|||0");
+    return lines.join("\n");
+  }
+
+  edits.forEach((edit) => {
+    const replacement = edit.replacementTokens.length ? edit.replacementTokens.join(" ") : "-NONE-";
+    lines.push(`A ${edit.start} ${edit.end}|||${edit.type}|||${replacement}|||REQUIRED|||-NONE-|||0`);
+  });
+  return lines.join("\n");
+};
+
 // ---------------------------
 // Component
 // ---------------------------
@@ -900,7 +1077,7 @@ const loadPrefs = (): {
   tokenFontSize?: number;
   lastDecision?: "skip" | "trash" | "submit" | null;
   lastTextId?: number;
-  viewTab?: "original" | "corrected";
+  viewTab?: "original" | "corrected" | "m2";
   textPanelOpen?: boolean;
   debugOpen?: boolean;
 } => {
@@ -992,7 +1169,7 @@ export const TokenEditor: React.FC<{
   const [editText, setEditText] = useState("");
   const prefs = useMemo(() => loadPrefs(), []);
   const [tokenGap, setTokenGap] = useState(prefs.tokenGap ?? 0);
-  const [tokenFontSize, setTokenFontSize] = useState(prefs.tokenFontSize ?? 16);
+const [tokenFontSize, setTokenFontSize] = useState(prefs.tokenFontSize ?? 16);
   const editInputRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
   const [dropTargetIndex, setDropTargetIndex] = useState<number | null>(null); // insertion position 0..tokens.length
   const tokenRefs = useRef<Record<string, HTMLDivElement | null>>({});
@@ -1022,7 +1199,13 @@ const [isSubmitting, setIsSubmitting] = useState(false);
   const [isAutosaving, setIsAutosaving] = useState(false);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
 const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
-const [viewTab, setViewTab] = useState<"original" | "corrected">(prefs.viewTab ?? "corrected");
+const initialViewTab = useMemo<"original" | "corrected" | "m2">(() => {
+  if (prefs.viewTab === "original" || prefs.viewTab === "corrected" || prefs.viewTab === "m2") {
+    return prefs.viewTab;
+  }
+  return "corrected";
+}, [prefs.viewTab]);
+const [viewTab, setViewTab] = useState<"original" | "corrected" | "m2">(initialViewTab);
 const [isTextPanelOpen, setIsTextPanelOpen] = useState<boolean>(prefs.textPanelOpen ?? true);
 const [lineBreaks, setLineBreaks] = useState<number[]>([]);
 const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
@@ -2260,6 +2443,28 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
     return map;
   }, [errorTypes]);
 
+  const resolveTypeLabel = useCallback(
+    (typeId: number) => {
+      const et = errorTypeById.get(typeId);
+      if (!et) return null;
+      return getErrorTypeLabel(et, locale);
+    },
+    [errorTypeById, locale]
+  );
+
+  const m2Preview = useMemo(
+    () =>
+      buildM2Preview({
+        originalTokens,
+        tokens,
+        correctionCards,
+        correctionTypeMap,
+        correctionByIndex,
+        resolveTypeLabel,
+      }),
+    [originalTokens, tokens, correctionCards, correctionTypeMap, correctionByIndex, resolveTypeLabel]
+  );
+
   const applyTypeToSelection = useCallback(
     (typeId: number | null) => {
       if (!typeId) return;
@@ -2598,6 +2803,24 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
               >
                 {t("tokenEditor.corrected") ?? "Corrected"}
               </button>
+              <button
+                style={{
+                  ...miniNeutralButton,
+                  background: viewTab === "m2" ? "rgba(59,130,246,0.3)" : miniNeutralButton.background,
+                  borderColor: viewTab === "m2" ? "rgba(59,130,246,0.6)" : miniNeutralButton.border,
+                }}
+                onClick={() => {
+                  if (viewTab === "m2") {
+                    setIsTextPanelOpen((v) => !v);
+                  } else {
+                    setViewTab("m2");
+                    setIsTextPanelOpen(true);
+                  }
+                }}
+                aria-pressed={viewTab === "m2"}
+              >
+                {t("tokenEditor.m2") ?? "M2"}
+              </button>
             </div>
             <button
               style={miniNeutralButton}
@@ -2610,18 +2833,33 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
           </div>
           {isTextPanelOpen && (
             <div style={{ padding: "10px 12px" }} data-testid="text-view-panel">
-              <span
-                style={{
-                  color: "#e2e8f0",
-                  fontSize: 14,
-                  wordBreak: "break-word",
-                  whiteSpace: "pre-wrap",
-                }}
-              >
-                {viewTab === "original"
-                  ? buildTextFromTokensWithBreaks(originalTokens, lineBreaks)
-                  : buildTextFromTokensWithBreaks(tokens, lineBreaks)}
-              </span>
+              {viewTab === "m2" ? (
+                <pre
+                  style={{
+                    margin: 0,
+                    color: "#e2e8f0",
+                    fontSize: 13,
+                    wordBreak: "break-word",
+                    whiteSpace: "pre-wrap",
+                    fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+                  }}
+                >
+                  {m2Preview}
+                </pre>
+              ) : (
+                <span
+                  style={{
+                    color: "#e2e8f0",
+                    fontSize: 14,
+                    wordBreak: "break-word",
+                    whiteSpace: "pre-wrap",
+                  }}
+                >
+                  {viewTab === "original"
+                    ? buildTextFromTokensWithBreaks(originalTokens, lineBreaks)
+                    : buildTextFromTokensWithBreaks(tokens, lineBreaks)}
+                </span>
+              )}
             </div>
           )}
         </div>
