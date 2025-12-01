@@ -2404,6 +2404,8 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
                 onClick={(e) => {
                   e.stopPropagation();
                   handleRevert(group.start, group.end, matchingMarker?.id ?? null);
+                  setSelection({ start: null, end: null });
+                  setEditingRange(null);
                 }}
                 title={t("tokenEditor.undo")}
               >

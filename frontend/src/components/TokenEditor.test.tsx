@@ -343,6 +343,10 @@ describe("insertion splitting", () => {
   });
 });
 
+describe.skip("revert clears selection", () => {
+  // UI selection state is managed outside the reducer; skip until we expose a test hook.
+});
+
 describe("TokenEditor view toggles", () => {
   beforeEach(() => {
     mockGet.mockReset();
