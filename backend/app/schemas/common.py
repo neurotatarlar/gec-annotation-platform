@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Literal, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 
 class Token(BaseModel):
@@ -16,8 +16,7 @@ class TokenPayload(BaseModel):
 
 
 class OrmBase(BaseModel):
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class UserBase(OrmBase):
@@ -74,8 +73,7 @@ class TokenFragmentPayload(BaseModel):
     origin: Literal["base", "inserted"] = "base"
     source_id: Optional[str] = None
 
-    class Config:
-        extra = "allow"  # tolerate older/untyped payloads
+    model_config = ConfigDict(extra="allow")  # tolerate older/untyped payloads
 
 
 class AnnotationDetailPayload(BaseModel):
@@ -88,8 +86,7 @@ class AnnotationDetailPayload(BaseModel):
     note: Optional[str] = None
     source: Optional[str] = None  # e.g., "import", "manual"
 
-    class Config:
-        extra = "allow"  # keep backward compatibility with arbitrary payloads
+    model_config = ConfigDict(extra="allow")  # keep backward compatibility with arbitrary payloads
 
 
 class AnnotationPayload(BaseModel):
@@ -119,9 +116,14 @@ class TextAssignmentResponse(BaseModel):
     lock_expires_at: Optional[datetime] = None
 
 
+class TextImportItem(BaseModel):
+    id: Optional[str] = None
+    text: str
+
+
 class TextImportRequest(BaseModel):
     category_id: int
-    texts: list[str]
+    texts: list[TextImportItem | str]
     required_annotations: int = Field(default=2, ge=1)
 
 

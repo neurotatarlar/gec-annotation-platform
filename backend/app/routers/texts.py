@@ -48,19 +48,49 @@ def import_texts(
     category = db.get(Category, request.category_id)
     if not category:
         raise HTTPException(status_code=404, detail="Category not found")
-    entries = [text.strip() for text in request.texts if isinstance(text, str) and text.strip()]
-    if not entries:
+    normalized: list[tuple[str, str]] = []
+    for item in request.texts:
+        if isinstance(item, str):
+            body = item
+            ext_id = hashlib.sha256(body.encode("utf-8")).hexdigest()
+        else:
+            body = item.text
+            ext_id = item.id or hashlib.sha256(body.encode("utf-8")).hexdigest()
+        if not isinstance(body, str) or not body.strip():
+            continue
+        normalized.append((body, ext_id))
+
+    if not normalized:
         raise HTTPException(status_code=400, detail="No texts provided")
-    for body in entries:
+
+    external_ids = [eid for _, eid in normalized if eid]
+    existing_ids: set[str] = set()
+    if external_ids:
+        rows = (
+            db.query(TextSample.external_id)
+            .filter(TextSample.category_id == category.id, TextSample.external_id.in_(external_ids))
+            .all()
+        )
+        existing_ids = {row[0] for row in rows if row[0]}
+
+    seen: set[str] = set()
+    inserted = 0
+    for body, ext_id in normalized:
+        # skip duplicates by external_id (either already in DB or repeated in payload)
+        if ext_id and (ext_id in existing_ids or ext_id in seen):
+            continue
+        seen.add(ext_id)
         db.add(
             TextSample(
                 content=body,
+                external_id=ext_id,
                 category_id=category.id,
                 required_annotations=request.required_annotations,
             )
         )
+        inserted += 1
     db.commit()
-    return TextImportResponse(inserted=len(entries))
+    return TextImportResponse(inserted=inserted)
 
 
 @router.post("/assignments/next", response_model=TextAssignmentResponse)
@@ -81,20 +111,10 @@ def get_next_text(
         {TextSample.locked_by_id: None, TextSample.locked_at: None}, synchronize_session=False
     )
 
-    skipped_subquery = (
-        select(SkippedText.text_id)
-        .where(SkippedText.annotator_id == current_user.id)
-        .subquery()
-    )
-    any_task_for_user = (
-        select(AnnotationTask.text_id)
-        .where(AnnotationTask.annotator_id == current_user.id)
-        .subquery()
-    )
-    submitted_subquery = (
-        select(AnnotationTask.text_id)
-        .where(AnnotationTask.annotator_id == current_user.id, AnnotationTask.status == "submitted")
-        .subquery()
+    skipped_subquery = select(SkippedText.text_id).where(SkippedText.annotator_id == current_user.id)
+    any_task_for_user = select(AnnotationTask.text_id).where(AnnotationTask.annotator_id == current_user.id)
+    submitted_subquery = select(AnnotationTask.text_id).where(
+        AnnotationTask.annotator_id == current_user.id, AnnotationTask.status == "submitted"
     )
 
     submitted_count_subq = (

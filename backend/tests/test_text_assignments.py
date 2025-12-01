@@ -1,4 +1,5 @@
 import os
+import hashlib
 import uuid
 
 import pytest
@@ -158,3 +159,76 @@ def test_import_sets_required_annotations_and_assignment_respects_skip_states(cl
     body2 = resp2.json()
     # Should skip skipped/trash texts and pick the imported one.
     assert body2["text"]["content"] == "text C"
+
+
+def test_import_accepts_json_objects_and_preserves_newlines(client):
+    payload = {
+        "category_id": 1,
+        "texts": [
+            {"id": "ext-1", "text": "Line one\n\nLine two"},
+            {"text": "Another text"},
+        ],
+        "required_annotations": 1,
+    }
+    resp = client.post("/api/texts/import", json=payload)
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["inserted"] == 2
+    with db.SessionLocal() as session:
+        first = session.query(TextSample).filter_by(external_id="ext-1").one()
+        assert first.content == "Line one\n\nLine two"
+        second_hash = hashlib.sha256("Another text".encode("utf-8")).hexdigest()
+        second = session.query(TextSample).filter_by(external_id=second_hash).one()
+        assert second.content == "Another text"
+
+
+def test_import_skips_duplicates_by_external_id(client):
+    with db.SessionLocal() as session:
+        category = session.query(Category).first()
+        session.add(
+            TextSample(
+                content="existing",
+                category_id=category.id,
+                required_annotations=1,
+                external_id="dup-1",
+            )
+        )
+        session.commit()
+
+    payload = {
+        "category_id": 1,
+        "texts": [
+            {"id": "dup-1", "text": "should be skipped"},
+            {"id": "new-1", "text": "fresh"},
+        ],
+        "required_annotations": 1,
+    }
+    resp = client.post("/api/texts/import", json=payload)
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["inserted"] == 1
+    with db.SessionLocal() as session:
+        all_rows = session.query(TextSample).filter_by(category_id=1).all()
+        ext_ids = {row.external_id for row in all_rows}
+        assert "dup-1" in ext_ids
+        assert "new-1" in ext_ids
+        existing = session.query(TextSample).filter_by(external_id="dup-1").one()
+        assert existing.content == "existing"
+
+
+def test_import_skips_duplicate_plain_strings_by_hash(client):
+    payload = {
+        "category_id": 1,
+        "texts": [
+            "repeat me",
+            "repeat me",  # duplicate plain string should be skipped
+            "unique",
+        ],
+        "required_annotations": 1,
+    }
+    resp = client.post("/api/texts/import", json=payload)
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["inserted"] == 2
+    with db.SessionLocal() as session:
+        rows = session.query(TextSample).filter_by(category_id=1).all()
+        contents = {r.content for r in rows}
+        assert "repeat me" in contents
+        assert "unique" in contents

@@ -12,11 +12,53 @@ interface AssignmentResponse {
 
 type CategoryModalState = { mode: "create" } | { mode: "edit"; category: CategorySummary };
 
-export const splitUploadInput = (value: string): string[] =>
-  value
-    .split(/\r?\n\s*\n/) // split by blank lines
-    .map((entry) => entry.trim())
-    .filter(Boolean);
+export type UploadEntry = { id?: string; text: string };
+
+export const parseUploadJson = (value: string): UploadEntry[] => {
+  if (!value || !value.trim()) return [];
+  let parsed: any;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new Error("invalidJson");
+  }
+  if (!Array.isArray(parsed)) {
+    throw new Error("invalidStructure");
+  }
+  const entries: UploadEntry[] = [];
+  parsed.forEach((item, index) => {
+    let text: string | null = null;
+    let id: string | undefined;
+    if (typeof item === "string") {
+      text = item;
+    } else if (item && typeof item === "object" && "text" in item) {
+      text = typeof item.text === "string" ? item.text : String(item.text ?? "");
+      if (item.id !== undefined && item.id !== null) {
+        id = String(item.id);
+      }
+    } else {
+      throw new Error(`invalidItem:${index}`);
+    }
+    if (!text || !text.trim()) return;
+    entries.push({ id, text });
+  });
+  return entries;
+};
+
+export const mergeUploadEntries = (parts: UploadEntry[][]): UploadEntry[] => {
+  const result: UploadEntry[] = [];
+  const seen = new Set<string>();
+  parts
+    .flat()
+    .filter(Boolean)
+    .forEach((entry) => {
+      const key = entry.id ?? `text:${entry.text}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      result.push(entry);
+    });
+  return result;
+};
 
 export const CategoriesPage = () => {
   const api = useAuthedApi();
@@ -158,7 +200,7 @@ export const CategoriesPage = () => {
   });
 
   const uploadTextsMutation = useMutation({
-    mutationFn: async (payload: { category_id: number; required_annotations: number; texts: string[] }) => {
+    mutationFn: async (payload: { category_id: number; required_annotations: number; texts: UploadEntry[] }) => {
       const response = await api.post("/api/texts/import", payload);
       return response.data as { inserted: number };
     },
@@ -222,7 +264,21 @@ export const CategoriesPage = () => {
   const handleUploadSubmit = (event: FormEvent) => {
     event.preventDefault();
     if (!uploadTarget) return;
-    const entries = [...splitUploadInput(uploadText), ...splitUploadInput(uploadFileContent)];
+    let entries: UploadEntry[] = [];
+    try {
+      const parts: UploadEntry[][] = [];
+      if (uploadText.trim()) {
+        parts.push(parseUploadJson(uploadText));
+      }
+      if (uploadFileContent.trim()) {
+        parts.push(parseUploadJson(uploadFileContent));
+      }
+      entries = mergeUploadEntries(parts);
+    } catch (error: any) {
+      const message = error?.message === "invalidStructure" ? "categories.uploadJsonStructure" : "categories.uploadJsonInvalid";
+      setUploadError(t(message));
+      return;
+    }
     if (entries.length === 0) {
       setUploadError(t("categories.uploadEmptyError"));
       return;
@@ -443,6 +499,7 @@ export const CategoriesPage = () => {
                 className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950/40 p-2 text-right text-slate-100 focus:border-emerald-400 focus:outline-none"
                 rows={6}
                 value={uploadText}
+                placeholder={t("categories.uploadTextareaPlaceholder")}
                 onChange={(event) => setUploadText(event.target.value)}
               />
             </label>
@@ -450,7 +507,7 @@ export const CategoriesPage = () => {
               <span>{t("categories.uploadFileLabel")}</span>
               <input
                 type="file"
-                accept=".txt"
+                accept=".json,application/json,text/json"
                 className="mt-1 w-full text-right text-xs text-slate-400"
                 onChange={handleFileChange}
               />

@@ -1,25 +1,52 @@
 import { describe, expect, it } from "vitest";
 
-import { splitUploadInput } from "./CategoriesPage";
+import { parseUploadJson, mergeUploadEntries, type UploadEntry } from "./CategoriesPage";
 
-describe("splitUploadInput", () => {
-  it("splits texts by blank lines", () => {
-    const input = "First line one\nFirst line two\n\nSecond text";
-    expect(splitUploadInput(input)).toEqual(["First line one\nFirst line two", "Second text"]);
+describe("parseUploadJson", () => {
+  it("parses string or object items", () => {
+    const input = JSON.stringify([
+      "hello",
+      { id: 123, text: "world" },
+      { text: "skip me? " },
+    ]);
+    expect(parseUploadJson(input)).toEqual([
+      { text: "hello" },
+      { id: "123", text: "world" },
+      { text: "skip me? " },
+    ]);
   });
 
-  it("ignores leading/trailing blank lines and trims entries", () => {
-    const input = "\n\n  First text  \n\n  Second text\n\n";
-    expect(splitUploadInput(input)).toEqual(["First text", "Second text"]);
+  it("throws on invalid json", () => {
+    expect(() => parseUploadJson("not json")).toThrow();
   });
 
-  it("preserves single-text input without blank lines", () => {
-    const input = "Single text only";
-    expect(splitUploadInput(input)).toEqual(["Single text only"]);
+  it("throws on non-array json", () => {
+    expect(() => parseUploadJson('{"text":"x"}')).toThrow();
   });
 
-  it("handles multiple blank lines with spaces", () => {
-    const input = "A\n\n   \nB\n\n\nC";
-    expect(splitUploadInput(input)).toEqual(["A", "B", "C"]);
+  it("throws on invalid item types", () => {
+    const bad = JSON.stringify([123]);
+    expect(() => parseUploadJson(bad)).toThrow();
+  });
+});
+
+describe("mergeUploadEntries", () => {
+  it("deduplicates by id when present, otherwise by text", () => {
+    const merged = mergeUploadEntries([
+      [
+        { id: "a", text: "one" },
+        { text: "two" },
+      ],
+      [
+        { id: "a", text: "duplicate" },
+        { text: "two" },
+        { text: "three" },
+      ],
+    ] as UploadEntry[][]);
+    expect(merged).toEqual([
+      { id: "a", text: "one" },
+      { text: "two" },
+      { text: "three" },
+    ]);
   });
 });
