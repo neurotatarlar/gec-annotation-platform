@@ -1379,7 +1379,7 @@ export const TokenEditor: React.FC<{
   const [editingRange, setEditingRange] = useState<SelectionRange | null>(null);
   const [editText, setEditText] = useState("");
   const prefs = useMemo(() => loadPrefs(), []);
-const [tokenGap, setTokenGap] = useState(prefs.tokenGap ?? 2);
+const [tokenGap, setTokenGap] = useState(Math.max(0, prefs.tokenGap ?? 2));
 const [tokenFontSize, setTokenFontSize] = useState(prefs.tokenFontSize ?? 16);
   const editInputRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
   const [dropTargetIndex, setDropTargetIndex] = useState<number | null>(null); // insertion position 0..tokens.length
@@ -2260,7 +2260,10 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
     const renderGap = (idx: number) => {
       const base = Math.max(0, tokenGap);
       const nextTok = tokens[idx];
-      const gapWidth = nextTok?.kind === "punct" ? Math.floor(base * 0.2) : base;
+      const hasSpace = nextTok?.spaceBefore !== false;
+      const isPunctAdjacent = nextTok?.kind === "punct";
+      const isEdge = idx === 0 || idx >= tokens.length;
+      const gapWidth = isEdge ? 0 : hasSpace ? base : Math.max(0, Math.floor(base * (isPunctAdjacent ? 0.2 : 0.25)));
       return (
         <div
           key={`gap-${idx}`}
@@ -2279,8 +2282,7 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
             e.preventDefault();
             handleDrop(idx);
           }}
-        >
-        </div>
+        />
       );
     };
 
@@ -2332,14 +2334,14 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
       const badgeColor = typeObj?.default_color ?? "#94a3b8";
       const badgeBg = colorWithAlpha(badgeColor, 0.18) ?? "rgba(148,163,184,0.15)";
       const badgeFontSize = Math.max(8, tokenFontSize * 0.6);
-      const badgePaddingY = Math.max(1, tokenFontSize * 0.15);
-      const badgePaddingX = Math.max(3, tokenFontSize * 0.35);
-      const badgeRadius = Math.max(6, tokenFontSize * 0.6);
+      const badgePaddingY = Math.max(0.5, tokenFontSize * 0.1);
+      const badgePaddingX = Math.max(2, tokenFontSize * 0.25);
+      const badgeRadius = Math.max(6, tokenFontSize * 0.5);
       const badgeMaxWidth = Math.max(80, tokenFontSize * 10);
       const badgeHeight = badgeFontSize + badgePaddingY * 2;
-      const groupPadY = Math.max(6, tokenFontSize * 0.4);
-      const groupPadX = Math.max(6, tokenFontSize * 0.35);
-      const paddingTop = groupPadY + badgeHeight * 0.5 + 4;
+      const groupPadY = 1;
+      const groupPadX = 1;
+      const paddingTop = badgeHeight ? badgeHeight * 0.5 : 0;
       const groupSelected =
         selection.start !== null &&
         selection.end !== null &&
@@ -2352,7 +2354,7 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
             display: "flex",
             flexDirection: "column",
             alignItems: "center",
-            gap: Math.max(4, tokenFontSize * 0.25),
+            gap: Math.max(2, tokenGap || 2),
             padding: `${paddingTop}px ${groupPadX}px ${groupPadY}px ${groupPadX}px`,
             borderRadius: 14,
             border: showBorder || groupSelected ? "1px solid rgba(148,163,184,0.35)" : "1px solid transparent",
@@ -2404,7 +2406,7 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
           <div
             style={{
               display: "flex",
-              gap: Math.max(1, tokenGap),
+              gap: Math.max(2, tokenGap || 2),
               flexWrap: "wrap",
               justifyContent: "flex-start",
               alignItems: "center",

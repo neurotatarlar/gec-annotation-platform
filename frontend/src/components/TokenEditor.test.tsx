@@ -112,6 +112,15 @@ describe("tokenEditorReducer core flows", () => {
     expect(tokens.map((t) => t.text)).toEqual(["Hi", ",", "world", "!", "2", "+", "2", "=", "4", "&", "*"]);
   });
 
+  it("marks no leading space when punctuation is attached", () => {
+    const tokens = tokenizeToTokens("hi, world");
+    const comma = tokens.find((t) => t.text === ",");
+    expect(comma?.spaceBefore).toBe(false);
+    const spaced = tokenizeToTokens("hi , world");
+    const commaSpaced = spaced.find((t) => t.text === ",");
+    expect(commaSpaced?.spaceBefore).toBe(true);
+  });
+
   it("treats phone, email, and url as special tokens", () => {
     const tokens = tokenizeToTokens("Call +123-456-7890 or mail x@y.com and visit https://example.com.");
     const kinds = tokens.map((t) => t.kind);
