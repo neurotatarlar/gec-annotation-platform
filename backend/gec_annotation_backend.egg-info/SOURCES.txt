@@ -20,4 +20,6 @@ gec_annotation_backend.egg-info/SOURCES.txt
 gec_annotation_backend.egg-info/dependency_links.txt
 gec_annotation_backend.egg-info/requires.txt
 gec_annotation_backend.egg-info/top_level.txt
+tests/test_annotations.py
 tests/test_error_types.py
+tests/test_text_assignments.py

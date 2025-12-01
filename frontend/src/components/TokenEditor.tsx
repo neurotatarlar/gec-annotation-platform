@@ -1124,6 +1124,7 @@ type BuildPayloadInput = {
   correctionTypeMap: Record<string, number | null>;
   moveMarkers: MoveMarker[];
   annotationIdMap?: Map<string, number>;
+  includeDeletedIds?: boolean;
 };
 
 export const buildAnnotationsPayloadStandalone = async ({
@@ -1134,6 +1135,7 @@ export const buildAnnotationsPayloadStandalone = async ({
   correctionTypeMap,
   moveMarkers,
   annotationIdMap,
+  includeDeletedIds = false,
 }: BuildPayloadInput): Promise<AnnotationDraft[]> => {
   const textHash = await computeSha256(initialText);
   const textTokensSnapshot = originalTokens.filter((t) => t.kind !== "empty").map((t) => t.text);
@@ -1253,6 +1255,14 @@ export const buildAnnotationsPayloadStandalone = async ({
     }
     payloads.push(draft);
   });
+
+  if (includeDeletedIds && annotationIdMap) {
+    const spanKeys = new Set(correctionCards.map((c) => `${c.rangeStart}-${c.rangeEnd}`));
+    const deletedIds = Array.from(annotationIdMap.entries())
+      .filter(([span]) => !spanKeys.has(span))
+      .map(([, id]) => id);
+    (payloads as any).deleted_ids = deletedIds;
+  }
 
   return payloads;
 };
@@ -2049,7 +2059,7 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
     const style: React.CSSProperties = {
       ...(chipStyles[token.kind] || chipBase),
       ...(hasHistory ? chipStyles.changed : {}),
-      cursor: isSpecial || isEmpty ? "default" : "pointer",
+      cursor: isSpecial ? "default" : "pointer",
       userSelect: "none",
       position: "relative",
       fontSize: tokenFontSize,
@@ -2064,10 +2074,21 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
         borderRadius: 8,
         background: "rgba(15,23,42,0.15)",
         padding: "2px 6px",
+        cursor: "pointer",
       });
     }
     if (isSelected) {
-      Object.assign(style, chipStyles.selected);
+      Object.assign(
+        style,
+        chipStyles.selected,
+        isEmpty
+          ? {
+              background: "rgba(14,165,233,0.25)",
+              borderStyle: "solid",
+              color: "#e2e8f0",
+            }
+          : {}
+      );
     }
     const isEditingChip =
       editingRange &&
@@ -2172,7 +2193,7 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
           handleDrop(dropTargetIndex ?? index);
         }}
         onClick={(e) => {
-          if (isSpecial || isEmpty) return;
+          if (isSpecial) return;
           handleTokenClick(index, e.ctrlKey || e.metaKey);
         }}
         onDoubleClick={(e) => {
@@ -2194,6 +2215,8 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
           beginEdit(range, caret);
         }}
         title={token.kind === "empty" ? "Empty placeholder" : token.text}
+        role="button"
+        tabIndex={isSpecial ? -1 : 0}
         ref={(el) => {
           tokenRefs.current[token.id] = el;
         }}
@@ -2543,6 +2566,13 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
 
   const saveAnnotations = useCallback(async () => {
     const annotations = await buildAnnotationsPayload();
+    const spans = new Set(correctionCards.map((c) => `${c.rangeStart}-${c.rangeEnd}`));
+    const deletedIds =
+      annotationIdMap.current
+        ? Array.from(annotationIdMap.current.entries())
+            .filter(([spanKey]) => !spans.has(spanKey))
+            .map(([, id]) => id)
+        : [];
     const { skip, nextSignature } = shouldSkipSave(lastSavedSignatureRef.current, annotations);
     if (skip) {
       lastSavedSignatureRef.current = nextSignature;
@@ -2550,18 +2580,29 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
       setSaveStatus("saved");
       return;
     }
-    const response = await api.post(`/api/texts/${textId}/annotations`, {
+    const payload: AnnotationSavePayload = {
       annotations,
       client_version: serverAnnotationVersion,
-    });
+    };
+    if (deletedIds.length) {
+      payload.deleted_ids = deletedIds;
+    }
+    const response = await api.post(`/api/texts/${textId}/annotations`, payload);
     lastSavedSignatureRef.current = nextSignature;
     const items = Array.isArray(response.data) ? response.data : [];
+    annotationIdMap.current = new Map<string, number>();
+    items.forEach((ann: any) => {
+      if (ann?.id != null && typeof ann.start_token === "number" && typeof ann.end_token === "number") {
+        const spanKey = `${ann.start_token}-${ann.end_token}`;
+        annotationIdMap.current.set(spanKey, ann.id);
+      }
+    });
     const maxVersion = items.reduce(
       (acc: number, ann: any) => Math.max(acc, ann?.version ?? serverAnnotationVersion),
       serverAnnotationVersion
     );
     setServerAnnotationVersion(maxVersion || serverAnnotationVersion + 1);
-  }, [api, buildAnnotationsPayload, serverAnnotationVersion, textId]);
+  }, [api, buildAnnotationsPayload, correctionCards, serverAnnotationVersion, textId]);
 
   // Autosave on token changes (debounced).
   useEffect(() => {

@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from itertools import combinations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import or_, select
+from sqlalchemy import or_, select, func
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
@@ -86,10 +86,23 @@ def get_next_text(
         .where(SkippedText.annotator_id == current_user.id)
         .subquery()
     )
+    any_task_for_user = (
+        select(AnnotationTask.text_id)
+        .where(AnnotationTask.annotator_id == current_user.id)
+        .subquery()
+    )
     submitted_subquery = (
         select(AnnotationTask.text_id)
         .where(AnnotationTask.annotator_id == current_user.id, AnnotationTask.status == "submitted")
         .subquery()
+    )
+
+    submitted_count_subq = (
+        select(func.count())
+        .select_from(AnnotationTask)
+        .where(AnnotationTask.text_id == TextSample.id, AnnotationTask.status == "submitted")
+        .correlate(TextSample)
+        .scalar_subquery()
     )
 
     stmt = (
@@ -98,11 +111,13 @@ def get_next_text(
             TextSample.category_id == category_id,
             TextSample.state.in_(["pending", "in_annotation"]),
             ~TextSample.id.in_(skipped_subquery),
+            ~TextSample.id.in_(any_task_for_user),
             ~TextSample.id.in_(submitted_subquery),
             or_(
                 TextSample.locked_by_id.is_(None),
                 TextSample.locked_by_id == current_user.id,
             ),
+            submitted_count_subq < TextSample.required_annotations,
         )
         .order_by(TextSample.id)
         .with_for_update(skip_locked=True)
@@ -238,6 +253,18 @@ def save_annotations(
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="before_tokens must be a list")
 
         saved: list[Annotation] = []
+        # Process deletions first
+        if request.deleted_ids:
+            (
+                db.query(Annotation)
+                .filter(
+                    Annotation.text_id == text_id,
+                    Annotation.author_id == current_user.id,
+                    Annotation.id.in_(request.deleted_ids),
+                )
+                .delete(synchronize_session=False)
+            )
+
         for item in request.annotations:
             payload = _ensure_payload_dict(item.payload)
             _validate_payload(payload)
@@ -249,7 +276,11 @@ def save_annotations(
                     detail="Client text hash does not match server text. Reload the text before saving.",
                 )
             payload["text_sha256"] = payload_hash or text_hash
-            if "text_tokens" not in payload or not isinstance(payload.get("text_tokens"), list):
+            if (
+                "text_tokens" not in payload
+                or not isinstance(payload.get("text_tokens"), list)
+                or len(payload.get("text_tokens") or []) == 0
+            ):
                 tokens_snapshot = text.content.split()
                 payload["text_tokens"] = tokens_snapshot
                 payload["text_tokens_sha256"] = _sha256_tokens(tokens_snapshot)

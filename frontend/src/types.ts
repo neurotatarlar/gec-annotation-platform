@@ -20,6 +20,12 @@ export interface AnnotationDraft {
   payload: AnnotationDetailPayload;
 }
 
+export interface AnnotationSavePayload {
+  annotations: AnnotationDraft[];
+  client_version: number;
+  deleted_ids?: number[];
+}
+
 export type TokenId = string;
 
 export interface BaseToken {

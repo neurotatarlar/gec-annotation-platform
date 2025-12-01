@@ -15,6 +15,7 @@ import {
   buildAnnotationsPayloadStandalone,
   shouldSkipSave,
   annotationsSignature,
+  buildAnnotationsPayloadStandalone as buildStandalone,
   TokenEditor,
   tokenEditorReducer,
   tokenizeToTokens,
@@ -290,6 +291,31 @@ describe("buildAnnotationsPayloadStandalone", () => {
     expect(ann.payload.text_tokens_sha256).toBe(expectedHash);
     expect(ann.replacement).toBe("hi");
   });
+
+  it("adds deleted_ids when includeDeletedIds is true", async () => {
+    const originalTokens = tokenizeToTokens("hello world");
+    const tokens = tokenizeToTokens("hi world");
+    const correctionCards = [{ id: "card-1", rangeStart: 0, rangeEnd: 0, markerId: null }];
+    const correctionTypeMap = { "card-1": 7 };
+    const annotationIdMap = new Map<string, number>([
+      ["0-0", 10],
+      ["1-1", 11],
+    ]);
+
+    const payloads = (await buildStandalone({
+      initialText: "hello world",
+      tokens,
+      originalTokens,
+      correctionCards,
+      correctionTypeMap,
+      moveMarkers: [],
+      annotationIdMap,
+      includeDeletedIds: true,
+    })) as any;
+
+    expect(payloads.deleted_ids).toContain(11);
+    expect(payloads.deleted_ids).not.toContain(10);
+  });
 });
 
 describe("save skipping helpers", () => {
@@ -360,7 +386,21 @@ describe("insertion splitting", () => {
 });
 
 describe("empty placeholder selection", () => {
-  it.skip("highlights deleted placeholder when clicked", () => {});
+  it("highlights deleted placeholder when clicked again later", async () => {
+    mockGet.mockReset();
+    mockPost.mockReset();
+    localStorage.clear();
+    renderEditor("hello world");
+    const user = userEvent.setup();
+    const hello = await screen.findByText("hello");
+    await user.click(hello);
+    await user.keyboard("{Delete}");
+
+    const placeholder = await screen.findByRole("button", { name: "⬚" });
+    // deselected after delete; clicking again should toggle selection state/aria
+    await user.click(placeholder);
+    await waitFor(() => expect(placeholder).toHaveAttribute("aria-pressed", "true"));
+  });
 });
 
 describe.skip("revert clears selection", () => {

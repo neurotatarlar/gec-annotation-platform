@@ -1,7 +1,11 @@
+import os
 import uuid
 
 import pytest
 from fastapi.testclient import TestClient
+
+os.environ.setdefault("DATABASE__URL", "sqlite:///:memory:")
+os.environ.setdefault("SKIP_CREATE_ALL", "1")
 
 import app.database as db
 from app.main import app

@@ -110,6 +110,7 @@ class AnnotationRead(OrmBase, AnnotationPayload):
 class AnnotationSaveRequest(BaseModel):
     annotations: list[AnnotationPayload]
     client_version: int = 0
+    deleted_ids: list[int] = Field(default_factory=list)
 
 
 class TextAssignmentResponse(BaseModel):

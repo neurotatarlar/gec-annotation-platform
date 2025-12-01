@@ -2,7 +2,11 @@ import hashlib
 import uuid
 
 import pytest
+import os
 from fastapi.testclient import TestClient
+
+os.environ.setdefault("DATABASE__URL", "sqlite:///:memory:")
+os.environ.setdefault("SKIP_CREATE_ALL", "1")
 
 import app.database as db
 from app.main import app
@@ -417,3 +421,58 @@ def test_save_annotations_invalid_origin_rejected(client):
     resp = client.post(f"/api/texts/{text_id}/annotations", json=payload)
     # Pydantic pre-validation can return 422; custom validation returns 400.
     assert resp.status_code in (400, 422)
+
+
+def test_save_annotations_deletes_by_id(client):
+    text_id, et_id = get_seed_ids()
+    with db.SessionLocal() as session:
+        ann = Annotation(
+            text_id=text_id,
+            author_id=TEST_USER_ID,
+            start_token=0,
+            end_token=0,
+            replacement="old",
+            payload={"operation": "replace", "before_tokens": ["base-0"], "after_tokens": []},
+            error_type_id=et_id,
+        )
+        session.add(ann)
+        session.commit()
+        session.refresh(ann)
+        ann_id = ann.id
+
+    payload = {
+        "annotations": [],
+        "client_version": 0,
+        "deleted_ids": [ann_id],
+    }
+    resp = client.post(f"/api/texts/{text_id}/annotations", json=payload)
+    assert resp.status_code == 200, resp.text
+    with db.SessionLocal() as session:
+        remaining = session.query(Annotation).filter_by(text_id=text_id, author_id=TEST_USER_ID).all()
+        assert len(remaining) == 0
+
+
+def test_save_annotations_populates_token_snapshot_when_missing(client):
+    text_id, et_id = get_seed_ids()
+    payload = {
+        "annotations": [
+            {
+                "start_token": 0,
+                "end_token": 0,
+                "replacement": "hi",
+                "error_type_id": et_id,
+                "payload": {
+                    "operation": "replace",
+                    "before_tokens": ["hello"],
+                    "after_tokens": [{"id": "base-0", "text": "hi", "origin": "base"}],
+                    # intentionally omit text_sha256 and text_tokens to exercise server defaults
+                },
+            }
+        ],
+        "client_version": 0,
+    }
+    resp = client.post(f"/api/texts/{text_id}/annotations", json=payload)
+    assert resp.status_code == 200, resp.text
+    data = resp.json()[0]
+    assert data["payload"]["text_tokens"] == ["hello", "world"]
+    assert data["payload"]["text_tokens_sha256"]

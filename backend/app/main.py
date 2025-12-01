@@ -1,3 +1,4 @@
+import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -5,7 +6,9 @@ from .database import engine
 from .models import Base
 from .routers import auth, categories, error_types, texts
 
-Base.metadata.create_all(bind=engine)
+# Allow skipping table creation in test environments (e.g., sqlite without JSONB).
+if not os.getenv("SKIP_CREATE_ALL"):
+    Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Tatar GEC Annotation API", version="0.1.0")
 
