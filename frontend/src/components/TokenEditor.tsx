@@ -1838,7 +1838,7 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
     const { start, end } = editingRange;
     dispatch({ type: "EDIT_SELECTED_RANGE_AS_TEXT", range: [start!, end!], newText: editText });
     setEditingRange(null);
-    setSelection({ start: null, end: null });
+    setSelection({ start, end });
   };
 
   // Cancel edit.
@@ -2080,6 +2080,7 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
       const textForWidth = editText.length ? editText : originalSelection;
       const measuredPx = measureTextWidth(textForWidth);
       const editPxWidth = Math.max(48, Math.min(800, measuredPx + tokenFontSize * 1.5)); // padding headroom
+      const selectedHighlight = chipStyles.selected;
       return (
         <div
           key={`edit-${index}`}
@@ -2097,8 +2098,8 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
           <div
             style={{
               ...style,
-              background: "rgba(59,130,246,0.2)",
-              borderColor: "rgba(59,130,246,0.6)",
+              ...selectedHighlight,
+              background: "rgba(59,130,246,0.12)",
               width: `${editPxWidth}px`,
               minWidth: `${editPxWidth}px`,
               maxWidth: `${editPxWidth}px`,
@@ -2314,6 +2315,10 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
       const groupPadY = Math.max(6, tokenFontSize * 0.4);
       const groupPadX = Math.max(6, tokenFontSize * 0.35);
       const paddingTop = groupPadY + badgeHeight * 0.5 + 4;
+      const groupSelected =
+        selection.start !== null &&
+        selection.end !== null &&
+        !(group.end < Math.min(selection.start, selection.end) || group.start > Math.max(selection.start, selection.end));
 
       const groupNode = (
         <div
@@ -2325,11 +2330,15 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
             gap: Math.max(4, tokenFontSize * 0.25),
             padding: `${paddingTop}px ${groupPadX}px ${groupPadY}px ${groupPadX}px`,
             borderRadius: 14,
-            border: showBorder ? "1px solid rgba(148,163,184,0.35)" : "1px solid transparent",
-            background: isHoveredGroup ? "rgba(94,234,212,0.05)" : "transparent",
+            border: showBorder || groupSelected ? "1px solid rgba(148,163,184,0.35)" : "1px solid transparent",
+            background: isHoveredGroup
+              ? "rgba(94,234,212,0.05)"
+              : groupSelected
+                ? "rgba(59,130,246,0.08)"
+                : "transparent",
             boxShadow: isHoveredGroup
               ? "0 0 0 1px rgba(94,234,212,0.4)"
-              : showBorder
+              : showBorder || groupSelected
                 ? "0 0 0 1px rgba(148,163,184,0.25)"
                 : "none",
             flex: "0 0 auto",
