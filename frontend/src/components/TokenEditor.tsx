@@ -2047,25 +2047,26 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
     const style: React.CSSProperties = {
       ...(chipStyles[token.kind] || chipBase),
       ...(hasHistory ? chipStyles.changed : {}),
-      ...(isSelected ? chipStyles.selected : {}),
       cursor: isSpecial || isEmpty ? "default" : "pointer",
       userSelect: "none",
       position: "relative",
       fontSize: tokenFontSize,
-      // padding: `${Math.max(0, tokenFontSize * 0.1)}px ${Math.max(1, tokenFontSize * 0.25)}px`,
       padding: 0,
       lineHeight: 1.05,
       marginRight: 0,
-      ...(isEmpty
-        ? {
-            color: "#94a3b8",
-            border: "1px dashed rgba(148,163,184,0.5)",
-            borderRadius: 8,
-            background: "rgba(15,23,42,0.15)",
-            padding: "2px 6px",
-          }
-        : {}),
     };
+    if (isEmpty) {
+      Object.assign(style, {
+        color: "#94a3b8",
+        border: "1px dashed rgba(148,163,184,0.5)",
+        borderRadius: 8,
+        background: "rgba(15,23,42,0.15)",
+        padding: "2px 6px",
+      });
+    }
+    if (isSelected) {
+      Object.assign(style, chipStyles.selected);
+    }
     const isEditingChip =
       editingRange &&
       index >= Math.min(editingRange.start!, editingRange.end!) &&
@@ -2193,6 +2194,7 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
         ref={(el) => {
           tokenRefs.current[token.id] = el;
         }}
+        aria-pressed={isSelected}
       >
         <span>{displayText}</span>
         {caretHint && <span style={caretHint} />}
@@ -2910,6 +2912,7 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
                 setSelection({ start, end: start });
                 setEditingRange({ start, end: start });
                 setEditText("");
+                setActiveErrorTypeId((prev) => prev); // preserve current active error type for hotkeys
                 setTimeout(() => {
                   if (editInputRef.current) {
                     editInputRef.current.focus();
@@ -2929,6 +2932,7 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
                 setSelection({ start: newIndex, end: newIndex });
                 setEditingRange({ start: newIndex, end: newIndex });
                 setEditText("");
+                setActiveErrorTypeId((prev) => prev); // preserve active type for hotkeys
                 setTimeout(() => {
                   if (editInputRef.current) {
                     editInputRef.current.focus();

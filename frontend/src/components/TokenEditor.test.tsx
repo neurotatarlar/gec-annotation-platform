@@ -343,6 +343,30 @@ describe("insertion splitting", () => {
   });
 });
 
+describe("empty placeholder selection", () => {
+  it("highlights deleted placeholder when clicked", async () => {
+    const user = userEvent.setup();
+    localStorage.clear();
+    const originalTokens = tokenizeToTokens("hello world");
+    const placeholder = {
+      id: "ph-1",
+      text: "⬚",
+      kind: "empty",
+      selected: false,
+      previousTokens: [{ id: "t1", text: "hello", kind: "word", selected: false }],
+    } as any;
+    const tokens = [placeholder, { id: "t2", text: "world", kind: "word", selected: false } as any];
+    const state = { originalTokens, tokens, moveMarkers: [] };
+    localStorage.setItem("tokenEditorPrefs:state:1", JSON.stringify(state));
+    renderEditor("hello world");
+    const placeholderChip = await screen.findByText("⬚", undefined, { timeout: 3000 });
+    await act(async () => {
+      await user.click(placeholderChip);
+    });
+    expect(placeholderChip).toHaveAttribute("aria-pressed", "true");
+  });
+});
+
 describe.skip("revert clears selection", () => {
   // UI selection state is managed outside the reducer; skip until we expose a test hook.
 });
