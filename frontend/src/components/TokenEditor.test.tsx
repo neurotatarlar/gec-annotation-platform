@@ -168,6 +168,19 @@ describe("tokenEditorReducer core flows", () => {
     expect(buildTextFromTokensWithBreaks(tokens, breaks)).toBe("hello world\nnext");
   });
 
+  it("renders first/last tokens flush to container", async () => {
+    localStorage.clear();
+    renderEditor("hello world");
+    const panel = await screen.findByTestId("corrected-panel");
+    const chips = panel.querySelectorAll("div[role='button']");
+    expect(chips.length).toBeGreaterThanOrEqual(2);
+    const panelRect = panel.getBoundingClientRect();
+    const firstRect = chips[0].getBoundingClientRect();
+    const lastRect = chips[chips.length - 1].getBoundingClientRect();
+    expect(firstRect.left - panelRect.left).toBeLessThanOrEqual(1);
+    expect(panelRect.right - lastRect.right).toBeLessThanOrEqual(1);
+  });
+
   it("buildHotkeyMap keeps active hotkeys, supports modifiers, and normalizes order plus code variants", () => {
     const errorTypes: any[] = [
       { id: 1, is_active: true, default_hotkey: "A" },

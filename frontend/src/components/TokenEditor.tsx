@@ -149,11 +149,12 @@ export const tokenizeToTokens = (text: string): Token[] => {
 
   let idx = 0;
   while (idx < text.length) {
-    // Skip whitespace
-    if (/\s/.test(text[idx])) {
+    let hadSpace = false;
+    while (idx < text.length && /\s/.test(text[idx])) {
+      hadSpace = true;
       idx += 1;
-      continue;
     }
+    if (idx >= text.length) break;
 
     let matched = false;
     for (const m of specialMatchers) {
@@ -178,15 +179,16 @@ export const tokenizeToTokens = (text: string): Token[] => {
     if (matched) continue;
 
     baseRegex.lastIndex = idx;
-      const baseMatch = baseRegex.exec(text);
-      if (baseMatch && baseMatch.index === idx) {
-        const value = baseMatch[0];
-        const isWord = !punctuation.test(value);
-        tokens.push({
+    const baseMatch = baseRegex.exec(text);
+    if (baseMatch && baseMatch.index === idx) {
+      const value = baseMatch[0];
+      const isWord = !punctuation.test(value);
+      tokens.push({
         id: createId(),
         text: value,
         kind: isWord ? "word" : "punct",
         selected: false,
+        spaceBefore: hadSpace,
         origin: undefined,
       });
       idx += value.length;
@@ -2102,7 +2104,8 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
       const originalSelection = tokens.slice(editStart, editEnd + 1).map((t) => t.text).join(" ");
       const textForWidth = editText.length ? editText : originalSelection;
       const measuredPx = measureTextWidth(textForWidth);
-      const editPxWidth = Math.max(48, Math.min(800, measuredPx + tokenFontSize * 1.5)); // padding headroom
+      // Match the editing pill to the text length with only minimal breathing room.
+      const editPxWidth = Math.max(8, measuredPx + tokenFontSize * 0.6);
       const selectedHighlight = chipStyles.selected;
       return (
         <div
