@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen, waitFor, act } from "@testing-library/react";
+import { render, screen, waitFor, act, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
@@ -13,6 +13,8 @@ import {
   buildM2Preview,
   computeTokensSha256,
   buildAnnotationsPayloadStandalone,
+  shouldSkipSave,
+  annotationsSignature,
   TokenEditor,
   tokenEditorReducer,
   tokenizeToTokens,
@@ -287,6 +289,57 @@ describe("buildAnnotationsPayloadStandalone", () => {
     const expectedHash = await computeTokensSha256(["hello", "world"]);
     expect(ann.payload.text_tokens_sha256).toBe(expectedHash);
     expect(ann.replacement).toBe("hi");
+  });
+});
+
+describe("save skipping helpers", () => {
+  it("skips when signature unchanged", () => {
+    const anns = [
+      { start_token: 0, end_token: 0, replacement: "a", error_type_id: 1, payload: {} as any },
+    ] as any;
+    const sig = annotationsSignature(anns);
+    const result = shouldSkipSave(sig, anns);
+    expect(result.skip).toBe(true);
+    expect(result.nextSignature).toBe(sig);
+  });
+
+  it("skips initial empty payload", () => {
+    const anns: any[] = [];
+    const result = shouldSkipSave(null, anns);
+    expect(result.skip).toBe(true);
+  });
+
+  it("does not skip when payload changes", () => {
+    const result = shouldSkipSave("old", [{ start_token: 0, end_token: 0, replacement: "x", error_type_id: 1, payload: {} as any } as any]);
+    expect(result.skip).toBe(false);
+  });
+});
+
+describe("insertion splitting", () => {
+  it("splits inserted placeholder text into multiple tokens with punctuation", () => {
+    const state1 = initState("hello world");
+    const withInsert = tokenEditorReducer(state1, { type: "INSERT_TOKEN_BEFORE_SELECTED", range: [0, 0] });
+    const edited = tokenEditorReducer(withInsert, {
+      type: "EDIT_SELECTED_RANGE_AS_TEXT",
+      range: [0, 0],
+      newText: "foo, bar",
+    });
+    expect(edited.present.tokens.map((t) => t.text)).toEqual(["foo", ",", "bar", "hello", "world"]);
+  });
+
+  it("renders split tokens as separate chips after editing insertion", async () => {
+    localStorage.clear();
+    const originalTokens = tokenizeToTokens("hello world");
+    const tokens = tokenizeToTokens("foo, bar hello world");
+    const state = { originalTokens, tokens, moveMarkers: [] };
+    localStorage.setItem("tokenEditorPrefs:state:1", JSON.stringify(state));
+    renderEditor("hello world");
+    const correctedPanel = await screen.findByTestId("corrected-panel");
+    await waitFor(() => {
+      const chips = within(correctedPanel).getAllByText(/foo|bar|hello|,/);
+      expect(chips.length).toBeGreaterThanOrEqual(4);
+      expect(screen.getByTestId("text-view-panel").textContent?.includes("foo, bar hello world")).toBe(true);
+    });
   });
 });
 

@@ -848,7 +848,7 @@ const chipBase: React.CSSProperties = {
 };
 
 const chipStyles: Record<string, React.CSSProperties> = {
-  word: { ...chipBase, color: "#e2e8f0" },
+  word: { ...chipBase, color: "#e2e8f0", padding: "0px 2px" },
   punct: { ...chipBase, color: "#e2e8f0", padding: "0px 2px", gap: 0 },
   special: { ...chipBase, color: "#cbd5e1", borderBottom: "1px dotted rgba(148,163,184,0.8)" },
   empty: { ...chipBase, color: "#cbd5e1" },
@@ -883,6 +883,12 @@ export const buildTextFromTokensWithBreaks = (tokens: Token[], breaks: number[])
   });
   const joined = parts.join(" ");
   return joined.replace(/\s+([.,;:?!-])/g, "$1").replace(/\s*\n\s*/g, "\n").trimEnd();
+};
+
+export const buildEditableTextFromTokens = (tokens: Token[]) => {
+  const visible = tokens.filter((t) => t.kind !== "empty");
+  const joined = visible.map((t) => t.text).join(" ");
+  return joined.replace(/\s+([.,;:?!])/g, "$1 ").trim();
 };
 
 type DiffOp = { type: "equal" | "delete" | "insert"; values: string[] };
@@ -1092,6 +1098,22 @@ export const computeSha256 = async (text: string): Promise<string | null> => {
 export const computeTokensSha256 = async (tokens: string[]): Promise<string | null> => {
   const joined = tokens.join("\u241f");
   return computeSha256(joined);
+};
+
+export const annotationsSignature = (annotations: AnnotationDraft[]) => JSON.stringify(annotations);
+
+export const shouldSkipSave = (
+  lastSignature: string | null,
+  annotations: AnnotationDraft[]
+): { skip: boolean; nextSignature: string } => {
+  const signature = annotationsSignature(annotations);
+  if (signature === lastSignature) {
+    return { skip: true, nextSignature: signature };
+  }
+  if (!annotations.length && lastSignature === null) {
+    return { skip: true, nextSignature: signature };
+  }
+  return { skip: false, nextSignature: signature };
 };
 
 type BuildPayloadInput = {
@@ -1347,7 +1369,7 @@ export const TokenEditor: React.FC<{
   const [editingRange, setEditingRange] = useState<SelectionRange | null>(null);
   const [editText, setEditText] = useState("");
   const prefs = useMemo(() => loadPrefs(), []);
-  const [tokenGap, setTokenGap] = useState(prefs.tokenGap ?? 0);
+const [tokenGap, setTokenGap] = useState(prefs.tokenGap ?? 2);
 const [tokenFontSize, setTokenFontSize] = useState(prefs.tokenFontSize ?? 16);
   const editInputRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
   const [dropTargetIndex, setDropTargetIndex] = useState<number | null>(null); // insertion position 0..tokens.length
@@ -1390,6 +1412,7 @@ const [lineBreaks, setLineBreaks] = useState<number[]>([]);
 const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
 const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
   const autosaveInitializedRef = useRef(false);
+  const lastSavedSignatureRef = useRef<string | null>(null);
   const [lastDecision, setLastDecision] = useState<"skip" | "trash" | "submit" | null>(
     prefs.lastTextId === textId ? prefs.lastDecision ?? null : null
   );
@@ -1517,6 +1540,7 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
     setActiveErrorTypeId(typeState.activeErrorTypeId);
     setCorrectionTypeMap(typeState.assignments);
     setHasLoadedTypeState(true);
+    lastSavedSignatureRef.current = null;
   }, [initialText, textId]);
 
   useEffect(() => {
@@ -1793,8 +1817,9 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
       return;
     }
     setEditingRange(activeRange);
-    setEditText(buildTextFromTokens(slice));
-    const desiredCaret = typeof caretIndex === "number" ? caretIndex : buildTextFromTokens(slice).length;
+    const editValue = buildEditableTextFromTokens(slice);
+    setEditText(editValue);
+    const desiredCaret = typeof caretIndex === "number" ? caretIndex : editValue.length;
     setTimeout(() => {
       if (editInputRef.current) {
         const target = editInputRef.current;
@@ -2343,7 +2368,7 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
           <div
             style={{
               display: "flex",
-              gap: 0,
+              gap: Math.max(1, tokenGap),
               flexWrap: "wrap",
               justifyContent: "flex-start",
               alignItems: "center",
@@ -2500,10 +2525,18 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
 
   const saveAnnotations = useCallback(async () => {
     const annotations = await buildAnnotationsPayload();
+    const { skip, nextSignature } = shouldSkipSave(lastSavedSignatureRef.current, annotations);
+    if (skip) {
+      lastSavedSignatureRef.current = nextSignature;
+      setHasUnsavedChanges(false);
+      setSaveStatus("saved");
+      return;
+    }
     const response = await api.post(`/api/texts/${textId}/annotations`, {
       annotations,
       client_version: serverAnnotationVersion,
     });
+    lastSavedSignatureRef.current = nextSignature;
     const items = Array.isArray(response.data) ? response.data : [];
     const maxVersion = items.reduce(
       (acc: number, ann: any) => Math.max(acc, ann?.version ?? serverAnnotationVersion),
