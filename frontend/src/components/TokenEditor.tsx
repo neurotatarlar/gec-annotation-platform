@@ -1434,6 +1434,8 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
   const prevCorrectionCountRef = useRef(0);
   const handleRevert = (rangeStart: number, rangeEnd: number, markerId: string | null = null) => {
     dispatch({ type: "REVERT_CORRECTION", rangeStart, rangeEnd, markerId });
+    setSelection({ start: null, end: null });
+    setEditingRange(null);
   };
 
   const tokens = history.present.tokens;

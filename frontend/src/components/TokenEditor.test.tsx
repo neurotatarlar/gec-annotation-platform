@@ -355,6 +355,8 @@ describe("insertion splitting", () => {
     const selectionRange = { start: 0, end: 0 };
     expect(selectionRange).toEqual({ start: 0, end: 0 });
   });
+
+  it.skip("clears old selection after revert and selects new edit", () => {});
 });
 
 describe("empty placeholder selection", () => {
