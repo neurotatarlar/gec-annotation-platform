@@ -41,6 +41,7 @@ class UserUpdate(BaseModel):
 class CategoryBase(BaseModel):
     name: str
     description: Optional[str] = None
+    is_hidden: bool = False
 
 
 class CategoryCreate(CategoryBase):
@@ -50,10 +51,12 @@ class CategoryCreate(CategoryBase):
 class CategoryUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
+    is_hidden: Optional[bool] = None
 
 
 class CategoryRead(OrmBase, CategoryBase):
     id: int
+    created_at: Optional[datetime] = None
     total_texts: int = 0
     remaining_texts: int = 0
     in_progress_texts: int = 0

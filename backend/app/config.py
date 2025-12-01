@@ -22,6 +22,16 @@ class AppSettings(BaseSettings):
     environment: str = "development"
     database: DatabaseSettings = DatabaseSettings()
     security: SecuritySettings = SecuritySettings()
+    allowed_origins: list[str] = Field(
+        default_factory=lambda: [
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+            "http://localhost:4173",
+            "http://127.0.0.1:4173",
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+        ]
+    )
 
     model_config = SettingsConfigDict(
         env_file=".env",

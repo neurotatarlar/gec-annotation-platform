@@ -28,6 +28,8 @@ def _serialize_category(category: Category, stats) -> CategoryRead:
         id=category.id,
         name=category.name,
         description=category.description,
+        is_hidden=category.is_hidden,
+        created_at=category.created_at,
         total_texts=int(stats.total) if stats else 0,
         remaining_texts=int(stats.pending) if stats else 0,
         in_progress_texts=int(stats.in_progress) if stats else 0,
@@ -37,7 +39,7 @@ def _serialize_category(category: Category, stats) -> CategoryRead:
 
 @router.get("/", response_model=list[CategoryRead])
 def list_categories(db: Session = Depends(get_db), _: str = Depends(get_current_user)):
-    categories = db.query(Category).order_by(Category.name).all()
+    categories = db.query(Category).order_by(Category.created_at.desc(), Category.id.desc()).all()
     stats_map = _load_category_stats(db, [category.id for category in categories])
     return [_serialize_category(category, stats_map.get(category.id)) for category in categories]
 
@@ -75,6 +77,8 @@ def update_category(
         category.name = payload.name
     if payload.description is not None:
         category.description = payload.description
+    if payload.is_hidden is not None:
+        category.is_hidden = payload.is_hidden
     db.commit()
     db.refresh(category)
     stats = _load_category_stats(db, [category.id]).get(category.id)

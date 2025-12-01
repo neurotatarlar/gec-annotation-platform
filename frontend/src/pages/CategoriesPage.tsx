@@ -75,6 +75,7 @@ export const CategoriesPage = () => {
   const [uploadRequired, setUploadRequired] = useState(2);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadSuccess, setUploadSuccess] = useState<string | null>(null);
+  const [showHidden, setShowHidden] = useState(false);
   const { data: categories, isLoading } = useQuery<CategorySummary[]>({
     queryKey: ["categories"],
     queryFn: async () => {
@@ -219,6 +220,16 @@ export const CategoriesPage = () => {
     }
   });
 
+  const toggleVisibilityMutation = useMutation({
+    mutationFn: async (payload: { id: number; is_hidden: boolean }) => {
+      const response = await api.put(`/api/categories/${payload.id}`, { is_hidden: payload.is_hidden });
+      return response.data as CategorySummary;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["categories"] });
+    },
+  });
+
   const handleModalSubmit = (event: FormEvent) => {
     event.preventDefault();
     if (!modalState) return;
@@ -337,8 +348,10 @@ export const CategoriesPage = () => {
           </div>
         </div>
       )}
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {categories?.map((category) => {
+      {(() => {
+        const visible = (categories ?? []).filter((c) => !c.is_hidden);
+        const hidden = (categories ?? []).filter((c) => c.is_hidden);
+        const renderCard = (category: CategorySummary) => {
           const skippedCount = skippedCounts[category.id] ?? 0;
           const trashCount = trashedCounts[category.id] ?? 0;
 
@@ -380,6 +393,16 @@ export const CategoriesPage = () => {
                     }}
                   >
                     {t("categories.uploadButton")}
+                  </button>
+                  <button
+                    className="rounded-lg border border-slate-600/70 px-3 py-1 text-xs text-slate-200"
+                    onClick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      toggleVisibilityMutation.mutate({ id: category.id, is_hidden: !category.is_hidden });
+                    }}
+                  >
+                    {category.is_hidden ? t("categories.showCategory") : t("categories.hideCategory")}
                   </button>
                 </div>
               </div>
@@ -426,8 +449,36 @@ export const CategoriesPage = () => {
               )}
             </article>
           );
-        })}
-      </div>
+        };
+        return (
+          <>
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {visible.map(renderCard)}
+              {!visible.length && <p className="text-sm text-slate-300">{t("categories.noVisible")}</p>}
+            </div>
+            {!!hidden.length && (
+              <div className="mt-4 rounded-2xl border border-slate-700 bg-slate-900/60 p-4">
+                <button
+                  type="button"
+                  className="flex w-full items-center justify-between text-left text-slate-200"
+                  onClick={() => setShowHidden((v) => !v)}
+                >
+                  <span className="font-semibold">{t("categories.hiddenGroup")}</span>
+                  <span className="flex items-center gap-2 text-sm text-slate-300">
+                    <span className="rounded-full bg-slate-700 px-2 py-0.5 text-xs">{hidden.length}</span>
+                    <span>{showHidden ? "▴" : "▾"}</span>
+                  </span>
+                </button>
+                {showHidden && (
+                  <div className="mt-3 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                    {hidden.map(renderCard)}
+                  </div>
+                )}
+              </div>
+            )}
+          </>
+        );
+      })()}
       {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4">
           <form

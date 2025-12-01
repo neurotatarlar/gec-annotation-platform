@@ -41,8 +41,8 @@ TAXONOMY = [
         "description": "Әдәби татар телендә сүз булган очракта да диалект сүзен куллану",
     },
     {
-        "category_en": "Punctuation",
-        "category_tt": "Пунктуация",
+        "category_en": "Other",
+        "category_tt": "Башка",
         "en_name": "Punctuation",
         "tt_name": "Пунктуация",
         "description": "Өтерләрне, нокталарны, сорау/өндәү билгеләрен, куштырнакларны, дефисларны яки башка тыныш билгеләрен ялгыш куллану",
@@ -111,8 +111,8 @@ TAXONOMY = [
         "description": "Бер сүзне ялгыш аерып язу",
     },
     {
-        "category_en": "Grammar",
-        "category_tt": "Грамматика",
+        "category_en": "Other",
+        "category_tt": "Башка",
         "en_name": "WordOrder",
         "tt_name": "СүзләрТәртибе",
         "description": "Җөмләдә сүзләр тәртибен бозу",
@@ -171,7 +171,7 @@ TAXONOMY = [
 
 COLOR_BY_CATEGORY = {
     "WordError": "#f97316",
-    "Punctuation": "#38bdf8",
+    "Other": "#38bdf8",
     "Grammar": "#a855f7",
     "Fluency": "#22c55e",
 }

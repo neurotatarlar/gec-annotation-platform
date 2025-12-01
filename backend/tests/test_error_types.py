@@ -117,6 +117,47 @@ def test_list_error_types_filters_inactive_and_orders(client):
     assert [et["en_name"] for et in resp_all.json()] == ["A", "B", "Z"]
 
 
+def test_punctuation_and_wordorder_share_other_category(client):
+    with db.SessionLocal() as session:
+        session.add_all(
+            [
+                ErrorType(
+                    en_name="FluencyTest",
+                    category_en="Fluency",
+                    default_color="#111",
+                    is_active=True,
+                ),
+                ErrorType(
+                    en_name="Case",
+                    category_en="Grammar",
+                    default_color="#222",
+                    is_active=True,
+                ),
+                ErrorType(
+                    en_name="Punctuation",
+                    category_en="Other",
+                    default_color="#333",
+                    is_active=True,
+                ),
+                ErrorType(
+                    en_name="WordOrder",
+                    category_en="Other",
+                    default_color="#444",
+                    is_active=True,
+                ),
+            ]
+        )
+        session.commit()
+
+    resp = client.get("/api/error-types/")
+    assert resp.status_code == 200, resp.text
+    categories = [(et["en_name"], et["category_en"]) for et in resp.json()]
+    assert ("Punctuation", "Other") in categories
+    assert ("WordOrder", "Other") in categories
+    # ordered by category then name: Fluency -> Grammar -> Other
+    assert [c for _, c in categories] == sorted([c for _, c in categories])
+
+
 def test_create_error_type_trims_fields_and_persists_hotkey(client):
     payload = {
         "en_name": " Case ",

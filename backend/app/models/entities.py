@@ -30,6 +30,8 @@ class Category(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(128), unique=True)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    is_hidden: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
 
     texts: Mapped[list["TextSample"]] = relationship(back_populates="category")
 

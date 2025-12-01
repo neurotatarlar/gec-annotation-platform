@@ -78,6 +78,8 @@ export interface CategorySummary {
   id: number;
   name: string;
   description?: string | null;
+  is_hidden: boolean;
+  created_at?: string;
   total_texts: number;
   remaining_texts: number;
   in_progress_texts: number;
