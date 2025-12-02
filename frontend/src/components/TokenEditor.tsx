@@ -2298,12 +2298,12 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
             : spaceMarker === "box"
               ? "␣"
               : null;
-      const markerOffset = Math.max(0, tokenFontSize * 0.08);
+      const markerShift = Math.max(0, tokenFontSize * 0.05);
       const markerStyle: React.CSSProperties = {
         fontSize: Math.max(8, tokenFontSize * 0.45),
         color: "rgba(148,163,184,0.6)",
         lineHeight: 1,
-        marginBottom: markerOffset,
+        transform: `translateY(${markerShift}px)`,
         pointerEvents: "none",
         userSelect: "none",
       };
@@ -2524,12 +2524,12 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
                       : spaceMarker === "box"
                         ? "␣"
                         : null;
-                const markerOffset = Math.max(0, tokenFontSize * 0.08);
+                const markerShift = Math.max(0, tokenFontSize * 0.05);
                 const markerStyle: React.CSSProperties = {
                   fontSize: Math.max(8, tokenFontSize * 0.45),
                   color: "rgba(148,163,184,0.6)",
                   lineHeight: 1,
-                  marginBottom: markerOffset,
+                  transform: `translateY(${markerShift}px)`,
                   pointerEvents: "none",
                   userSelect: "none",
                 };
