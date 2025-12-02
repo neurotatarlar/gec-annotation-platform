@@ -2383,7 +2383,7 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
       const typeObj = typeId ? errorTypeById.get(typeId) ?? null : null;
       const badgeText = typeObj ? getErrorTypeLabel(typeObj, locale) : "";
       const badgeWidthEstimate = badgeText.length ? badgeText.length * 8 + 24 : 0;
-      const minWidth = Math.max(24, correctedLen * 8, historyTextLen * 8, badgeWidthEstimate);
+      const isPurePunctGroup = group.tokens.every((t) => t.kind === "punct");
       // Update visible counter for line breaks (count only rendered tokens).
       group.tokens.forEach((tok) => {
         if (tok.kind !== "empty") visibleCount += 1;
@@ -2410,6 +2410,11 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
           ((group.start >= hoveredMarker.fromStart && group.start <= hoveredMarker.fromEnd) ||
             (group.start >= hoveredMarker.toStart && group.start <= hoveredMarker.toEnd)));
 
+      const minWidth =
+        isPurePunctGroup && !hasHistory && !typeObj && !matchingMarker
+          ? Math.max(8, Math.max(historyTextLen * 8, badgeWidthEstimate, tokenFontSize * 0.7 * group.tokens.length))
+          : Math.max(24, correctedLen * 8, historyTextLen * 8, badgeWidthEstimate);
+
       const badgeColor = typeObj?.default_color ?? "#94a3b8";
       const badgeBg = colorWithAlpha(badgeColor, 0.18) ?? "rgba(148,163,184,0.15)";
       const badgeFontSize = Math.max(8, tokenFontSize * 0.6);
@@ -2419,7 +2424,7 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
       const badgeMaxWidth = Math.max(80, tokenFontSize * 10);
       const badgeHeight = badgeFontSize + badgePaddingY * 2;
       const groupPadY = 1;
-      const groupPadX = 1;
+      const groupPadX = isPurePunctGroup ? 0 : 1;
       const paddingTop = badgeHeight ? badgeHeight * 0.5 : 0;
       const innerGap = Math.max(Math.max(0, tokenGap), Math.max(4, tokenFontSize * 0.25));
       const groupSelected =

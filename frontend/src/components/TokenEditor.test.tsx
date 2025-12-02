@@ -205,6 +205,14 @@ describe("tokenEditorReducer core flows", () => {
     expect(Math.abs(inputTop - originalTop)).toBeLessThanOrEqual(4);
   });
 
+  it("keeps punctuation chips tight to their borders", async () => {
+    localStorage.clear();
+    renderEditor("hi ) there");
+    const punct = await screen.findByText(")");
+    const width = punct.getBoundingClientRect().width;
+    expect(width).toBeLessThan(21);
+  });
+
   it("lets user pick space marker glyph (dot/box/none)", async () => {
     localStorage.clear();
     renderEditor("hello world");
