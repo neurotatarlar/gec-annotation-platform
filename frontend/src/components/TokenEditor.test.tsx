@@ -230,6 +230,19 @@ describe("tokenEditorReducer core flows", () => {
     });
   });
 
+  it("keeps space markers on the same vertical baseline", async () => {
+    localStorage.clear();
+    renderEditor("hello world again");
+    const user = userEvent.setup();
+    const select = await screen.findByLabelText(/space marker glyph/i);
+    await user.selectOptions(select, "dot");
+    const markers = await screen.findAllByTestId("space-marker");
+    expect(markers.length).toBeGreaterThanOrEqual(1);
+    const transforms = markers.map((el) => getComputedStyle(el).transform);
+    const first = transforms[0];
+    transforms.forEach((t) => expect(t).toBe(first));
+  });
+
   it("lets user pick space marker glyph (dot/box/none)", async () => {
     localStorage.clear();
     renderEditor("hello world");
