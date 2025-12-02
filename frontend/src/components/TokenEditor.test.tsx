@@ -193,6 +193,18 @@ describe("tokenEditorReducer core flows", () => {
     expect(widthPx).toBeLessThan(120);
   });
 
+  it("keeps the edit pill vertically aligned with the original token", async () => {
+    localStorage.clear();
+    renderEditor("hello world");
+    const user = userEvent.setup();
+    const hello = await screen.findByText("hello");
+    const originalTop = hello.getBoundingClientRect().top;
+    await user.dblClick(hello);
+    const input = await screen.findByRole("textbox");
+    const inputTop = input.getBoundingClientRect().top;
+    expect(Math.abs(inputTop - originalTop)).toBeLessThanOrEqual(4);
+  });
+
   it("lets user pick space marker glyph (dot/box/none)", async () => {
     localStorage.clear();
     renderEditor("hello world");

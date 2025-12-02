@@ -2129,58 +2129,58 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
       // Match the editing pill to the text length with only minimal breathing room.
       const editPxWidth = Math.max(8, measuredPx + tokenFontSize * 0.6);
       const selectedHighlight = chipStyles.selected;
+      const editHeight = Math.max(24, tokenFontSize * 1.2);
       return (
         <div
           key={`edit-${index}`}
           style={{
-            display: "flex",
-            flexDirection: "column",
+            ...style,
+            ...selectedHighlight,
+            display: "inline-flex",
             alignItems: "center",
-            gap: 4,
-            padding: "6px 8px",
+            justifyContent: "center",
+            background: "rgba(59,130,246,0.12)",
+            width: `${editPxWidth}px`,
+            minWidth: `${editPxWidth}px`,
+            maxWidth: `${editPxWidth}px`,
+            height: editHeight,
+            padding: "2px 6px",
             borderRadius: 10,
             border: "1px solid rgba(148,163,184,0.25)",
             flex: "0 0 auto",
+            boxSizing: "border-box",
           }}
         >
-          <div
+          <input
+            ref={editInputRef as React.RefObject<HTMLInputElement>}
             style={{
-              ...style,
-              ...selectedHighlight,
-              background: "rgba(59,130,246,0.12)",
-              width: `${editPxWidth}px`,
-              minWidth: `${editPxWidth}px`,
-              maxWidth: `${editPxWidth}px`,
-              flex: "0 0 auto",
+              width: "100%",
+              background: "transparent",
+              border: "none",
+              outline: "none",
+              color: "#e4f4ec",
+              fontSize: tokenFontSize,
+              lineHeight: 1.05,
+              padding: 0,
+              margin: 0,
             }}
-          >
-            <input
-              ref={editInputRef as React.RefObject<HTMLInputElement>}
-              style={{
-                width: "100%",
-                background: "transparent",
-                border: "none",
-                outline: "none",
-                color: "#e4f4ec",
-              }}
-              value={editText}
-              onChange={(e) => setEditText(e.target.value)}
-              onBlur={commitEdit}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  commitEdit();
-                }
-                if (e.key === "Escape") {
-                  e.preventDefault();
-                  cancelEdit();
-                  setSelection({ start: null, end: null });
-                }
-              }}
-              autoFocus
-              placeholder={t("tokenEditor.editPlaceholder")}
-            />
-          </div>
+            value={editText}
+            onChange={(e) => setEditText(e.target.value)}
+            onBlur={commitEdit}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                commitEdit();
+              }
+              if (e.key === "Escape") {
+                e.preventDefault();
+                cancelEdit();
+                setSelection({ start: null, end: null });
+              }
+            }}
+            autoFocus
+            placeholder={t("tokenEditor.editPlaceholder")}
+          />
         </div>
       );
     }
