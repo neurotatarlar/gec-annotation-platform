@@ -82,7 +82,8 @@
     "settings": "Settings",
     "submit": "Submit",
     "submitting": "Submitting…",
-    "unsaved": "Unsaved changes"
+    "unsaved": "Unsaved changes",
+    "none": "'  '"
   },
   "flags": {
     "created": "Flagged {{date}}",

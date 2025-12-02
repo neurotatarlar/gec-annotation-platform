@@ -180,6 +180,55 @@ describe("tokenEditorReducer core flows", () => {
     expect(firstRect.left - panelRect.left).toBeLessThanOrEqual(1);
     expect(panelRect.right - lastRect.right).toBeLessThanOrEqual(1);
   });
+  it("sizes edit pill close to text length", async () => {
+    localStorage.clear();
+    renderEditor("hello world");
+    const user = userEvent.setup();
+    const hello = await screen.findByText("hello");
+    await user.dblClick(hello);
+    await user.keyboard("{Backspace}a");
+    const inputs = screen.getAllByRole("textbox");
+    expect(inputs.length).toBeGreaterThan(0);
+    const widthPx = inputs[0].getBoundingClientRect().width;
+    expect(widthPx).toBeLessThan(120);
+  });
+
+  it("lets user pick space marker glyph (dot/box/none)", async () => {
+    localStorage.clear();
+    renderEditor("hello world");
+    const user = userEvent.setup();
+    const select = await screen.findByLabelText(/space marker glyph/i);
+    await user.selectOptions(select, "dot");
+    expect((select as HTMLSelectElement).value).toBe("dot");
+    await waitFor(() => {
+      const markersDot = screen.getAllByTestId("space-marker");
+      expect(markersDot.some((el) => el.textContent === "·")).toBe(true);
+    });
+    await user.selectOptions(select, "none");
+    await waitFor(() => {
+      expect(screen.queryAllByTestId("space-marker").length).toBe(0);
+    });
+  });
+
+  it("shows inline space marker on selected token when enabled", async () => {
+    localStorage.clear();
+    renderEditor("hello world");
+    const user = userEvent.setup();
+    const select = await screen.findByLabelText(/space marker glyph/i);
+    await user.selectOptions(select, "dot");
+    const hello = await screen.findByText("hello");
+    const world = await screen.findByText("world");
+    await user.click(hello);
+    await user.click(world, { ctrlKey: true });
+    await waitFor(() => {
+      const markers = screen.getAllByTestId("space-marker");
+      expect(markers.some((el) => el.textContent === "·")).toBe(true);
+    });
+    await user.selectOptions(select, "none");
+    await waitFor(() => {
+      expect(screen.queryAllByTestId("space-marker").length).toBe(0);
+    });
+  });
 
   it("buildHotkeyMap keeps active hotkeys, supports modifiers, and normalizes order plus code variants", () => {
     const errorTypes: any[] = [

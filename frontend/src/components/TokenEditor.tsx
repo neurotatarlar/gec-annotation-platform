@@ -850,8 +850,15 @@ const chipBase: React.CSSProperties = {
 };
 
 const chipStyles: Record<string, React.CSSProperties> = {
-  word: { ...chipBase, color: "#e2e8f0", padding: "0px 2px" },
-  punct: { ...chipBase, color: "#e2e8f0", padding: "0px 2px", gap: 0 },
+  word: { ...chipBase, color: "#e2e8f0", padding: "0px" },
+  punct: {
+    ...chipBase,
+    color: "#e2e8f0",
+    padding: 0,
+    gap: 0,
+    margin: 0,
+    justifyContent: "center",
+  },
   special: { ...chipBase, color: "#cbd5e1", borderBottom: "1px dotted rgba(148,163,184,0.8)" },
   empty: { ...chipBase, color: "#cbd5e1" },
   previous: { ...chipBase, color: "#ef4444", fontSize: 12 },
@@ -1276,6 +1283,9 @@ type SelectionRange = { start: number | null; end: number | null };
 export type SaveStatus = { state: "idle" | "saving" | "saved" | "error"; unsaved: boolean };
 
 const PREFS_KEY = "tokenEditorPrefs";
+const DEFAULT_TOKEN_GAP = 2;
+const DEFAULT_TOKEN_FONT_SIZE = 24;
+type SpaceMarker = "dot" | "box" | "none";
 
 type CorrectionCardLite = {
   id: string;
@@ -1284,10 +1294,15 @@ type CorrectionCardLite = {
   markerId: string | null;
 };
 
+const normalizeSpaceMarker = (value: unknown): SpaceMarker => {
+  return value === "dot" || value === "box" || value === "none" ? value : "box";
+};
+
 const loadPrefs = (): {
   sidebarOpen?: boolean;
   tokenGap?: number;
   tokenFontSize?: number;
+  spaceMarker?: SpaceMarker;
   lastDecision?: "skip" | "trash" | "submit" | null;
   lastTextId?: number;
   viewTab?: "original" | "corrected" | "m2";
@@ -1297,7 +1312,13 @@ const loadPrefs = (): {
   try {
     const raw = localStorage.getItem(PREFS_KEY);
     if (!raw) return {};
-    return JSON.parse(raw);
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object") {
+      if (parsed.spaceMarker) {
+        parsed.spaceMarker = normalizeSpaceMarker(parsed.spaceMarker);
+      }
+    }
+    return parsed;
   } catch {
     return {};
   }
@@ -1381,8 +1402,9 @@ export const TokenEditor: React.FC<{
   const [editingRange, setEditingRange] = useState<SelectionRange | null>(null);
   const [editText, setEditText] = useState("");
   const prefs = useMemo(() => loadPrefs(), []);
-const [tokenGap, setTokenGap] = useState(Math.max(0, prefs.tokenGap ?? 2));
-const [tokenFontSize, setTokenFontSize] = useState(prefs.tokenFontSize ?? 16);
+  const [tokenGap, setTokenGap] = useState(Math.max(0, prefs.tokenGap ?? DEFAULT_TOKEN_GAP));
+  const [tokenFontSize, setTokenFontSize] = useState(prefs.tokenFontSize ?? DEFAULT_TOKEN_FONT_SIZE);
+  const [spaceMarker, setSpaceMarker] = useState<SpaceMarker>(normalizeSpaceMarker(prefs.spaceMarker));
   const editInputRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
   const [dropTargetIndex, setDropTargetIndex] = useState<number | null>(null); // insertion position 0..tokens.length
   const tokenRefs = useRef<Record<string, HTMLDivElement | null>>({});
@@ -2163,6 +2185,14 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
       );
     }
     const dropHighlight = dropTargetIndex !== null && dropTargetIndex === index && !editingRange;
+    const inlineSpaceMarker =
+      spaceMarker !== "none" && token.spaceBefore !== false
+        ? spaceMarker === "dot"
+          ? "·"
+          : spaceMarker === "box"
+            ? "␣"
+            : null
+        : null;
     const caretHint = dropHighlight
       ? {
           position: "absolute" as const,
@@ -2225,6 +2255,25 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
         }}
         aria-pressed={isSelected}
       >
+        {inlineSpaceMarker && selectedSet.has(index) && selectedSet.has(index - 1) && (
+          <span
+            aria-hidden="true"
+            data-testid="space-marker"
+            style={{
+              position: "absolute",
+              left: -Math.max(4, tokenFontSize * 0.2),
+              bottom: 2,
+              fontSize: Math.max(8, tokenFontSize * 0.45),
+              color: "rgba(148,163,184,0.6)",
+              lineHeight: 1,
+              transform: "translateY(2px)",
+              pointerEvents: "none",
+              userSelect: "none",
+            }}
+          >
+            {inlineSpaceMarker}
+          </span>
+        )}
         <span>{displayText}</span>
         {caretHint && <span style={caretHint} />}
       </div>
@@ -2266,15 +2315,24 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
       const hasSpace = nextTok?.spaceBefore !== false;
       const isPunctAdjacent = nextTok?.kind === "punct";
       const isEdge = idx === 0 || idx >= tokens.length;
-      const gapWidth = isEdge ? 0 : hasSpace ? base : Math.max(0, Math.floor(base * (isPunctAdjacent ? 0.2 : 0.25)));
+      const baseWidth = isEdge ? 0 : hasSpace ? base : Math.max(0, Math.floor(base * (isPunctAdjacent ? 0.2 : 0.25)));
+      const gapWidth = hasSpace && !isEdge ? Math.max(baseWidth, Math.max(4, tokenFontSize * 0.25)) : baseWidth;
+      const markerChar: string | null =
+        !hasSpace || isEdge
+          ? null
+          : spaceMarker === "dot"
+            ? "·"
+            : spaceMarker === "box"
+              ? "␣"
+              : null;
       return (
         <div
           key={`gap-${idx}`}
           style={{
             width: gapWidth,
-            height: 28,
+            height: Math.max(28, tokenFontSize * 1.2),
             display: "flex",
-            alignItems: "center",
+            alignItems: "flex-end",
             justifyContent: "center",
           }}
           onDragOver={(e) => {
@@ -2285,7 +2343,25 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
             e.preventDefault();
             handleDrop(idx);
           }}
-        />
+        >
+          {markerChar && (
+            <span
+              aria-hidden="true"
+              data-testid="space-marker"
+              style={{
+                fontSize: Math.max(8, tokenFontSize * 0.45),
+                color: "rgba(148,163,184,0.6)",
+                lineHeight: 1,
+                marginBottom: Math.max(0, tokenFontSize * 0.02),
+                transform: "translateY(2px)",
+                pointerEvents: "none",
+                userSelect: "none",
+              }}
+            >
+              {markerChar}
+            </span>
+          )}
+        </div>
       );
     };
 
@@ -2345,6 +2421,7 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
       const groupPadY = 1;
       const groupPadX = 1;
       const paddingTop = badgeHeight ? badgeHeight * 0.5 : 0;
+      const innerGap = Math.max(Math.max(0, tokenGap), Math.max(4, tokenFontSize * 0.25));
       const groupSelected =
         selection.start !== null &&
         selection.end !== null &&
@@ -2357,7 +2434,7 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
             display: "flex",
             flexDirection: "column",
             alignItems: "center",
-            gap: Math.max(2, tokenGap || 2),
+            gap: innerGap,
             padding: `${paddingTop}px ${groupPadX}px ${groupPadY}px ${groupPadX}px`,
             borderRadius: 14,
             border: showBorder || groupSelected ? "1px solid rgba(148,163,184,0.35)" : "1px solid transparent",
@@ -2409,7 +2486,7 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
           <div
             style={{
               display: "flex",
-              gap: Math.max(2, tokenGap || 2),
+              gap: innerGap,
               flexWrap: "wrap",
               justifyContent: "flex-start",
               alignItems: "center",
@@ -2663,6 +2740,7 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
         sidebarOpen: isSidebarOpen,
         tokenGap,
         tokenFontSize,
+        spaceMarker,
         lastDecision,
         lastTextId: textId,
         viewTab,
@@ -2670,7 +2748,7 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
         debugOpen: isDebugOpen,
       }),
     );
-  }, [isSidebarOpen, tokenGap, tokenFontSize, lastDecision, textId, viewTab, isTextPanelOpen, isDebugOpen]);
+  }, [isSidebarOpen, tokenGap, tokenFontSize, spaceMarker, lastDecision, textId, viewTab, isTextPanelOpen, isDebugOpen]);
 
   const handleSubmit = async () => {
     const unassigned = correctionCards.filter((card) => !correctionTypeMap[card.id]);
@@ -3020,8 +3098,8 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
             <button
               style={miniNeutralButton}
               onClick={() => {
-                setTokenGap(0);
-                setTokenFontSize(16);
+                setTokenGap(DEFAULT_TOKEN_GAP);
+                setTokenFontSize(DEFAULT_TOKEN_FONT_SIZE);
               }}
               title="Reset spacing and size"
               aria-label="Reset spacing and size"
@@ -3046,7 +3124,7 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
             <button
               style={miniNeutralButton}
               onClick={() => {
-                setTokenFontSize(16);
+                setTokenFontSize(DEFAULT_TOKEN_FONT_SIZE);
               }}
               title="Reset size"
               aria-label="Reset size"
@@ -3060,6 +3138,25 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
             >
               +
             </button>
+            <span style={{ color: "#94a3b8", fontSize: 12, marginLeft: 10 }}>Space mark</span>
+            <select
+              aria-label="Space marker glyph"
+              value={spaceMarker}
+              onChange={(e) => setSpaceMarker(e.target.value as SpaceMarker)}
+              style={{
+                background: "rgba(30,41,59,0.85)",
+                color: "#e2e8f0",
+                border: "1px solid rgba(148,163,184,0.4)",
+                borderRadius: 8,
+                padding: "4px 8px",
+                fontSize: 12,
+                outline: "none",
+              }}
+            >
+              <option value="dot">·</option>
+              <option value="box">␣</option>
+              <option value="none">{t("common.none") ?? "None"}</option>
+            </select>
           </div>
           <div style={actionGroupStyle}>
             <button
