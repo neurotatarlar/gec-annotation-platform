@@ -213,6 +213,23 @@ describe("tokenEditorReducer core flows", () => {
     expect(width).toBeLessThan(21);
   });
 
+  it("renders space markers between tokens inside and outside edited groups", async () => {
+    localStorage.clear();
+    renderEditor("hello world");
+    const user = userEvent.setup();
+    const select = await screen.findByLabelText(/space marker glyph/i);
+    await user.selectOptions(select, "dot");
+    const hello = await screen.findByText("hello");
+    await user.dblClick(hello);
+    await user.keyboard("{Backspace}hello there");
+    await user.keyboard("{Enter}");
+    await waitFor(() => {
+      const markers = screen.getAllByTestId("space-marker");
+      expect(markers.length).toBeGreaterThanOrEqual(1);
+      expect(markers.some((el) => el.textContent === "·")).toBe(true);
+    });
+  });
+
   it("lets user pick space marker glyph (dot/box/none)", async () => {
     localStorage.clear();
     renderEditor("hello world");

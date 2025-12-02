@@ -2185,14 +2185,6 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
       );
     }
     const dropHighlight = dropTargetIndex !== null && dropTargetIndex === index && !editingRange;
-    const inlineSpaceMarker =
-      spaceMarker !== "none" && token.spaceBefore !== false
-        ? spaceMarker === "dot"
-          ? "·"
-          : spaceMarker === "box"
-            ? "␣"
-            : null
-        : null;
     const caretHint = dropHighlight
       ? {
           position: "absolute" as const,
@@ -2255,25 +2247,6 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
         }}
         aria-pressed={isSelected}
       >
-        {inlineSpaceMarker && selectedSet.has(index) && selectedSet.has(index - 1) && (
-          <span
-            aria-hidden="true"
-            data-testid="space-marker"
-            style={{
-              position: "absolute",
-              left: -Math.max(4, tokenFontSize * 0.2),
-              bottom: 2,
-              fontSize: Math.max(8, tokenFontSize * 0.45),
-              color: "rgba(148,163,184,0.6)",
-              lineHeight: 1,
-              transform: "translateY(2px)",
-              pointerEvents: "none",
-              userSelect: "none",
-            }}
-          >
-            {inlineSpaceMarker}
-          </span>
-        )}
         <span>{displayText}</span>
         {caretHint && <span style={caretHint} />}
       </div>
@@ -2491,7 +2464,7 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
           <div
             style={{
               display: "flex",
-              gap: innerGap,
+              gap: 0,
               flexWrap: "wrap",
               justifyContent: "flex-start",
               alignItems: "center",
@@ -2535,9 +2508,56 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
                 ↺
               </button>
             )}
-            {group.tokens.map((tok, i) =>
-              renderToken(tok, group.start + i, hasHistory || destSet.has(group.start + i))
-            )}
+            {group.tokens.map((tok, i) => {
+              const nodes: React.ReactNode[] = [];
+              if (i > 0) {
+                const isPunctAdjacent = tok.kind === "punct";
+                const hasSpace = tok.spaceBefore !== false;
+                const baseWidth = hasSpace ? innerGap : Math.max(0, Math.floor(innerGap * (isPunctAdjacent ? 0.2 : 0.25)));
+                const gapWidth = hasSpace ? Math.max(baseWidth, Math.max(4, tokenFontSize * 0.25)) : baseWidth;
+                const markerChar: string | null =
+                  !hasSpace
+                    ? null
+                    : spaceMarker === "dot"
+                      ? "·"
+                      : spaceMarker === "box"
+                        ? "␣"
+                        : null;
+                nodes.push(
+                  <div
+                    key={`inner-gap-${group.start + i}`}
+                    style={{
+                      width: gapWidth,
+                      height: Math.max(28, tokenFontSize * 1.2),
+                      display: "flex",
+                      alignItems: "flex-end",
+                      justifyContent: "center",
+                      flex: "0 0 auto",
+                    }}
+                  >
+                    {markerChar && (
+                      <span
+                        aria-hidden="true"
+                        data-testid="space-marker"
+                        style={{
+                          fontSize: Math.max(8, tokenFontSize * 0.45),
+                          color: "rgba(148,163,184,0.6)",
+                          lineHeight: 1,
+                          marginBottom: Math.max(0, tokenFontSize * 0.02),
+                          transform: "translateY(2px)",
+                          pointerEvents: "none",
+                          userSelect: "none",
+                        }}
+                      >
+                        {markerChar}
+                      </span>
+                    )}
+                  </div>
+                );
+              }
+              nodes.push(renderToken(tok, group.start + i, hasHistory || destSet.has(group.start + i)));
+              return nodes;
+            })}
           </div>
           {historyTokens.length > 0 && (
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "center", textAlign: "center" }}>
