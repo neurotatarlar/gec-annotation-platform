@@ -1305,9 +1305,8 @@ const loadPrefs = (): {
   spaceMarker?: SpaceMarker;
   lastDecision?: "skip" | "trash" | "submit" | null;
   lastTextId?: number;
-  viewTab?: "original" | "corrected" | "m2";
+  viewTab?: "original" | "corrected" | "m2" | "debug";
   textPanelOpen?: boolean;
-  debugOpen?: boolean;
 } => {
   try {
     const raw = localStorage.getItem(PREFS_KEY);
@@ -1434,17 +1433,16 @@ const [isSubmitting, setIsSubmitting] = useState(false);
   const [isAutosaving, setIsAutosaving] = useState(false);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
 const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
-const initialViewTab = useMemo<"original" | "corrected" | "m2">(() => {
-  if (prefs.viewTab === "original" || prefs.viewTab === "corrected" || prefs.viewTab === "m2") {
+const initialViewTab = useMemo<"original" | "corrected" | "m2" | "debug">(() => {
+  if (prefs.viewTab === "original" || prefs.viewTab === "corrected" || prefs.viewTab === "m2" || prefs.viewTab === "debug") {
     return prefs.viewTab;
   }
   return "corrected";
 }, [prefs.viewTab]);
-const [viewTab, setViewTab] = useState<"original" | "corrected" | "m2">(initialViewTab);
+const [viewTab, setViewTab] = useState<"original" | "corrected" | "m2" | "debug">(initialViewTab);
 const [isTextPanelOpen, setIsTextPanelOpen] = useState<boolean>(prefs.textPanelOpen ?? true);
 const [lineBreaks, setLineBreaks] = useState<number[]>([]);
 const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
-const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
   const autosaveInitializedRef = useRef(false);
   const lastSavedSignatureRef = useRef<string | null>(null);
   const [lastDecision, setLastDecision] = useState<"skip" | "trash" | "submit" | null>(
@@ -2772,10 +2770,9 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
         lastTextId: textId,
         viewTab,
         textPanelOpen: isTextPanelOpen,
-        debugOpen: isDebugOpen,
       }),
     );
-  }, [isSidebarOpen, tokenGap, tokenFontSize, spaceMarker, lastDecision, textId, viewTab, isTextPanelOpen, isDebugOpen]);
+  }, [isSidebarOpen, tokenGap, tokenFontSize, spaceMarker, lastDecision, textId, viewTab, isTextPanelOpen]);
 
   const handleSubmit = async () => {
     const unassigned = correctionCards.filter((card) => !correctionTypeMap[card.id]);
@@ -3008,7 +3005,6 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
       textId,
       viewTab,
       isTextPanelOpen,
-      isDebugOpen,
       tokenGap,
       tokenFontSize,
       lineBreaks,
@@ -3036,7 +3032,6 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
       textId,
       viewTab,
       isTextPanelOpen,
-      isDebugOpen,
       tokenGap,
       tokenFontSize,
       lineBreaks,
@@ -3312,6 +3307,24 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
               >
                 {t("tokenEditor.m2") ?? "M2"}
               </button>
+              <button
+                style={{
+                  ...miniNeutralButton,
+                  background: viewTab === "debug" ? "rgba(59,130,246,0.3)" : miniNeutralButton.background,
+                  borderColor: viewTab === "debug" ? "rgba(59,130,246,0.6)" : miniNeutralButton.border,
+                }}
+                onClick={() => {
+                  if (viewTab === "debug") {
+                    setIsTextPanelOpen((v) => !v);
+                  } else {
+                    setViewTab("debug");
+                    setIsTextPanelOpen(true);
+                  }
+                }}
+                aria-pressed={viewTab === "debug"}
+              >
+                {t("tokenEditor.debugPanel") ?? "Debug"}
+              </button>
             </div>
             <button
               style={miniNeutralButton}
@@ -3337,6 +3350,36 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
                 >
                   {m2Preview}
                 </pre>
+              ) : viewTab === "debug" ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                    <button
+                      style={miniNeutralButton}
+                      onClick={() => navigator.clipboard?.writeText(debugText)}
+                      title={t("common.copy") ?? "Copy"}
+                    >
+                      ⧉
+                    </button>
+                  </div>
+                  <pre
+                    style={{
+                      margin: 0,
+                      color: "#e2e8f0",
+                      fontSize: 12,
+                      wordBreak: "break-word",
+                      whiteSpace: "pre-wrap",
+                      fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+                      maxHeight: 360,
+                      overflow: "auto",
+                      padding: 8,
+                      background: "rgba(15,23,42,0.7)",
+                      borderRadius: 8,
+                      border: "1px solid rgba(148,163,184,0.3)",
+                    }}
+                  >
+                    {debugText}
+                  </pre>
+                </div>
               ) : (
                 <span
                   style={{
@@ -3481,61 +3524,6 @@ const [isDebugOpen, setIsDebugOpen] = useState(prefs.debugOpen ?? false);
               ))}
             </div>
           </div>
-        </div>
-
-        <div
-          style={{
-            background: "rgba(15,23,42,0.6)",
-            border: "1px solid rgba(148,163,184,0.4)",
-            borderRadius: 10,
-            overflow: "hidden",
-            marginTop: 12,
-          }}
-        >
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-              padding: "10px 12px",
-              borderBottom: "1px solid rgba(148,163,184,0.25)",
-            }}
-          >
-            <span style={{ color: "#94a3b8", fontSize: 12 }}>{t("tokenEditor.debugPanel") ?? "Debug"}</span>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button
-                style={miniNeutralButton}
-                onClick={() => navigator.clipboard?.writeText(debugText)}
-                title={t("common.copy") ?? "Copy"}
-              >
-                ⧉
-              </button>
-              <button
-                style={miniNeutralButton}
-                onClick={() => setIsDebugOpen((v) => !v)}
-                aria-expanded={isDebugOpen}
-              >
-                {isDebugOpen ? "−" : "+"}
-              </button>
-            </div>
-          </div>
-          {isDebugOpen && (
-            <pre
-              style={{
-                margin: 0,
-                padding: "12px",
-                maxHeight: 320,
-                overflow: "auto",
-                color: "#e2e8f0",
-                fontSize: 12,
-                whiteSpace: "pre-wrap",
-                wordBreak: "break-all",
-                fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-              }}
-            >
-              {debugText}
-            </pre>
-          )}
         </div>
 
         </div>
