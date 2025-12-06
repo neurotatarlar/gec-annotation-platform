@@ -30,28 +30,28 @@ export const AppHeader = () => {
     enabled: Boolean(token)
   });
 
-  const statusIcon =
-    status?.state === "saving" ? "⏳" : status?.state === "saved" ? "✔" : status?.state === "error" ? "⚠" : status?.unsaved ? "●" : null;
-  const statusColor =
-    status?.state === "saving"
-      ? "text-amber-300"
-      : status?.state === "saved"
-        ? "text-emerald-300"
-        : status?.state === "error"
-          ? "text-rose-300"
-          : status?.unsaved
-            ? "text-amber-400"
-            : "text-slate-500";
-  const statusTitle =
-    status?.state === "saved"
-      ? t("common.saved")
-      : status?.state === "saving"
-        ? t("common.saving")
-        : status?.state === "error"
-          ? t("common.error")
-          : status?.unsaved
-            ? t("common.unsaved")
-            : null;
+  const isSaving = status?.state === "saving";
+  const isError = status?.state === "error";
+  const isUnsaved = status?.unsaved && !isSaving && !isError;
+  const isSaved = status && !isSaving && !isError && !status.unsaved;
+
+  const statusIcon = isSaving ? "⏳" : isError ? "⚠" : isUnsaved ? "●" : isSaved ? "✔" : null;
+  const statusColor = isSaving
+    ? "text-amber-300"
+    : isError
+      ? "text-rose-300"
+      : isUnsaved
+        ? "text-amber-400"
+        : "text-emerald-300";
+  const statusTitle = isSaving
+    ? t("common.saving")
+    : isError
+      ? t("common.error")
+      : isUnsaved
+        ? t("common.unsaved")
+        : isSaved
+          ? t("common.saved")
+          : null;
   const showStatus = location.pathname.startsWith("/annotate") && Boolean(status);
 
   return (
