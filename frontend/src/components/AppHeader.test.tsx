@@ -52,6 +52,14 @@ describe("AppHeader save status indicator", () => {
     expect(status).toHaveTextContent("⏳");
   });
 
+  it("renders unsaved dot when there are pending changes", async () => {
+    renderHeader("/annotate/1", { state: "idle", unsaved: true });
+    await screen.findByText("Alice");
+    const status = await screen.findByTitle("common.unsaved");
+    expect(status).toBeInTheDocument();
+    expect(status).toHaveTextContent("●");
+  });
+
   it("hides status on non-annotation pages", async () => {
     renderHeader("/history", { state: "saving", unsaved: true });
     await screen.findByText("Alice");

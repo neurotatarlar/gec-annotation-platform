@@ -217,7 +217,7 @@ describe("tokenEditorReducer core flows", () => {
     localStorage.clear();
     await renderEditor("hello world");
     const user = userEvent.setup();
-    const select = await screen.findByLabelText(/space marker glyph/i);
+    const select = await screen.findByLabelText(/tokeneditor\.spaceMark/i);
     await user.selectOptions(select, "dot");
     const hello = await screen.findByText("hello");
     await user.dblClick(hello);
@@ -234,7 +234,7 @@ describe("tokenEditorReducer core flows", () => {
     localStorage.clear();
     await renderEditor("hello world again");
     const user = userEvent.setup();
-    const select = await screen.findByLabelText(/space marker glyph/i);
+    const select = await screen.findByLabelText(/tokeneditor\.spaceMark/i);
     await user.selectOptions(select, "dot");
     const markers = await screen.findAllByTestId("space-marker");
     expect(markers.length).toBeGreaterThanOrEqual(1);
@@ -247,7 +247,7 @@ describe("tokenEditorReducer core flows", () => {
     localStorage.clear();
     await renderEditor("hello world");
     const user = userEvent.setup();
-    const select = await screen.findByLabelText(/space marker glyph/i);
+    const select = await screen.findByLabelText(/tokeneditor\.spaceMark/i);
     await user.selectOptions(select, "dot");
     expect((select as HTMLSelectElement).value).toBe("dot");
     await waitFor(() => {
@@ -264,7 +264,7 @@ describe("tokenEditorReducer core flows", () => {
     localStorage.clear();
     await renderEditor("hello world");
     const user = userEvent.setup();
-    const select = await screen.findByLabelText(/space marker glyph/i);
+    const select = await screen.findByLabelText(/tokeneditor\.spaceMark/i);
     await user.selectOptions(select, "dot");
     const hello = await screen.findByText("hello");
     const world = await screen.findByText("world");

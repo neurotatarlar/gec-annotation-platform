@@ -3261,8 +3261,9 @@ const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
               <button
                 style={{
                   ...miniNeutralButton,
-                  background: viewTab === "original" ? "rgba(59,130,246,0.3)" : miniNeutralButton.background,
-                  borderColor: viewTab === "original" ? "rgba(59,130,246,0.6)" : miniNeutralButton.border,
+                  background:
+                    isTextPanelOpen && viewTab === "original" ? "rgba(59,130,246,0.3)" : miniNeutralButton.background,
+                  borderColor: isTextPanelOpen && viewTab === "original" ? "rgba(59,130,246,0.6)" : "rgba(148,163,184,0.6)",
                 }}
                 onClick={() => {
                   if (viewTab === "original") {
@@ -3272,15 +3273,16 @@ const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
                     setIsTextPanelOpen(true);
                   }
                 }}
-                aria-pressed={viewTab === "original"}
+                aria-pressed={isTextPanelOpen && viewTab === "original"}
               >
                 {t("tokenEditor.original") ?? "Original"}
               </button>
               <button
                 style={{
                   ...miniNeutralButton,
-                  background: viewTab === "corrected" ? "rgba(59,130,246,0.3)" : miniNeutralButton.background,
-                  borderColor: viewTab === "corrected" ? "rgba(59,130,246,0.6)" : miniNeutralButton.border,
+                  background:
+                    isTextPanelOpen && viewTab === "corrected" ? "rgba(59,130,246,0.3)" : miniNeutralButton.background,
+                  borderColor: isTextPanelOpen && viewTab === "corrected" ? "rgba(59,130,246,0.6)" : "rgba(148,163,184,0.6)",
                 }}
                 onClick={() => {
                   if (viewTab === "corrected") {
@@ -3290,15 +3292,15 @@ const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
                     setIsTextPanelOpen(true);
                   }
                 }}
-                aria-pressed={viewTab === "corrected"}
+                aria-pressed={isTextPanelOpen && viewTab === "corrected"}
               >
                 {t("tokenEditor.corrected") ?? "Corrected"}
               </button>
               <button
                 style={{
                   ...miniNeutralButton,
-                  background: viewTab === "m2" ? "rgba(59,130,246,0.3)" : miniNeutralButton.background,
-                  borderColor: viewTab === "m2" ? "rgba(59,130,246,0.6)" : miniNeutralButton.border,
+                  background: isTextPanelOpen && viewTab === "m2" ? "rgba(59,130,246,0.3)" : miniNeutralButton.background,
+                  borderColor: isTextPanelOpen && viewTab === "m2" ? "rgba(59,130,246,0.6)" : "rgba(148,163,184,0.6)",
                 }}
                 onClick={() => {
                   if (viewTab === "m2") {
@@ -3308,15 +3310,16 @@ const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
                     setIsTextPanelOpen(true);
                   }
                 }}
-                aria-pressed={viewTab === "m2"}
+                aria-pressed={isTextPanelOpen && viewTab === "m2"}
               >
                 {t("tokenEditor.m2") ?? "M2"}
               </button>
               <button
                 style={{
                   ...miniNeutralButton,
-                  background: viewTab === "debug" ? "rgba(59,130,246,0.3)" : miniNeutralButton.background,
-                  borderColor: viewTab === "debug" ? "rgba(59,130,246,0.6)" : miniNeutralButton.border,
+                  background:
+                    isTextPanelOpen && viewTab === "debug" ? "rgba(59,130,246,0.3)" : miniNeutralButton.background,
+                  borderColor: isTextPanelOpen && viewTab === "debug" ? "rgba(59,130,246,0.6)" : "rgba(148,163,184,0.6)",
                 }}
                 onClick={() => {
                   if (viewTab === "debug") {
@@ -3326,7 +3329,7 @@ const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
                     setIsTextPanelOpen(true);
                   }
                 }}
-                aria-pressed={viewTab === "debug"}
+                aria-pressed={isTextPanelOpen && viewTab === "debug"}
               >
                 {t("tokenEditor.debugPanel") ?? "Debug"}
               </button>
@@ -3790,7 +3793,7 @@ const tokenRowStyleBase: React.CSSProperties = {
   display: "flex",
   flexWrap: "wrap",
   background: "rgba(15,23,42,0.6)",
-  padding: 2,
+  padding: "8px 12px",
   borderRadius: 12,
   border: "1px solid rgba(51,65,85,0.6)",
   position: "relative",
