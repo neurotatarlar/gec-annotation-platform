@@ -3757,7 +3757,7 @@ const pageStyle: React.CSSProperties = {
 const twoColumnLayoutStyle: React.CSSProperties = {
   display: "flex",
   alignItems: "flex-start",
-  gap: 4,
+  gap: 8,
   flexWrap: "wrap",
 };
 
@@ -3772,11 +3772,11 @@ const mainColumnStyle: React.CSSProperties = {
 const workspaceStyle: React.CSSProperties = {
   background: "rgba(15,23,42,0.9)",
   borderRadius: 14,
-  padding: 4,
+  padding: 8,
   border: "1px solid rgba(51,65,85,0.7)",
   display: "flex",
   flexDirection: "column",
-  gap: 2,
+  gap: 6,
   position: "relative",
 };
 
@@ -3799,21 +3799,21 @@ const tokenRowStyleBase: React.CSSProperties = {
 const actionBarStyle: React.CSSProperties = {
   display: "flex",
   flexDirection: "column",
-  gap: 6,
-  padding: "4px 0",
+  gap: 8,
+  padding: "6px 0",
 };
 
 const toolbarRowStyle: React.CSSProperties = {
   display: "flex",
   flexWrap: "wrap",
   alignItems: "center",
-  gap: 8,
+  gap: 10,
 };
 
 const actionGroupStyle: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
-  gap: 8,
+  gap: 10,
   flexWrap: "wrap",
   marginLeft: "auto",
 };
@@ -3821,7 +3821,7 @@ const actionGroupStyle: React.CSSProperties = {
 const spacingRowStyle: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
-  gap: 6,
+  gap: 8,
   flexWrap: "wrap",
 };
 
