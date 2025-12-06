@@ -3757,14 +3757,14 @@ const pageStyle: React.CSSProperties = {
 const twoColumnLayoutStyle: React.CSSProperties = {
   display: "flex",
   alignItems: "flex-start",
-  gap: 1,
+  gap: 4,
   flexWrap: "wrap",
 };
 
 const mainColumnStyle: React.CSSProperties = {
   display: "flex",
   flexDirection: "column",
-  gap: 1,
+  gap: 3,
   flex: 1,
   minWidth: 0,
 };
@@ -3772,11 +3772,11 @@ const mainColumnStyle: React.CSSProperties = {
 const workspaceStyle: React.CSSProperties = {
   background: "rgba(15,23,42,0.9)",
   borderRadius: 14,
-  padding: 2,
+  padding: 4,
   border: "1px solid rgba(51,65,85,0.7)",
   display: "flex",
   flexDirection: "column",
-  gap: 1,
+  gap: 2,
   position: "relative",
 };
 
@@ -3799,8 +3799,8 @@ const tokenRowStyleBase: React.CSSProperties = {
 const actionBarStyle: React.CSSProperties = {
   display: "flex",
   flexDirection: "column",
-  gap: 8,
-  padding: "8px 0",
+  gap: 6,
+  padding: "4px 0",
 };
 
 const toolbarRowStyle: React.CSSProperties = {
@@ -3826,8 +3826,8 @@ const spacingRowStyle: React.CSSProperties = {
 };
 
 const actionFeedbackStyle: React.CSSProperties = {
-  minHeight: 18,
-  marginTop: 6,
+  minHeight: 2,
+  marginTop: 2,
   fontSize: 12,
 };
 
