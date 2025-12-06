@@ -3055,186 +3055,191 @@ const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
           {/* Token workspace */}
           <div style={workspaceStyle}>
             <div style={actionBarStyle}>
-              {toolbarButton(t("tokenEditor.undo"), () => dispatch({ type: "UNDO" }), history.past.length === 0, "Ctrl+Z", "↺")}
-              {toolbarButton(t("tokenEditor.redo"), () => dispatch({ type: "REDO" }), history.future.length === 0, "Ctrl+Y", "↻")}
-              {toolbarButton(t("tokenEditor.delete"), () => {
-                if (!hasSelectionTokens) return;
-                const [s, e] = [selection.start!, selection.end!];
-                dispatch({ type: "DELETE_SELECTED_TOKENS", range: [Math.min(s, e), Math.max(s, e)] });
-                setSelection({ start: null, end: null });
-              }, !hasSelectionTokens, "Del", "🗑️")}
-              {toolbarButton(t("tokenEditor.insertBefore"), () => {
-                if (!hasSelectionTokens) return;
-                const [s, e] = [selection.start!, selection.end!];
-                const start = Math.min(s, e);
-                dispatch({ type: "INSERT_TOKEN_BEFORE_SELECTED", range: [start, Math.max(s, e)] });
-                // Immediately enter edit mode on the newly inserted token.
-                setSelection({ start, end: start });
-                setEditingRange({ start, end: start });
-                setEditText("");
-                setActiveErrorTypeId((prev) => prev); // preserve current active error type for hotkeys
-                setTimeout(() => {
-                  if (editInputRef.current) {
-                    editInputRef.current.focus();
-                    if (typeof editInputRef.current.setSelectionRange === "function") {
-                      editInputRef.current.setSelectionRange(0, 0);
+              <div style={toolbarRowStyle}>
+                {toolbarButton(t("tokenEditor.undo"), () => dispatch({ type: "UNDO" }), history.past.length === 0, "Ctrl+Z", "↺")}
+                {toolbarButton(t("tokenEditor.redo"), () => dispatch({ type: "REDO" }), history.future.length === 0, "Ctrl+Y", "↻")}
+                {toolbarButton(t("tokenEditor.delete"), () => {
+                  if (!hasSelectionTokens) return;
+                  const [s, e] = [selection.start!, selection.end!];
+                  dispatch({ type: "DELETE_SELECTED_TOKENS", range: [Math.min(s, e), Math.max(s, e)] });
+                  setSelection({ start: null, end: null });
+                }, !hasSelectionTokens, "Del", "🗑️")}
+                {toolbarButton(t("tokenEditor.insertBefore"), () => {
+                  if (!hasSelectionTokens) return;
+                  const [s, e] = [selection.start!, selection.end!];
+                  const start = Math.min(s, e);
+                  dispatch({ type: "INSERT_TOKEN_BEFORE_SELECTED", range: [start, Math.max(s, e)] });
+                  // Immediately enter edit mode on the newly inserted token.
+                  setSelection({ start, end: start });
+                  setEditingRange({ start, end: start });
+                  setEditText("");
+                  setActiveErrorTypeId((prev) => prev); // preserve current active error type for hotkeys
+                  setTimeout(() => {
+                    if (editInputRef.current) {
+                      editInputRef.current.focus();
+                      if (typeof editInputRef.current.setSelectionRange === "function") {
+                        editInputRef.current.setSelectionRange(0, 0);
+                      }
                     }
-                  }
-                }, 10);
-              }, !hasSelectionTokens, undefined, "➕")}
-              {toolbarButton(t("tokenEditor.insertAfter"), () => {
-                if (!hasSelectionTokens) return;
-                const [s, e] = [selection.start!, selection.end!];
-                const start = Math.min(s, e);
-                const end = Math.max(s, e);
-                dispatch({ type: "INSERT_TOKEN_AFTER_SELECTED", range: [start, end] });
-                const newIndex = end + 1;
-                setSelection({ start: newIndex, end: newIndex });
-                setEditingRange({ start: newIndex, end: newIndex });
-                setEditText("");
-                setActiveErrorTypeId((prev) => prev); // preserve active type for hotkeys
-                setTimeout(() => {
-                  if (editInputRef.current) {
-                    editInputRef.current.focus();
-                    if (typeof editInputRef.current.setSelectionRange === "function") {
-                      editInputRef.current.setSelectionRange(0, 0);
+                  }, 10);
+                }, !hasSelectionTokens, undefined, "➕")}
+                {toolbarButton(t("tokenEditor.insertAfter"), () => {
+                  if (!hasSelectionTokens) return;
+                  const [s, e] = [selection.start!, selection.end!];
+                  const start = Math.min(s, e);
+                  const end = Math.max(s, e);
+                  dispatch({ type: "INSERT_TOKEN_AFTER_SELECTED", range: [start, end] });
+                  const newIndex = end + 1;
+                  setSelection({ start: newIndex, end: newIndex });
+                  setEditingRange({ start: newIndex, end: newIndex });
+                  setEditText("");
+                  setActiveErrorTypeId((prev) => prev); // preserve active type for hotkeys
+                  setTimeout(() => {
+                    if (editInputRef.current) {
+                      editInputRef.current.focus();
+                      if (typeof editInputRef.current.setSelectionRange === "function") {
+                        editInputRef.current.setSelectionRange(0, 0);
+                      }
                     }
-                  }
-                }, 10);
-              }, !hasSelectionTokens, "Insert", "➕")}
-          {toolbarButton(t("tokenEditor.merge"), () => {
-            if (!hasSelectionTokens || selectedIndices.length < 2) return;
-            const [s, e] = [Math.min(selection.start!, selection.end!), Math.max(selection.start!, selection.end!)];
-            dispatch({ type: "MERGE_RANGE", range: [s, e] });
-            setSelection({ start: null, end: null });
-          }, !hasSelectionTokens || selectedIndices.length < 2, undefined, "🔗")}
-          <div style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: 8, flexWrap: "wrap" }}>
-            <span style={{ color: "#94a3b8", fontSize: 12 }}>{t("tokenEditor.spacing")}</span>
-            <button
-              style={miniNeutralButton}
-              onClick={() => setTokenGap((g) => Math.max(0, g - 1))}
-              title="Decrease spacing"
-            >
-              –
-            </button>
-            <button
-              style={miniNeutralButton}
-              onClick={() => {
-                setTokenGap(DEFAULT_TOKEN_GAP);
-                setTokenFontSize(DEFAULT_TOKEN_FONT_SIZE);
-              }}
-              title="Reset spacing and size"
-              aria-label="Reset spacing and size"
-            >
-              ↺
-            </button>
-            <button
-              style={miniNeutralButton}
-              onClick={() => setTokenGap((g) => Math.min(24, g + 1))}
-              title="Increase spacing"
-            >
-              +
-            </button>
-            <span style={{ color: "#94a3b8", fontSize: 12, marginLeft: 10 }}>{t("tokenEditor.size")}</span>
-            <button
-              style={miniNeutralButton}
-              onClick={() => setTokenFontSize((s) => Math.max(4, s - 2))}
-              title="Smaller tokens"
-            >
-              –
-            </button>
-            <button
-              style={miniNeutralButton}
-              onClick={() => {
-                setTokenFontSize(DEFAULT_TOKEN_FONT_SIZE);
-              }}
-              title="Reset size"
-              aria-label="Reset size"
-            >
-              ↺
-            </button>
-            <button
-              style={miniNeutralButton}
-              onClick={() => setTokenFontSize((s) => Math.min(64, s + 2))}
-              title="Larger tokens"
-            >
-              +
-            </button>
-            <span style={{ color: "#94a3b8", fontSize: 12, marginLeft: 10 }}>Space mark</span>
-            <select
-              aria-label="Space marker glyph"
-              value={spaceMarker}
-              onChange={(e) => setSpaceMarker(e.target.value as SpaceMarker)}
-              style={{
-                background: "rgba(30,41,59,0.85)",
-                color: "#e2e8f0",
-                border: "1px solid rgba(148,163,184,0.4)",
-                borderRadius: 8,
-                padding: "4px 8px",
-                fontSize: 12,
-                outline: "none",
-              }}
-            >
-              <option value="dot">·</option>
-              <option value="box">␣</option>
-              <option value="none">{t("common.none") ?? "None"}</option>
-            </select>
+                  }, 10);
+                }, !hasSelectionTokens, "Insert", "➕")}
+                {toolbarButton(t("tokenEditor.merge"), () => {
+                  if (!hasSelectionTokens || selectedIndices.length < 2) return;
+                  const [s, e] = [Math.min(selection.start!, selection.end!), Math.max(selection.start!, selection.end!)];
+                  dispatch({ type: "MERGE_RANGE", range: [s, e] });
+                  setSelection({ start: null, end: null });
+                }, !hasSelectionTokens || selectedIndices.length < 2, undefined, "🔗")}
+                <div style={actionGroupStyle}>
+                  <button
+                    style={{
+                      ...secondaryActionStyle,
+                      opacity: isSkipping ? 0.6 : 1,
+                      cursor: isSkipping ? "not-allowed" : "pointer",
+                    }}
+                    onClick={() => handleFlag("skip")}
+                    disabled={isSubmitting || isSkipping || isTrashing}
+                  >
+                    {isSkipping ? t("annotation.skipSubmitting") : t("annotation.skipText")}
+                  </button>
+                  <button
+                    style={{
+                      ...dangerActionStyle,
+                      opacity: isTrashing ? 0.6 : 1,
+                      cursor: isTrashing ? "not-allowed" : "pointer",
+                    }}
+                    onClick={() => handleFlag("trash")}
+                    disabled={isSubmitting || isSkipping || isTrashing}
+                  >
+                    {isTrashing ? t("annotation.trashSubmitting") : t("annotation.trashText")}
+                  </button>
+                  <div style={actionDividerStyle} />
+                  <button
+                    style={{
+                      ...primaryActionStyle,
+                      opacity: isSubmitting || hasUnassignedCorrections ? 0.6 : 1,
+                      cursor: isSubmitting || hasUnassignedCorrections ? "not-allowed" : "pointer",
+                    }}
+                    onClick={handleSubmit}
+                    disabled={isSubmitting || isSkipping || isTrashing || hasUnassignedCorrections}
+                    title={
+                      hasUnassignedCorrections
+                        ? t("tokenEditor.assignTypesFirst") ?? "Assign an error type to all corrections"
+                        : undefined
+                    }
+                  >
+                    {isSubmitting ? t("common.submitting") : t("common.submit")}
+                  </button>
+                </div>
+              </div>
+              <div style={spacingRowStyle}>
+                <span style={{ color: "#94a3b8", fontSize: 12 }}>{t("tokenEditor.spacing")}</span>
+                <button
+                  style={miniNeutralButton}
+                  onClick={() => setTokenGap((g) => Math.max(0, g - 1))}
+                  title="Decrease spacing"
+                >
+                  –
+                </button>
+                <button
+                  style={miniNeutralButton}
+                  onClick={() => {
+                    setTokenGap(DEFAULT_TOKEN_GAP);
+                    setTokenFontSize(DEFAULT_TOKEN_FONT_SIZE);
+                  }}
+                  title="Reset spacing and size"
+                  aria-label="Reset spacing and size"
+                >
+                  ↺
+                </button>
+                <button
+                  style={miniNeutralButton}
+                  onClick={() => setTokenGap((g) => Math.min(24, g + 1))}
+                  title="Increase spacing"
+                >
+                  +
+                </button>
+                <span style={{ color: "#94a3b8", fontSize: 12, marginLeft: 8 }}>{t("tokenEditor.size")}</span>
+                <button
+                  style={miniNeutralButton}
+                  onClick={() => setTokenFontSize((s) => Math.max(4, s - 2))}
+                  title="Smaller tokens"
+                >
+                  –
+                </button>
+                <button
+                  style={miniNeutralButton}
+                  onClick={() => {
+                    setTokenFontSize(DEFAULT_TOKEN_FONT_SIZE);
+                  }}
+                  title="Reset size"
+                  aria-label="Reset size"
+                >
+                  ↺
+                </button>
+                <button
+                  style={miniNeutralButton}
+                  onClick={() => setTokenFontSize((s) => Math.min(64, s + 2))}
+                  title="Larger tokens"
+                >
+                  +
+                </button>
+                <span style={{ color: "#94a3b8", fontSize: 12, marginLeft: 8 }}>
+                  {t("tokenEditor.spaceMark") ?? "Space mark"}
+                </span>
+                <select
+                  aria-label={t("tokenEditor.spaceMark") ?? "Space mark"}
+                  value={spaceMarker}
+                  onChange={(e) => setSpaceMarker(e.target.value as SpaceMarker)}
+                  style={{
+                    background: "rgba(30,41,59,0.85)",
+                    color: "#e2e8f0",
+                    border: "1px solid rgba(148,163,184,0.4)",
+                    borderRadius: 8,
+                    padding: "4px 8px",
+                    fontSize: 12,
+                    outline: "none",
+                  }}
+                >
+                  <option value="dot">·</option>
+                  <option value="box">␣</option>
+                  <option value="none">{t("common.none") ?? "None"}</option>
+                </select>
+              </div>
+            </div>
           </div>
-          <div style={actionGroupStyle}>
-            <button
-              style={{
-                ...secondaryActionStyle,
-                opacity: isSkipping ? 0.6 : 1,
-                cursor: isSkipping ? "not-allowed" : "pointer",
-              }}
-              onClick={() => handleFlag("skip")}
-              disabled={isSubmitting || isSkipping || isTrashing}
-            >
-              {isSkipping ? t("annotation.skipSubmitting") : t("annotation.skipText")}
-            </button>
-            <button
-              style={{
-                ...dangerActionStyle,
-                opacity: isTrashing ? 0.6 : 1,
-                cursor: isTrashing ? "not-allowed" : "pointer",
-              }}
-              onClick={() => handleFlag("trash")}
-              disabled={isSubmitting || isSkipping || isTrashing}
-            >
-              {isTrashing ? t("annotation.trashSubmitting") : t("annotation.trashText")}
-            </button>
-            <div style={actionDividerStyle} />
-            <button
-              style={{
-                ...primaryActionStyle,
-                opacity: isSubmitting || hasUnassignedCorrections ? 0.6 : 1,
-                cursor: isSubmitting || hasUnassignedCorrections ? "not-allowed" : "pointer",
-              }}
-              onClick={handleSubmit}
-              disabled={isSubmitting || isSkipping || isTrashing || hasUnassignedCorrections}
-              title={
-                hasUnassignedCorrections
-                  ? t("tokenEditor.assignTypesFirst") ?? "Assign an error type to all corrections"
-                  : undefined
-              }
-            >
-              {isSubmitting ? t("common.submitting") : t("common.submit")}
-            </button>
+          <div style={actionFeedbackStyle}>
+            {(actionMessage || actionError) && (
+              <span style={{ color: actionError ? "#fca5a5" : "#a7f3d0" }}>
+                {typeof actionError === "string"
+                  ? actionError
+                  : actionError
+                    ? t("common.error")
+                    : actionMessage}
+              </span>
+            )}
           </div>
-        </div>
-        <div style={actionFeedbackStyle}>
-          {(actionMessage || actionError) && (
-            <span style={{ color: actionError ? "#fca5a5" : "#a7f3d0" }}>
-              {typeof actionError === "string"
-                ? actionError
-                : actionError
-                  ? t("common.error")
-                  : actionMessage}
-            </span>
-          )}
-        </div>
 
-        <div
+          <div
           style={{
             background: "rgba(15,23,42,0.75)",
             border: "1px solid rgba(148,163,184,0.5)",
@@ -3509,8 +3514,6 @@ const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
               ))}
             </div>
           </div>
-        </div>
-
         </div>
 
         {/* Corrections sidebar */}
@@ -3795,10 +3798,16 @@ const tokenRowStyleBase: React.CSSProperties = {
 
 const actionBarStyle: React.CSSProperties = {
   display: "flex",
+  flexDirection: "column",
+  gap: 8,
+  padding: "8px 0",
+};
+
+const toolbarRowStyle: React.CSSProperties = {
+  display: "flex",
   flexWrap: "wrap",
   alignItems: "center",
   gap: 8,
-  padding: "8px 0",
 };
 
 const actionGroupStyle: React.CSSProperties = {
@@ -3807,6 +3816,13 @@ const actionGroupStyle: React.CSSProperties = {
   gap: 8,
   flexWrap: "wrap",
   marginLeft: "auto",
+};
+
+const spacingRowStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 6,
+  flexWrap: "wrap",
 };
 
 const actionFeedbackStyle: React.CSSProperties = {
