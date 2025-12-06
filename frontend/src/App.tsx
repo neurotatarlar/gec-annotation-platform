@@ -2,6 +2,7 @@ import { Navigate, Outlet, Route, Routes } from "react-router-dom";
 
 import { AppLayout } from "./components/AppLayout";
 import { useAuth } from "./context/AuthContext";
+import { SaveStatusProvider } from "./context/SaveStatusContext";
 import { AnnotationPage } from "./pages/AnnotationPage";
 import { CategoriesPage } from "./pages/CategoriesPage";
 import { LoginPage } from "./pages/LoginPage";
@@ -15,9 +16,11 @@ const PrivateLayout = () => {
     return <Navigate to="/login" replace />;
   }
   return (
-    <AppLayout>
-      <Outlet />
-    </AppLayout>
+    <SaveStatusProvider>
+      <AppLayout>
+        <Outlet />
+      </AppLayout>
+    </SaveStatusProvider>
   );
 };
 

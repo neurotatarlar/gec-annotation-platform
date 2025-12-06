@@ -3361,10 +3361,6 @@ const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
                     fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
                     maxHeight: 360,
                     overflow: "auto",
-                    padding: 8,
-                    background: "rgba(15,23,42,0.7)",
-                    borderRadius: 8,
-                    border: "1px solid rgba(148,163,184,0.3)",
                   }}
                 >
                   {debugText}

@@ -4,8 +4,10 @@ import { Link } from "react-router-dom";
 import { useAuthedApi } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { useI18n } from "../context/I18nContext";
+import { useSaveStatus } from "../context/SaveStatusContext";
 import { AppLogo } from "./AppLogo";
 import { LanguageSwitcher } from "./LanguageSwitcher";
+import { useLocation } from "react-router-dom";
 
 interface Profile {
   username: string;
@@ -16,6 +18,8 @@ export const AppHeader = () => {
   const { logout, token } = useAuth();
   const { t } = useI18n();
   const api = useAuthedApi();
+  const { status } = useSaveStatus();
+  const location = useLocation();
 
   const { data: profile } = useQuery<Profile>({
     queryKey: ["me"],
@@ -26,14 +30,48 @@ export const AppHeader = () => {
     enabled: Boolean(token)
   });
 
+  const statusIcon =
+    status?.state === "saving" ? "⏳" : status?.state === "saved" ? "✔" : status?.state === "error" ? "⚠" : status?.unsaved ? "●" : null;
+  const statusColor =
+    status?.state === "saving"
+      ? "text-amber-300"
+      : status?.state === "saved"
+        ? "text-emerald-300"
+        : status?.state === "error"
+          ? "text-rose-300"
+          : status?.unsaved
+            ? "text-amber-400"
+            : "text-slate-500";
+  const statusTitle =
+    status?.state === "saved"
+      ? t("common.saved")
+      : status?.state === "saving"
+        ? t("common.saving")
+        : status?.state === "error"
+          ? t("common.error")
+          : status?.unsaved
+            ? t("common.unsaved")
+            : null;
+  const showStatus = location.pathname.startsWith("/annotate") && Boolean(status);
+
   return (
     <header className="mb-6 flex min-h-[68px] flex-wrap items-center justify-between gap-3 rounded-3xl border border-slate-800 bg-slate-900/70 px-4 py-3">
       <div className="flex items-center gap-3">
         <AppLogo />
         {profile && (
-          <div className="text-left">
-            <p className="text-sm font-semibold text-slate-100">{profile.full_name || profile.username}</p>
-            <p className="text-xs text-slate-400">@{profile.username}</p>
+          <div className="text-left flex items-center gap-3">
+            <div>
+              <p className="text-sm font-semibold text-slate-100">{profile.full_name || profile.username}</p>
+              <p className="text-xs text-slate-400">@{profile.username}</p>
+            </div>
+            {showStatus && statusIcon && (
+              <div
+                className={`flex h-8 min-w-[32px] items-center justify-center rounded-full bg-slate-800/70 px-2 ${statusColor}`}
+                title={statusTitle ?? undefined}
+              >
+                <span className="text-base leading-none">{statusIcon}</span>
+              </div>
+            )}
           </div>
         )}
       </div>
