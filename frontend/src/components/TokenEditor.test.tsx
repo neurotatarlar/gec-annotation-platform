@@ -635,4 +635,17 @@ describe("TokenEditor view toggles", () => {
     await user.click(screen.getByTestId("text-panel-toggle"));
     await waitFor(() => expect(screen.getByTestId("text-view-panel")).toBeInTheDocument());
   });
+
+  it("shows debug data inside preview panel via debug tab", async () => {
+    await renderEditor("hello world");
+    const user = userEvent.setup();
+    const debugTab = screen.getByRole("button", { name: "tokenEditor.debugPanel" });
+    await user.click(debugTab);
+    const panel = await screen.findByTestId("text-view-panel");
+    expect(panel.textContent).toContain("\"textId\":1");
+
+    const correctedTab = screen.getByRole("button", { name: "tokenEditor.corrected" });
+    await user.click(correctedTab);
+    await waitFor(() => expect(screen.getByTestId("text-view-panel")).toHaveTextContent("hello world"));
+  });
 });

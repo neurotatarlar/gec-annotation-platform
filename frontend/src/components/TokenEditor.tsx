@@ -3351,35 +3351,24 @@ const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
                   {m2Preview}
                 </pre>
               ) : viewTab === "debug" ? (
-                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                  <div style={{ display: "flex", justifyContent: "flex-end" }}>
-                    <button
-                      style={miniNeutralButton}
-                      onClick={() => navigator.clipboard?.writeText(debugText)}
-                      title={t("common.copy") ?? "Copy"}
-                    >
-                      ⧉
-                    </button>
-                  </div>
-                  <pre
-                    style={{
-                      margin: 0,
-                      color: "#e2e8f0",
-                      fontSize: 12,
-                      wordBreak: "break-word",
-                      whiteSpace: "pre-wrap",
-                      fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-                      maxHeight: 360,
-                      overflow: "auto",
-                      padding: 8,
-                      background: "rgba(15,23,42,0.7)",
-                      borderRadius: 8,
-                      border: "1px solid rgba(148,163,184,0.3)",
-                    }}
-                  >
-                    {debugText}
-                  </pre>
-                </div>
+                <pre
+                  style={{
+                    margin: 0,
+                    color: "#e2e8f0",
+                    fontSize: 12,
+                    wordBreak: "break-word",
+                    whiteSpace: "pre-wrap",
+                    fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+                    maxHeight: 360,
+                    overflow: "auto",
+                    padding: 8,
+                    background: "rgba(15,23,42,0.7)",
+                    borderRadius: 8,
+                    border: "1px solid rgba(148,163,184,0.3)",
+                  }}
+                >
+                  {debugText}
+                </pre>
               ) : (
                 <span
                   style={{
