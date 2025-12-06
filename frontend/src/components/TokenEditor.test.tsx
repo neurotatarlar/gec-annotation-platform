@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen, waitFor, act, within } from "@testing-library/react";
+import { render, screen, waitFor, act, within, cleanup } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
@@ -170,7 +170,7 @@ describe("tokenEditorReducer core flows", () => {
 
   it("renders first/last tokens flush to container", async () => {
     localStorage.clear();
-    renderEditor("hello world");
+    await renderEditor("hello world");
     const panel = await screen.findByTestId("corrected-panel");
     const chips = panel.querySelectorAll("div[role='button']");
     expect(chips.length).toBeGreaterThanOrEqual(2);
@@ -182,7 +182,7 @@ describe("tokenEditorReducer core flows", () => {
   });
   it("sizes edit pill close to text length", async () => {
     localStorage.clear();
-    renderEditor("hello world");
+    await renderEditor("hello world");
     const user = userEvent.setup();
     const hello = await screen.findByText("hello");
     await user.dblClick(hello);
@@ -195,7 +195,7 @@ describe("tokenEditorReducer core flows", () => {
 
   it("keeps the edit pill vertically aligned with the original token", async () => {
     localStorage.clear();
-    renderEditor("hello world");
+    await renderEditor("hello world");
     const user = userEvent.setup();
     const hello = await screen.findByText("hello");
     const originalTop = hello.getBoundingClientRect().top;
@@ -207,7 +207,7 @@ describe("tokenEditorReducer core flows", () => {
 
   it("keeps punctuation chips tight to their borders", async () => {
     localStorage.clear();
-    renderEditor("hi ) there");
+    await renderEditor("hi ) there");
     const punct = await screen.findByText(")");
     const width = punct.getBoundingClientRect().width;
     expect(width).toBeLessThan(21);
@@ -215,7 +215,7 @@ describe("tokenEditorReducer core flows", () => {
 
   it("renders space markers between tokens inside and outside edited groups", async () => {
     localStorage.clear();
-    renderEditor("hello world");
+    await renderEditor("hello world");
     const user = userEvent.setup();
     const select = await screen.findByLabelText(/space marker glyph/i);
     await user.selectOptions(select, "dot");
@@ -232,7 +232,7 @@ describe("tokenEditorReducer core flows", () => {
 
   it("keeps space markers on the same vertical baseline", async () => {
     localStorage.clear();
-    renderEditor("hello world again");
+    await renderEditor("hello world again");
     const user = userEvent.setup();
     const select = await screen.findByLabelText(/space marker glyph/i);
     await user.selectOptions(select, "dot");
@@ -245,7 +245,7 @@ describe("tokenEditorReducer core flows", () => {
 
   it("lets user pick space marker glyph (dot/box/none)", async () => {
     localStorage.clear();
-    renderEditor("hello world");
+    await renderEditor("hello world");
     const user = userEvent.setup();
     const select = await screen.findByLabelText(/space marker glyph/i);
     await user.selectOptions(select, "dot");
@@ -262,7 +262,7 @@ describe("tokenEditorReducer core flows", () => {
 
   it("shows inline space marker on selected token when enabled", async () => {
     localStorage.clear();
-    renderEditor("hello world");
+    await renderEditor("hello world");
     const user = userEvent.setup();
     const select = await screen.findByLabelText(/space marker glyph/i);
     await user.selectOptions(select, "dot");
@@ -493,7 +493,7 @@ describe("insertion splitting", () => {
     const tokens = tokenizeToTokens("foo, bar hello world");
     const state = { originalTokens, tokens, moveMarkers: [] };
     localStorage.setItem("tokenEditorPrefs:state:1", JSON.stringify(state));
-    renderEditor("hello world");
+    await renderEditor("hello world");
     const correctedPanel = await screen.findByTestId("corrected-panel");
     await waitFor(() => {
       const chips = within(correctedPanel).getAllByText(/foo|bar|hello|,/);
@@ -516,33 +516,81 @@ describe("insertion splitting", () => {
     expect(selectionRange).toEqual({ start: 0, end: 0 });
   });
 
-  it.skip("clears old selection after revert and selects new edit", () => {});
-});
-
-describe("empty placeholder selection", () => {
-  it.skip("highlights deleted placeholder when clicked again later", async () => {
+  it("clears old selection after revert and selects new edit", async () => {
     mockGet.mockReset();
     mockPost.mockReset();
     localStorage.clear();
-    renderEditor("hello world");
+    const base = tokenEditorReducer(createInitialHistoryState(), { type: "INIT_FROM_TEXT", text: "hello world" });
+    const edited = tokenEditorReducer(base, {
+      type: "EDIT_SELECTED_RANGE_AS_TEXT",
+      range: [0, 0],
+      newText: "hi",
+    });
+    localStorage.setItem("tokenEditorPrefs:state:1", JSON.stringify(edited.present));
+    await renderEditor("hello world");
     const user = userEvent.setup();
-    const hello = await screen.findByText("hello");
-    await act(async () => {
-      await user.click(hello);
-      await user.keyboard("{Delete}");
-    });
+    const corrected = await screen.findByRole("button", { name: "hi" });
+    await user.click(corrected);
+    expect(corrected).toHaveAttribute("aria-pressed", "true");
 
-    const placeholder = await screen.findByRole("button", { name: "⬚" });
-    // deselected after delete; clicking again should toggle selection state/aria
-    await act(async () => {
-      await user.click(placeholder);
-    });
-    await waitFor(() => expect(placeholder).toHaveAttribute("aria-pressed", "true"), { timeout: 2000 });
-  }, 8000);
+    const revert = await screen.findByTitle("tokenEditor.undo");
+    await user.click(revert);
+    const hello = await screen.findByRole("button", { name: "hello" });
+    await waitFor(() => expect(hello).toHaveAttribute("aria-pressed", "false"));
+
+    const world = await screen.findByRole("button", { name: "world" });
+    await user.dblClick(world);
+    const editInput = await screen.findByPlaceholderText("tokenEditor.editPlaceholder");
+    expect((editInput as HTMLInputElement).value).toBe("world");
+  });
 });
 
-describe.skip("revert clears selection", () => {
-  // UI selection state is managed outside the reducer; skip until we expose a test hook.
+describe("empty placeholder selection", () => {
+  it("highlights deleted placeholder when clicked again later", async () => {
+    mockGet.mockReset();
+    mockPost.mockReset();
+    localStorage.clear();
+    const base = tokenEditorReducer(createInitialHistoryState(), { type: "INIT_FROM_TEXT", text: "hello world" });
+    const deleted = tokenEditorReducer(base, { type: "DELETE_SELECTED_TOKENS", range: [0, 0] });
+    localStorage.setItem("tokenEditorPrefs:state:1", JSON.stringify(deleted.present));
+    await renderEditor("hello world");
+    const user = userEvent.setup();
+
+    const placeholder = await screen.findByRole("button", { name: "⬚" }, { timeout: 2000 });
+    if (placeholder.getAttribute("aria-pressed") === "true") {
+      await user.keyboard("{Escape}");
+    }
+    expect(placeholder).toHaveAttribute("aria-pressed", "false");
+    // deselected after delete; clicking again should toggle selection state/aria
+    await user.click(placeholder);
+    expect(placeholder).toHaveAttribute("aria-pressed", "true");
+  }, 12000);
+});
+
+describe("revert clears selection", () => {
+  it("removes selection highlight when undoing a correction", async () => {
+    mockGet.mockReset();
+    mockPost.mockReset();
+    localStorage.clear();
+    const base = tokenEditorReducer(createInitialHistoryState(), { type: "INIT_FROM_TEXT", text: "hello world" });
+    const edited = tokenEditorReducer(base, {
+      type: "EDIT_SELECTED_RANGE_AS_TEXT",
+      range: [0, 0],
+      newText: "hi",
+    });
+    localStorage.setItem("tokenEditorPrefs:state:1", JSON.stringify(edited.present));
+    await renderEditor("hello world");
+    const user = userEvent.setup();
+    const corrected = await screen.findByRole("button", { name: "hi" });
+    await user.click(corrected);
+    const revert = await screen.findByTitle("tokenEditor.undo");
+    await user.click(revert);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "hello" })).toHaveAttribute("aria-pressed", "false");
+      expect(screen.getByRole("button", { name: "world" })).toHaveAttribute("aria-pressed", "false");
+    });
+  });
 });
 
 describe("TokenEditor view toggles", () => {
@@ -552,5 +600,39 @@ describe("TokenEditor view toggles", () => {
     localStorage.clear();
   });
 
-  it.skip("toggles between original and corrected text panel and persists collapse", () => {});
+  it("toggles between original and corrected text panel and persists collapse", async () => {
+    const base = tokenEditorReducer(createInitialHistoryState(), { type: "INIT_FROM_TEXT", text: "hello world" });
+    const edited = tokenEditorReducer(base, {
+      type: "EDIT_SELECTED_RANGE_AS_TEXT",
+      range: [0, 0],
+      newText: "hi",
+    });
+    localStorage.setItem("tokenEditorPrefs:state:1", JSON.stringify(edited.present));
+    await renderEditor("hello world");
+    const user = userEvent.setup();
+    await screen.findByRole("button", { name: "hi" });
+
+    await waitFor(() => expect(screen.getByTestId("text-view-panel")).toHaveTextContent("hi world"));
+
+    const originalTab = screen.getByRole("button", { name: "tokenEditor.original" });
+    const correctedTab = screen.getByRole("button", { name: "tokenEditor.corrected" });
+
+    await user.click(originalTab);
+    await waitFor(() => expect(screen.getByTestId("text-view-panel")).toHaveTextContent("hello world"));
+
+    await user.click(correctedTab);
+    await waitFor(() => expect(screen.getByTestId("text-view-panel")).toHaveTextContent("hi world"));
+
+    const collapseToggle = screen.getByTestId("text-panel-toggle");
+    await user.click(collapseToggle);
+    await waitFor(() => expect(screen.queryByTestId("text-view-panel")).toBeNull());
+
+    cleanup();
+    await renderEditor("hello world");
+    await screen.findByRole("button", { name: "hi" });
+    expect(screen.queryByTestId("text-view-panel")).toBeNull();
+
+    await user.click(screen.getByTestId("text-panel-toggle"));
+    await waitFor(() => expect(screen.getByTestId("text-view-panel")).toBeInTheDocument());
+  });
 });

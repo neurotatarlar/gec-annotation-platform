@@ -43,11 +43,11 @@ def _sha256_tokens(tokens: list[str]) -> str:
 def import_texts(
     request: TextImportRequest,
     db: Session = Depends(get_db),
-    current_user=Depends(get_current_user),
+    _=Depends(get_current_user),
 ):
     category = db.get(Category, request.category_id)
     if not category:
-        raise HTTPException(status_code=404, detail="Category not found")
+        raise HTTPException(status_code=404, detail=f"Category with id '{request.category_id}' not found")
     normalized: list[tuple[str, str]] = []
     for item in request.texts:
         if isinstance(item, str):
@@ -101,7 +101,7 @@ def get_next_text(
 ):
     category = db.get(Category, category_id)
     if not category:
-        raise HTTPException(status_code=404, detail="Category not found")
+        raise HTTPException(status_code=404, detail=f"Category with id '{category_id}' not found")
 
     now = datetime.now(timezone.utc)
     # release expired locks

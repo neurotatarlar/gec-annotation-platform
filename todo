@@ -5,3 +5,6 @@ preannotations
 notification on empty texts in category
 categoris without texts for annotations should be non clickable
 less spacing before punctuation marks than comparing to normal whitespaces
+text can be in all three states trash/skip/submitted - it is confusing
+audit_logs table is empty 
+remove cross_validation, user_error_types, annotations tables
