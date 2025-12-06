@@ -3764,7 +3764,7 @@ const twoColumnLayoutStyle: React.CSSProperties = {
 const mainColumnStyle: React.CSSProperties = {
   display: "flex",
   flexDirection: "column",
-  gap: 3,
+  gap: 8,
   flex: 1,
   minWidth: 0,
 };
@@ -3783,7 +3783,7 @@ const workspaceStyle: React.CSSProperties = {
 const rowLabelStyle: React.CSSProperties = {
   color: "#cbd5e1",
   fontSize: 12,
-  marginBottom: 4,
+  marginBottom: 8,
 };
 
 const tokenRowStyleBase: React.CSSProperties = {
@@ -3840,7 +3840,7 @@ const actionDividerStyle: React.CSSProperties = {
 const categoryPanelStyle: React.CSSProperties = {
   background: "rgba(15,23,42,0.9)",
   borderRadius: 14,
-  padding: 2,
+  padding: 12,
   border: "1px solid rgba(51,65,85,0.7)",
 };
 
