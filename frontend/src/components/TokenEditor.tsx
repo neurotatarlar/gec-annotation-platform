@@ -3757,14 +3757,14 @@ const pageStyle: React.CSSProperties = {
 const twoColumnLayoutStyle: React.CSSProperties = {
   display: "flex",
   alignItems: "flex-start",
-  gap: 16,
+  gap: 1,
   flexWrap: "wrap",
 };
 
 const mainColumnStyle: React.CSSProperties = {
   display: "flex",
   flexDirection: "column",
-  gap: 16,
+  gap: 1,
   flex: 1,
   minWidth: 0,
 };
@@ -3772,11 +3772,11 @@ const mainColumnStyle: React.CSSProperties = {
 const workspaceStyle: React.CSSProperties = {
   background: "rgba(15,23,42,0.9)",
   borderRadius: 14,
-  padding: 16,
+  padding: 2,
   border: "1px solid rgba(51,65,85,0.7)",
   display: "flex",
   flexDirection: "column",
-  gap: 8,
+  gap: 1,
   position: "relative",
 };
 
@@ -3840,7 +3840,7 @@ const actionDividerStyle: React.CSSProperties = {
 const categoryPanelStyle: React.CSSProperties = {
   background: "rgba(15,23,42,0.9)",
   borderRadius: 14,
-  padding: 16,
+  padding: 2,
   border: "1px solid rgba(51,65,85,0.7)",
 };
 
