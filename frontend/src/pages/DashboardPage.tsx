@@ -258,18 +258,18 @@ export const DashboardPage = () => {
     </div>
   );
 
-  const renderActivityCard = (item: ActivityItem) => {
+  const renderActivityCard = (item: ActivityItem, index: number) => {
     const isFlag = item.kind === "skip" || item.kind === "trash";
     const tone =
       item.kind === "skip"
         ? {
             badge: "bg-violet-500/10 text-violet-100",
             halo: "from-violet-500/20 via-slate-900/60 to-slate-900/40"
-          }
-        : item.kind === "trash"
-          ? {
-              badge: "bg-rose-500/10 text-rose-100",
-              halo: "from-rose-500/20 via-slate-900/60 to-slate-900/40"
+        }
+      : item.kind === "trash"
+        ? {
+            badge: "bg-rose-500/10 text-rose-100",
+            halo: "from-rose-500/20 via-slate-900/60 to-slate-900/40"
             }
           : {
               badge: "bg-emerald-500/10 text-emerald-100",
@@ -285,36 +285,41 @@ export const DashboardPage = () => {
       item.kind === "skip" ? "skip" : item.kind === "trash" ? "trash" : item.status === "submitted" ? "submit" : null;
 
     return (
-      <article
+      <div
         key={`${item.kind}-${item.id}-${item.occurred_at}`}
-        className="overflow-hidden rounded-2xl border border-slate-800/70 bg-gradient-to-br from-slate-950 via-slate-900/70 to-slate-950 text-right shadow-[0_10px_40px_-25px_rgba(0,0,0,0.7)]"
+        className={`table-row ${index % 2 === 0 ? "bg-slate-900/60" : "bg-slate-900/50"} border-t border-slate-800/40 first:border-t-0`}
       >
-        <div className={`h-1 w-full bg-gradient-to-r ${tone.halo}`} aria-hidden />
-        <div className="flex flex-wrap items-center justify-between gap-3 px-4 pt-4">
-          <div className="flex flex-wrap items-center gap-2 text-left">
-            <span className={`rounded-lg px-3 py-1 text-[0.7rem] font-semibold uppercase ${tone.badge}`}>
-              {badge}
-            </span>
-            <span className="rounded-lg bg-slate-800/60 px-3 py-1 text-xs font-semibold text-slate-100">{item.category.name}</span>
-            <span className="rounded-lg bg-slate-800/40 px-3 py-1 text-xs text-slate-200">
-              {item.annotator.full_name || item.annotator.username}
-            </span>
-            <span className="rounded-lg bg-slate-800/40 px-3 py-1 text-[0.7rem] text-slate-400">
-              {new Date(item.occurred_at).toLocaleString()}
-            </span>
-          </div>
+        <div className="table-cell px-3 py-2 align-middle">
+          <span className={`rounded-lg px-3 py-1 text-[0.7rem] font-semibold uppercase ${tone.badge} whitespace-nowrap`}>{badge}</span>
+        </div>
+        <div className="table-cell px-3 py-2 align-middle">
+          <span className="rounded-lg bg-slate-800/60 px-3 py-1 text-xs font-semibold text-slate-100 whitespace-nowrap">
+            {item.category.name}
+          </span>
+        </div>
+        <div className="table-cell px-3 py-2 align-middle">
+          <span className="rounded-lg bg-slate-800/40 px-3 py-1 text-xs text-slate-200 whitespace-nowrap">
+            {item.annotator.full_name || item.annotator.username}
+          </span>
+        </div>
+        <div className="table-cell px-3 py-2 align-middle">
+          <span className="rounded-lg bg-slate-800/40 px-3 py-1 text-[0.7rem] text-slate-400 whitespace-nowrap">
+            {new Date(item.occurred_at).toLocaleString()}
+          </span>
+        </div>
+        <div className="table-cell px-3 py-2 align-middle">
+          <p className="min-w-[200px] text-sm leading-relaxed text-slate-100">{item.text_preview || "…"}</p>
+        </div>
+        <div className="table-cell px-3 py-2 align-middle text-right">
           <button
             type="button"
             onClick={() => navigate(`/annotate/${item.text_id}${focusAction ? `?focusAction=${focusAction}` : ""}`)}
-            className="rounded-full border border-emerald-400/60 bg-emerald-500/10 px-3 py-1 text-xs font-semibold text-emerald-100 transition hover:border-emerald-300 hover:bg-emerald-500/20"
+            className="rounded-lg border border-emerald-400/50 bg-emerald-500/10 px-3 py-1 text-xs font-semibold text-emerald-100 transition hover:border-emerald-300 hover:bg-emerald-500/20"
           >
             {t("history.open")}
           </button>
         </div>
-        <p className="mt-3 border-t border-slate-800/60 bg-slate-950/40 px-4 py-3 text-left text-sm leading-relaxed text-slate-200">
-          {item.text_preview || "…"}
-        </p>
-      </article>
+      </div>
     );
   };
 
@@ -457,7 +462,19 @@ export const DashboardPage = () => {
           ) : activityItems.length === 0 ? (
             <p className="text-sm text-slate-300">{t("dashboard.empty")}</p>
           ) : (
-            activityItems.map(renderActivityCard)
+            <div className="overflow-hidden rounded-xl border border-slate-800/60">
+              <div className="table w-full border-collapse">
+                <div className="table-row bg-slate-900/70 text-[0.7rem] uppercase tracking-wide text-slate-400">
+                  <div className="table-cell px-3 py-2 font-semibold">{t("dashboard.flaggedSkip")}</div>
+                  <div className="table-cell px-3 py-2 font-semibold">{t("dashboard.categories")}</div>
+                  <div className="table-cell px-3 py-2 font-semibold">{t("dashboard.annotators")}</div>
+                  <div className="table-cell px-3 py-2 font-semibold">{t("dashboard.dateFrom")}</div>
+                  <div className="table-cell px-3 py-2 font-semibold">{t("dashboard.subtitle")}</div>
+                  <div className="table-cell px-3 py-2" />
+                </div>
+                {activityItems.map((item, index) => renderActivityCard(item, index))}
+              </div>
+            </div>
           )}
           <div ref={loadMoreRef} className="flex justify-center py-2 text-sm text-slate-400">
             {activityQuery.isFetchingNextPage
