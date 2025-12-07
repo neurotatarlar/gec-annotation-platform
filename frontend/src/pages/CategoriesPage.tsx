@@ -1,10 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { useAuthedApi } from "../api/client";
 import { useI18n } from "../context/I18nContext";
-import { CategorySummary, FlaggedTextEntry } from "../types";
+import { CategorySummary } from "../types";
 
 interface AssignmentResponse {
   text: { id: number; content: string };
@@ -83,41 +83,6 @@ export const CategoriesPage = () => {
       return response.data;
     }
   });
-  const { data: skipped = [] } = useQuery<FlaggedTextEntry[]>({
-    queryKey: ["skipped"],
-    queryFn: async () => {
-      const response = await api.get("/api/texts/flags", { params: { flag_type: "skip" } });
-      return response.data;
-    }
-  });
-  const { data: trashed = [] } = useQuery<FlaggedTextEntry[]>({
-    queryKey: ["trash"],
-    queryFn: async () => {
-      const response = await api.get("/api/texts/flags", { params: { flag_type: "trash" } });
-      return response.data;
-    }
-  });
-
-  const skippedCounts = useMemo(() => {
-    const counts: Record<number, number> = {};
-    skipped.forEach((entry) => {
-      const categoryId = entry.text?.category_id;
-      if (!categoryId) return;
-      counts[categoryId] = (counts[categoryId] ?? 0) + 1;
-    });
-    return counts;
-  }, [skipped]);
-
-  const trashedCounts = useMemo(() => {
-    const counts: Record<number, number> = {};
-    trashed.forEach((entry) => {
-      const categoryId = entry.text?.category_id;
-      if (!categoryId) return;
-      counts[categoryId] = (counts[categoryId] ?? 0) + 1;
-    });
-    return counts;
-  }, [trashed]);
-
   const [emptyNotice, setEmptyNotice] = useState<CategorySummary | null>(null);
 
   const handleRequest = async (category: CategorySummary) => {
@@ -352,8 +317,6 @@ export const CategoriesPage = () => {
         const visible = (categories ?? []).filter((c) => !c.is_hidden);
         const hidden = (categories ?? []).filter((c) => c.is_hidden);
         const renderCard = (category: CategorySummary) => {
-          const skippedCount = skippedCounts[category.id] ?? 0;
-          const trashCount = trashedCounts[category.id] ?? 0;
           const hasPendingTexts = category.remaining_texts > 0;
 
           return (
@@ -417,24 +380,24 @@ export const CategoriesPage = () => {
                 </div>
               </div>
               <div className="mt-4 flex flex-wrap gap-2 text-[0.7rem] text-slate-300 sm:text-xs">
+                <span className="flex items-center gap-1 rounded-xl border border-slate-500/60 bg-slate-600/10 px-3 py-1 font-medium text-slate-100">
+                  <span className="text-base font-semibold leading-none">{category.total_texts}</span>
+                  <span>{t("categories.statTotal")}</span>
+                </span>
                 <span className="flex items-center gap-1 rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-3 py-1 font-medium text-emerald-100">
                   <span className="text-base font-semibold leading-none">{category.remaining_texts}</span>
                   <span>{t("categories.statRemaining")}</span>
                 </span>
                 <span className="flex items-center gap-1 rounded-xl border border-sky-500/40 bg-sky-500/10 px-3 py-1 font-medium text-sky-100">
-                  <span className="text-base font-semibold leading-none">{category.awaiting_review_texts}</span>
-                  <span>{t("categories.statAwaiting")}</span>
-                </span>
-                <span className="flex items-center gap-1 rounded-xl border border-slate-600/60 bg-slate-600/10 px-3 py-1 font-medium text-slate-100">
-                  <span className="text-base font-semibold leading-none">{category.total_texts}</span>
-                  <span>{t("categories.statTotal")}</span>
+                  <span className="text-base font-semibold leading-none">{category.locked_texts}</span>
+                  <span>{t("categories.statLocked")}</span>
                 </span>
                 <span className="flex items-center gap-1 rounded-xl border border-violet-500/30 bg-violet-500/5 px-3 py-1 font-medium text-violet-100/90">
-                  <span className="text-base font-semibold leading-none">{skippedCount}</span>
+                  <span className="text-base font-semibold leading-none">{category.skipped_texts}</span>
                   <span>{t("categories.statSkipped")}</span>
                 </span>
                 <span className="flex items-center gap-1 rounded-xl border border-rose-500/30 bg-rose-500/5 px-3 py-1 font-medium text-rose-100/90">
-                  <span className="text-base font-semibold leading-none">{trashCount}</span>
+                  <span className="text-base font-semibold leading-none">{category.trashed_texts}</span>
                   <span>{t("categories.statTrash")}</span>
                 </span>
               </div>

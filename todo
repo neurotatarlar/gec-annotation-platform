@@ -1,5 +1,4 @@
 export
-dashboard
 preannotations
 less spacing before punctuation marks than comparing to normal whitespaces
 text can be in all three states trash/skip/submitted - it is confusing
@@ -7,4 +6,3 @@ audit_logs table is empty
 remove cross_validation, user_error_types, annotations tables
 show all 
 remove obsolete i18n keys
-check category clips shows correct info. 

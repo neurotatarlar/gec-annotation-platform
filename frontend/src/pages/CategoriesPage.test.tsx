@@ -29,8 +29,6 @@ beforeEach(() => {
 
 const renderPage = (categories: any[]) => {
   mockGet.mockResolvedValueOnce({ data: categories });
-  mockGet.mockResolvedValueOnce({ data: [] }); // skipped
-  mockGet.mockResolvedValueOnce({ data: [] }); // trash
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <MemoryRouter>
@@ -93,8 +91,8 @@ describe("mergeUploadEntries", () => {
 describe("CategoriesPage visibility", () => {
   it("splits visible and hidden categories and toggles them", async () => {
     const categories = [
-      { id: 1, name: "Visible", description: null, is_hidden: false, total_texts: 0, remaining_texts: 0, in_progress_texts: 0, awaiting_review_texts: 0 },
-      { id: 2, name: "Hidden", description: null, is_hidden: true, total_texts: 0, remaining_texts: 0, in_progress_texts: 0, awaiting_review_texts: 0 },
+      { id: 1, name: "Visible", description: null, is_hidden: false, total_texts: 0, remaining_texts: 0, in_progress_texts: 0, locked_texts: 0, skipped_texts: 0, trashed_texts: 0, awaiting_review_texts: 0 },
+      { id: 2, name: "Hidden", description: null, is_hidden: true, total_texts: 0, remaining_texts: 0, in_progress_texts: 0, locked_texts: 0, skipped_texts: 0, trashed_texts: 0, awaiting_review_texts: 0 },
     ];
     renderPage(categories);
     expect(await screen.findByText("Visible")).toBeInTheDocument();
@@ -113,7 +111,7 @@ describe("CategoriesPage visibility", () => {
 describe("CategoriesPage interactions", () => {
   it("disables requesting a text when the category has none pending", async () => {
     const categories = [
-      { id: 1, name: "Empty", description: null, is_hidden: false, total_texts: 0, remaining_texts: 0, in_progress_texts: 0, awaiting_review_texts: 0 },
+      { id: 1, name: "Empty", description: null, is_hidden: false, total_texts: 0, remaining_texts: 0, in_progress_texts: 0, locked_texts: 0, skipped_texts: 0, trashed_texts: 0, awaiting_review_texts: 0 },
     ];
     renderPage(categories);
 
@@ -132,7 +130,7 @@ describe("CategoriesPage interactions", () => {
   it("allows requesting a text when the category has pending texts", async () => {
     mockPost.mockResolvedValueOnce({ data: { text: { id: 99 } } });
     const categories = [
-      { id: 2, name: "Active", description: null, is_hidden: false, total_texts: 5, remaining_texts: 2, in_progress_texts: 0, awaiting_review_texts: 0 },
+      { id: 2, name: "Active", description: null, is_hidden: false, total_texts: 5, remaining_texts: 2, in_progress_texts: 0, locked_texts: 1, skipped_texts: 0, trashed_texts: 0, awaiting_review_texts: 0 },
     ];
     renderPage(categories);
 

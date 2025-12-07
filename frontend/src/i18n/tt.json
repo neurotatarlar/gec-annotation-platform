@@ -49,6 +49,7 @@
     "noTextsAvailableNow": "Хәзер текстлар юк — бәлки алар башка аннотацияләүчеләр кулында",
     "statAwaiting": "Тикшерүдә",
     "statRemaining": "Калган",
+    "statLocked": "Блокланган",
     "statSkipped": "Үзып кителгән",
     "statTotal": "Барлыгы",
     "statTrash": "Чүптә",

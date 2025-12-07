@@ -49,6 +49,7 @@
     "noTextsAvailableNow": "No texts available right now. They may be locked by other annotators.",
     "statAwaiting": "Awaiting review",
     "statRemaining": "Remaining",
+    "statLocked": "Locked",
     "statSkipped": "Skipped",
     "statTotal": "Total texts",
     "statTrash": "Trash",

@@ -36,7 +36,7 @@ const setupMocks = () => {
   mockGet.mockImplementation((url: string, options?: any) => {
     if (url === "/api/categories/") {
       return Promise.resolve({
-        data: [{ id: 1, name: "Cat A", description: null, is_hidden: false, total_texts: 0, remaining_texts: 0, in_progress_texts: 0, awaiting_review_texts: 0 }]
+        data: [{ id: 1, name: "Cat A", description: null, is_hidden: false, total_texts: 0, remaining_texts: 0, in_progress_texts: 0, locked_texts: 0, skipped_texts: 0, trashed_texts: 0, awaiting_review_texts: 0 }]
       });
     }
     if (url === "/api/dashboard/annotators") {

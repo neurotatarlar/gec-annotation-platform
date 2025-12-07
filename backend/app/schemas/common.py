@@ -60,6 +60,9 @@ class CategoryRead(OrmBase, CategoryBase):
     total_texts: int = 0
     remaining_texts: int = 0
     in_progress_texts: int = 0
+    locked_texts: int = 0
+    skipped_texts: int = 0
+    trashed_texts: int = 0
     awaiting_review_texts: int = 0
 
 

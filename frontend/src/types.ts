@@ -83,6 +83,9 @@ export interface CategorySummary {
   total_texts: number;
   remaining_texts: number;
   in_progress_texts: number;
+  locked_texts: number;
+  skipped_texts: number;
+  trashed_texts: number;
   awaiting_review_texts: number;
 }
 

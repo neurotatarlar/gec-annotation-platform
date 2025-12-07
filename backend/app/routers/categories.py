@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
-from ..models import Category, TextSample
+from ..models import AnnotationTask, Category, TextSample
 from ..schemas.common import CategoryCreate, CategoryRead, CategoryUpdate
 from ..services.auth import get_current_user, get_db
 
@@ -10,13 +10,40 @@ router = APIRouter(prefix="/api/categories", tags=["categories"])
 
 
 def _load_category_stats(db: Session, category_ids: list[int] | None = None):
+    submitted_counts = (
+        db.query(AnnotationTask.text_id, func.count().label("submitted"))
+        .filter(AnnotationTask.status == "submitted")
+        .group_by(AnnotationTask.text_id)
+        .subquery()
+    )
+
+    submitted_count_expr = func.coalesce(submitted_counts.c.submitted, 0)
+
     query = db.query(
         TextSample.category_id.label("category_id"),
         func.count(TextSample.id).label("total"),
-        func.sum(case((TextSample.state == "pending", 1), else_=0)).label("pending"),
+        func.sum(
+            case(
+                (submitted_count_expr < TextSample.required_annotations, 1),
+                else_=0,
+            )
+        ).label("remaining"),
         func.sum(case((TextSample.state == "in_annotation", 1), else_=0)).label("in_progress"),
+        func.sum(
+            case(
+                (
+                    (TextSample.locked_by_id.isnot(None))
+                    & ~TextSample.state.in_(["skipped", "trash", "awaiting_cross_validation"]),
+                    1,
+                ),
+                else_=0,
+            )
+        ).label("locked"),
+        func.sum(case((TextSample.state == "skipped", 1), else_=0)).label("skipped"),
+        func.sum(case((TextSample.state == "trash", 1), else_=0)).label("trashed"),
         func.sum(case((TextSample.state == "awaiting_cross_validation", 1), else_=0)).label("awaiting"),
     )
+    query = query.outerjoin(submitted_counts, submitted_counts.c.text_id == TextSample.id)
     if category_ids:
         query = query.filter(TextSample.category_id.in_(category_ids))
     rows = query.group_by(TextSample.category_id).all()
@@ -31,8 +58,11 @@ def _serialize_category(category: Category, stats) -> CategoryRead:
         is_hidden=category.is_hidden,
         created_at=category.created_at,
         total_texts=int(stats.total) if stats else 0,
-        remaining_texts=int(stats.pending) if stats else 0,
+        remaining_texts=int(stats.remaining) if stats else 0,
         in_progress_texts=int(stats.in_progress) if stats else 0,
+        locked_texts=int(stats.locked) if stats else 0,
+        skipped_texts=int(stats.skipped) if stats else 0,
+        trashed_texts=int(stats.trashed) if stats else 0,
         awaiting_review_texts=int(stats.awaiting) if stats else 0,
     )
 
