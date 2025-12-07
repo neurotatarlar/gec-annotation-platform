@@ -25,13 +25,13 @@ class ErrorTypeCreate(ErrorTypeBase):
 
 
 class ErrorTypeUpdate(BaseModel):
-    # description: str | None = None
+    description: str | None = None
     default_color: str | None = None
-    # default_hotkey: str | None = None
-    # category_en: str | None = None
-    # category_tt: str | None = None
-    # en_name: str | None = None
-    # tt_name: str | None = None
+    default_hotkey: str | None = None
+    category_en: str | None = None
+    category_tt: str | None = None
+    en_name: str | None = None
+    tt_name: str | None = None
     is_active: bool | None = None
 
 
@@ -137,33 +137,33 @@ def update_error_type(
     return obj
 
 
-# @router.put("/{error_type_id}/preferences", response_model=ErrorTypePreference)
-# def upsert_preferences(
-#     error_type_id: int,
-#     payload: ErrorTypePreference,
-#     db: Session = Depends(get_db),
-#     current_user=Depends(get_current_user),
-# ):
-#     error_type = db.get(ErrorType, error_type_id)
-#     if not error_type:
-#         raise HTTPException(status_code=404, detail="Error type not found")
-#     pref = (
-#         db.query(UserErrorType)
-#         .filter(
-#             UserErrorType.error_type_id == error_type_id,
-#             UserErrorType.user_id == current_user.id,
-#         )
-#         .one_or_none()
-#     )
-#     if not pref:
-#         pref = UserErrorType(
-#             error_type_id=error_type_id,
-#             user_id=current_user.id,
-#         )
-#         db.add(pref)
-#     pref.color = payload.color
-#     pref.hotkey = payload.hotkey
-#     pref.custom_name = payload.custom_name
-#     db.commit()
-#     db.refresh(pref)
-#     return ErrorTypePreference(color=pref.color, hotkey=pref.hotkey, custom_name=pref.custom_name)
+@router.put("/{error_type_id}/preferences", response_model=ErrorTypePreference)
+def upsert_preferences(
+    error_type_id: int,
+    payload: ErrorTypePreference,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    error_type = db.get(ErrorType, error_type_id)
+    if not error_type:
+        raise HTTPException(status_code=404, detail="Error type not found")
+    pref = (
+        db.query(UserErrorType)
+        .filter(
+            UserErrorType.error_type_id == error_type_id,
+            UserErrorType.user_id == current_user.id,
+        )
+        .one_or_none()
+    )
+    if not pref:
+        pref = UserErrorType(
+            error_type_id=error_type_id,
+            user_id=current_user.id,
+        )
+        db.add(pref)
+    pref.color = payload.color
+    pref.hotkey = payload.hotkey
+    pref.custom_name = payload.custom_name
+    db.commit()
+    db.refresh(pref)
+    return ErrorTypePreference(color=pref.color, hotkey=pref.hotkey, custom_name=pref.custom_name)
