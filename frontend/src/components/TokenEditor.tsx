@@ -274,6 +274,17 @@ const rangeToArray = (range: [number, number]) => {
   return arr;
 };
 
+const findGroupRangeForTokens = (tokens: Token[], idx: number): [number, number] => {
+  if (!tokens.length || idx < 0 || idx >= tokens.length) return [idx, idx];
+  const tok = tokens[idx];
+  if (!tok?.groupId) return [idx, idx];
+  let l = idx;
+  let r = idx;
+  while (l - 1 >= 0 && tokens[l - 1]?.groupId === tok.groupId) l -= 1;
+  while (r + 1 < tokens.length && tokens[r + 1]?.groupId === tok.groupId) r += 1;
+  return [l, r];
+};
+
 // Detect the placeholder token we create for insertions (text empty + previous empty marker).
 const isInsertPlaceholder = (tokens: Token[]) =>
   tokens.length === 1 &&
@@ -683,14 +694,17 @@ const reducer = (state: EditorHistoryState, action: Action): EditorHistoryState 
         const markersNow = deriveMoveMarkers(tokens);
         const marker = markersNow.find((m) => m.id === markerId);
         if (!marker) return state;
-        const placeholderIndex = marker.fromStart;
+        let placeholderIndex = marker.fromStart;
+        const blockStart = marker.toStart;
+        const blockLen = marker.toEnd - marker.toStart + 1;
+        // Remove moved block first to normalize indices.
+        const removed = tokens.splice(blockStart, blockLen);
+        if (blockStart < placeholderIndex) {
+          placeholderIndex -= blockLen;
+        }
         const placeholder = tokens[placeholderIndex];
         // remove placeholder
         tokens.splice(placeholderIndex, 1);
-        // compute block start after removing placeholder
-        const blockStart = placeholderIndex < marker.toStart ? marker.toStart - 1 : marker.toStart;
-        const blockLen = marker.toEnd - marker.toStart + 1;
-        tokens.splice(blockStart, blockLen);
         const restore =
           placeholder?.previousTokens?.length
             ? buildOriginalHistoryForBlock(placeholder.previousTokens)
@@ -1463,10 +1477,13 @@ const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
   const [activeErrorTypeId, setActiveErrorTypeId] = useState<number | null>(null);
   const [correctionTypeMap, setCorrectionTypeMap] = useState<Record<string, number | null>>({});
   const [hasLoadedTypeState, setHasLoadedTypeState] = useState(false);
+  const pendingSelectIndexRef = useRef<number | null>(null);
+  const skipAutoSelectRef = useRef(false);
   const [serverAnnotationVersion, setServerAnnotationVersion] = useState(0);
   const annotationIdMap = useRef<Map<string, number>>(new Map());
   const prevCorrectionCountRef = useRef(0);
   const handleRevert = (rangeStart: number, rangeEnd: number, markerId: string | null = null) => {
+    pendingSelectIndexRef.current = rangeStart;
     dispatch({ type: "REVERT_CORRECTION", rangeStart, rangeEnd, markerId });
     setSelection({ start: null, end: null });
     setEditingRange(null);
@@ -1666,24 +1683,13 @@ const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
     });
     const visited = new Set<number>();
 
-    const findGroupRange = (idx: number): [number, number] => {
-      const tok = tokens[idx];
-      if (!tok) return [idx, idx];
-      if (!tok.groupId) return [idx, idx];
-      let l = idx;
-      let r = idx;
-      while (l - 1 >= 0 && tokens[l - 1]?.groupId === tok.groupId) l -= 1;
-      while (r + 1 < tokens.length && tokens[r + 1]?.groupId === tok.groupId) r += 1;
-      return [l, r];
-    };
-
     const tokenCards = tokens
       .map((tok, idx) => {
         if (visited.has(idx)) return null;
         if (!tok.previousTokens?.length) return null;
         if (movePlaceholderIndices.has(idx)) return null; // move will be shown as a single correction card
         if (moveDestIndices.has(idx)) return null; // avoid duplicate move card; handled separately
-        const [rangeStart, rangeEnd] = findGroupRange(idx);
+        const [rangeStart, rangeEnd] = findGroupRangeForTokens(tokens, idx);
         for (let i = rangeStart; i <= rangeEnd; i += 1) visited.add(i);
         return {
           id: tok.id,
@@ -1872,6 +1878,7 @@ const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
   const commitEdit = () => {
     if (!editingRange) return;
     const { start, end } = editingRange;
+    pendingSelectIndexRef.current = start!;
     dispatch({ type: "EDIT_SELECTED_RANGE_AS_TEXT", range: [start!, end!], newText: editText });
     setEditingRange(null);
     setSelection({ start, end });
@@ -1913,6 +1920,7 @@ const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
     if (editingRange) {
       cancelEdit();
     }
+    skipAutoSelectRef.current = true;
     setSelection({ start: null, end: null });
     dispatch({ type: "UNDO" });
   };
@@ -1921,6 +1929,7 @@ const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
     if (editingRange) {
       cancelEdit();
     }
+    skipAutoSelectRef.current = true;
     setSelection({ start: null, end: null });
     dispatch({ type: "REDO" });
   };
@@ -2660,12 +2669,28 @@ const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
   useEffect(() => {
     const signature = correctionCards.map((c) => `${c.id}:${c.rangeStart}-${c.rangeEnd}`).join("|");
     if (signature !== correctionSignatureRef.current && correctionCards.length) {
-      const last = correctionCards[correctionCards.length - 1];
-      setSelection({ start: last.rangeStart, end: last.rangeEnd });
+      if (skipAutoSelectRef.current) {
+        setSelection({ start: null, end: null });
+        skipAutoSelectRef.current = false;
+      } else {
+      const desiredIdx = pendingSelectIndexRef.current;
+      if (desiredIdx !== null && tokens.length) {
+        const clamped = Math.max(0, Math.min(tokens.length - 1, desiredIdx));
+        const [start, end] = findGroupRangeForTokens(tokens, clamped);
+        setSelection({ start, end });
+      } else {
+        const target =
+          [...correctionCards].reverse().find((c) => !c.markerId) ?? correctionCards[correctionCards.length - 1];
+        if (target) {
+          setSelection({ start: target.rangeStart, end: target.rangeEnd });
+        }
+      }
+      }
     }
     correctionSignatureRef.current = signature;
+    pendingSelectIndexRef.current = null;
     prevCorrectionCountRef.current = correctionCards.length;
-  }, [correctionCards]);
+  }, [correctionCards, tokens]);
 
   const clearSelectionAfterTypePick = useCallback((cardId: string, typeId: number | null) => {
     updateCorrectionType(cardId, typeId);

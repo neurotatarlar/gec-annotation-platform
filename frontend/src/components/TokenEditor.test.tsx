@@ -95,6 +95,25 @@ describe("tokenEditorReducer core flows", () => {
     expect(tokens[0].previousTokens?.some((t) => t.text === "hello")).toBe(true);
   });
 
+  it("restores original order when reverting a leftward move", () => {
+    const state1 = initState("one two three four");
+    const moved = tokenEditorReducer(state1, {
+      type: "MOVE_SELECTED_BY_DRAG",
+      fromIndex: 3,
+      toIndex: 0,
+      count: 1,
+    });
+    const marker = moved.present.moveMarkers[0];
+    expect(marker.toStart).toBe(0);
+    const reverted = tokenEditorReducer(moved, {
+      type: "REVERT_CORRECTION",
+      rangeStart: marker.toStart,
+      rangeEnd: marker.toEnd,
+      markerId: marker.id,
+    });
+    expect(buildTextFromTokens(reverted.present.tokens)).toBe("one two three four");
+  });
+
   it("undo restores the prior present state", () => {
     const state1 = initState();
     const edited = tokenEditorReducer(state1, {
@@ -612,6 +631,38 @@ describe("TokenEditor view toggles", () => {
     localStorage.clear();
   });
 
+  const seedMoveState = () => {
+    const present = {
+      originalTokens: [
+        { id: "o1", text: "first", kind: "word", selected: false },
+        { id: "o2", text: "second", kind: "word", selected: false },
+      ],
+      tokens: [
+        {
+          id: "ph1",
+          text: "",
+          kind: "empty",
+          selected: false,
+          origin: "base",
+          groupId: "g1",
+          moveId: "m1",
+          previousTokens: [{ id: "p1", text: "first", kind: "word", selected: false }],
+        },
+        {
+          id: "t2",
+          text: "second",
+          kind: "word",
+          selected: false,
+          origin: "base",
+          groupId: "g2",
+          moveId: "m1",
+        },
+      ],
+      moveMarkers: [{ id: "m1", fromStart: 0, fromEnd: 0, toStart: 1, toEnd: 1 }],
+    } as any;
+    localStorage.setItem("tokenEditorPrefs:state:1", JSON.stringify(present));
+  };
+
   it("undo/redo hotkeys work even when an edit is active", async () => {
     await renderEditor("hello world");
     const user = userEvent.setup();
@@ -669,6 +720,24 @@ describe("TokenEditor view toggles", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "world" })).toBeInTheDocument());
     const pressed = screen.queryAllByRole("button").filter((el) => el.getAttribute("aria-pressed") === "true");
     expect(pressed.length).toBe(0);
+  });
+
+  it("focuses the most recently edited group even when a move correction exists", async () => {
+    seedMoveState();
+    await renderEditor("first second");
+    const user = userEvent.setup();
+
+    const second = await screen.findByRole("button", { name: "second" });
+    await user.click(second);
+    await user.keyboard("{Enter}");
+    const editInput = await screen.findByPlaceholderText("tokenEditor.editPlaceholder");
+    await user.clear(editInput);
+    await user.type(editInput, "changed");
+    await user.keyboard("{Enter}");
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "changed" })).toBeInTheDocument());
+    const pressed = screen.queryAllByRole("button").filter((el) => el.getAttribute("aria-pressed") === "true");
+    expect(pressed.map((el) => el.textContent)).toEqual(["changed"]);
   });
 
   it("toggles between original and corrected text panel and persists collapse", async () => {
