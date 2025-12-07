@@ -116,7 +116,9 @@
     "sortAnnotator": "Аннотацияләүче",
     "sortTextId": "Текст ID",
     "orderDesc": "Башта яңалар",
-    "orderAsc": "Башта искеләр"
+    "orderAsc": "Башта искеләр",
+    "searchText": "Текст буенча эзләү",
+    "searchPlaceholder": "Текст эчтәлегеннән табарга…"
   },
   "flags": {
     "created": "Тамгаланган {{date}}",

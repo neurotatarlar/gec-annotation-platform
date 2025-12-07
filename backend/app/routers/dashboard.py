@@ -347,6 +347,7 @@ def list_activity(
         description="Comma-separated list of kinds to include: skip, trash, task",
     ),
     task_statuses: Optional[str] = Query(None, description="Comma-separated task statuses to include"),
+    query: Optional[str] = Query(None, description="Case-insensitive substring to match in text content"),
     category_ids: Optional[str] = Query(None, description="Comma-separated category ids"),
     annotator_ids: Optional[str] = Query(None, description="Comma-separated annotator uuids"),
     start: Optional[datetime] = Query(None, description="Start datetime (inclusive)"),
@@ -368,6 +369,9 @@ def list_activity(
     max_fetch = min(limit + offset + 200, 2000)
 
     items: list[ActivityItem] = []
+    text_filter = None
+    if query:
+        text_filter = TextSample.content.ilike(f"%{query}%")
 
     if any(kind in kind_list for kind in ("skip", "trash")):
         flag_query = (
@@ -385,6 +389,8 @@ def list_activity(
             flag_query = flag_query.filter(SkippedText.created_at >= start)
         if end:
             flag_query = flag_query.filter(SkippedText.created_at <= end)
+        if text_filter is not None:
+            flag_query = flag_query.filter(text_filter)
         flag_rows = (
             flag_query.order_by(SkippedText.created_at.desc(), SkippedText.id.desc())
             .limit(max_fetch)
@@ -421,6 +427,8 @@ def list_activity(
             task_query = task_query.filter(AnnotationTask.updated_at >= start)
         if end:
             task_query = task_query.filter(AnnotationTask.updated_at <= end)
+        if text_filter is not None:
+            task_query = task_query.filter(text_filter)
 
         task_rows = (
             task_query.order_by(AnnotationTask.updated_at.desc(), AnnotationTask.id.desc())

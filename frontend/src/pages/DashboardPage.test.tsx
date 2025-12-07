@@ -93,7 +93,7 @@ describe("DashboardPage", () => {
     mockGet.mockReset();
   });
 
-  it("renders stats, flagged, submitted, and history sections", async () => {
+  it("renders stats and mixed activity feed", async () => {
     renderPage();
 
     expect(await screen.findByText("dashboard.title")).toBeInTheDocument();

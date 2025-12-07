@@ -1,5 +1,5 @@
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useAuthedApi } from "../api/client";
 import { useI18n } from "../context/I18nContext";
@@ -33,9 +33,10 @@ export const DashboardPage = () => {
   const [showSkip, setShowSkip] = useState(true);
   const [showTrash, setShowTrash] = useState(true);
   const [showSubmitted, setShowSubmitted] = useState(true);
-  const [showHistory, setShowHistory] = useState(true);
   const [sortField, setSortField] = useState("occurred_at");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
+  const [search, setSearch] = useState("");
+  const loadMoreRef = useRef<HTMLDivElement | null>(null);
 
   const { data: categories = [] } = useQuery<CategorySummary[]>({
     queryKey: ["categories"],
@@ -80,10 +81,10 @@ export const DashboardPage = () => {
       sharedParams.annotator_ids,
       sharedParams.start,
       sharedParams.end,
+      search,
       showSkip,
       showTrash,
       showSubmitted,
-      showHistory,
       sortField,
       sortOrder
     ],
@@ -92,17 +93,17 @@ export const DashboardPage = () => {
       const kinds: string[] = [];
       if (showSkip) kinds.push("skip");
       if (showTrash) kinds.push("trash");
-      if (showSubmitted || showHistory) kinds.push("task");
+      if (showSubmitted) kinds.push("task");
 
       const taskStatuses: string[] = [];
       if (showSubmitted) taskStatuses.push("submitted");
-      if (showHistory) taskStatuses.push("in_progress");
 
       const response = await api.get("/api/dashboard/activity", {
         params: {
           ...sharedParams,
           kinds: kinds.join(",") || undefined,
-          task_statuses: taskStatuses.length && !(showSubmitted && showHistory) ? taskStatuses.join(",") : undefined,
+          query: search || undefined,
+          task_statuses: taskStatuses.length ? taskStatuses.join(",") : undefined,
           sort: sortField,
           order: sortOrder,
           limit: PAGE_SIZE,
@@ -114,6 +115,23 @@ export const DashboardPage = () => {
   });
 
   const activityItems = combinePages<ActivityItem>(activityQuery.data?.pages);
+
+  useEffect(() => {
+    if (!activityQuery.hasNextPage || activityQuery.isFetchingNextPage) return;
+    const element = loadMoreRef.current;
+    if (!element) return;
+
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach((entry) => {
+        if (entry.isIntersecting && activityQuery.hasNextPage && !activityQuery.isFetchingNextPage) {
+          activityQuery.fetchNextPage();
+        }
+      });
+    });
+
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [activityQuery]);
 
   const renderChipGroup = <T extends string | number>({
     label,
@@ -331,6 +349,7 @@ export const DashboardPage = () => {
               setSelectedAnnotators([]);
               setDateFrom("");
               setDateTo("");
+              setSearch("");
             }}
           >
             {t("dashboard.clearFilters")}
@@ -352,6 +371,16 @@ export const DashboardPage = () => {
           <div className="flex flex-col gap-3 rounded-2xl border border-slate-800 bg-slate-950/60 p-3">
             <span className="text-xs uppercase tracking-wide text-slate-400">{t("dashboard.dateFrom")}</span>
             {renderDateInputs}
+            <label className="mt-2 flex flex-col gap-1 text-sm text-slate-200">
+              <span className="text-xs uppercase tracking-wide text-slate-400">{t("dashboard.searchText")}</span>
+              <input
+                type="search"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder={t("dashboard.searchPlaceholder")}
+                className="rounded-xl border border-slate-700 bg-slate-950/60 p-2 text-sm text-slate-100"
+              />
+            </label>
           </div>
         </div>
       </div>
@@ -383,14 +412,6 @@ export const DashboardPage = () => {
             >
               {t("dashboard.submittedTitle")}
             </button>
-            <button
-              className={`rounded-xl px-4 py-2 text-sm font-semibold ${
-                showHistory ? "border border-sky-400/80 bg-sky-500/10 text-sky-100" : "border border-slate-700 text-slate-300"
-              }`}
-              onClick={() => setShowHistory((v) => !v)}
-            >
-              {t("dashboard.historyTitle")}
-            </button>
           </div>
           {renderSortControls({
             sort: sortField,
@@ -413,15 +434,13 @@ export const DashboardPage = () => {
           ) : (
             activityItems.map(renderActivityCard)
           )}
-          {activityQuery.hasNextPage && (
-            <button
-              className="w-full rounded-xl border border-slate-700 px-4 py-2 text-sm text-slate-100 disabled:opacity-50"
-              onClick={() => activityQuery.fetchNextPage()}
-              disabled={activityQuery.isFetchingNextPage}
-            >
-              {activityQuery.isFetchingNextPage ? t("common.loading") : t("dashboard.loadMore")}
-            </button>
-          )}
+          <div ref={loadMoreRef} className="flex justify-center py-2 text-sm text-slate-400">
+            {activityQuery.isFetchingNextPage
+              ? t("common.loading")
+              : activityQuery.hasNextPage
+                ? t("dashboard.loadMore")
+                : null}
+          </div>
         </div>
       </section>
     </div>
