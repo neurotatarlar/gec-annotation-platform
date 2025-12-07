@@ -74,11 +74,38 @@ export const SettingsPage = () => {
 
   const [globalDrafts, setGlobalDrafts] = useState<Record<number, GlobalTypeDraft>>({});
   const [pendingNew, setPendingNew] = useState<GlobalTypeDraft[]>([]);
-  const [nextTempId, setNextTempId] = useState(-1);
+  const [nextTempId] = useState(-1);
   const [showNewModal, setShowNewModal] = useState(false);
   const [savingAll, setSavingAll] = useState(false);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const formatError = (error: any) =>
+    error?.response?.data?.detail ?? error?.message ?? t("settings.profileError");
+  const createErrorTypeMutation = useMutation({
+    mutationFn: async (payload: GlobalTypeDraft) => {
+      const response = await api.post("/api/error-types/", {
+        description: payload.description || null,
+        default_color: payload.default_color || "#f97316",
+        default_hotkey: payload.default_hotkey?.trim() || null,
+        category_en: payload.category_en?.trim() || null,
+        category_tt: payload.category_tt?.trim() || null,
+        en_name: payload.en_name?.trim() || null,
+        tt_name: payload.tt_name?.trim() || null,
+        is_active: payload.is_active ?? true
+      });
+      return response.data;
+    },
+    onSuccess: () => {
+      setSaveMessage(t("common.saved"));
+      setSaveError(null);
+      setShowNewModal(false);
+      setNewType(buildEmptyNew());
+      queryClient.invalidateQueries({ queryKey: ["error-types"] });
+    },
+    onError: (error: unknown) => {
+      setSaveError(formatError(error));
+    }
+  });
   const presetColors = [
     "#f97316",
     "#0ea5e9",
@@ -272,9 +299,6 @@ export const SettingsPage = () => {
     () => collectCategoryOptions(errorTypes, globalDrafts, pendingNew, "category_en"),
     [errorTypes, globalDrafts, pendingNew]
   );
-
-  const formatError = (error: any) =>
-    error?.response?.data?.detail ?? error?.message ?? t("settings.profileError");
 
   const handleSaveAll = async () => {
     if (!isDirty) return;
@@ -680,14 +704,13 @@ export const SettingsPage = () => {
                     className="rounded-xl bg-emerald-500/80 px-4 py-2 font-semibold text-slate-900 disabled:opacity-50"
                     onClick={() => {
                       if (!(newType.en_name?.trim() || newType.tt_name?.trim())) return;
-                      setPendingNew((prev) => [...prev, { ...newType, id: nextTempId }]);
-                      setNextTempId((prev) => prev - 1);
-                      setNewType(buildEmptyNew());
-                      setShowNewModal(false);
+                      createErrorTypeMutation.mutate(newType);
                     }}
-                    disabled={!(newType.en_name?.trim() || newType.tt_name?.trim())}
+                    disabled={
+                      !(newType.en_name?.trim() || newType.tt_name?.trim()) || createErrorTypeMutation.isPending
+                    }
                   >
-                    {t("settings.add")}
+                    {createErrorTypeMutation.isPending ? t("common.saving") : t("settings.add")}
                   </button>
                 </div>
               </div>

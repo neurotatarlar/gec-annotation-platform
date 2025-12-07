@@ -174,6 +174,10 @@ def test_create_error_type_trims_fields_and_persists_hotkey(client):
     assert body["en_name"] == "Case"
     assert body["category_en"] == "Grammar"
     assert body["default_hotkey"] == "shift+q"
+    # should be visible in listings
+    resp_list = client.get("/api/error-types/")
+    assert resp_list.status_code == 200
+    assert any(item["id"] == body["id"] for item in resp_list.json())
 
     # Update hotkey and deactivate
     resp_update = client.put(

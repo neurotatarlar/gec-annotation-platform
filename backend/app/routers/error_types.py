@@ -56,6 +56,11 @@ def _sanitize_str(value: str | None) -> str | None:
     return cleaned if cleaned else None
 
 
+def _sanitize_description(value: str | None) -> str | None:
+    """Normalize description fields while preserving None."""
+    return _sanitize_str(value)
+
+
 @router.get("/", response_model=list[ErrorTypeRead])
 def list_error_types(
     include_inactive: bool = Query(False, description="Include inactive error types"),
@@ -94,8 +99,8 @@ def create_error_type(
     _: str = Depends(get_current_user),
 ):
     obj = ErrorType(
-        description=payload.description,
-        default_color=payload.default_color,
+        description=_sanitize_description(payload.description),
+        default_color=payload.default_color or "#f97316",
         default_hotkey=_sanitize_str(payload.default_hotkey),
         category_en=_sanitize_str(payload.category_en),
         category_tt=_sanitize_str(payload.category_tt),
@@ -120,7 +125,7 @@ def update_error_type(
     if not obj:
         raise HTTPException(status_code=404, detail="Error type not found")
     update_fields = {
-        "description": payload.description,
+        "description": _sanitize_description(payload.description),
         "default_color": payload.default_color,
         "default_hotkey": _sanitize_str(payload.default_hotkey),
         "category_en": _sanitize_str(payload.category_en),

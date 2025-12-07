@@ -612,6 +612,65 @@ describe("TokenEditor view toggles", () => {
     localStorage.clear();
   });
 
+  it("undo/redo hotkeys work even when an edit is active", async () => {
+    await renderEditor("hello world");
+    const user = userEvent.setup();
+
+    // First commit an edit so history has entries.
+    const world = await screen.findByRole("button", { name: "world" });
+    await user.click(world);
+    await waitFor(() => expect(world).toHaveAttribute("aria-pressed", "true"));
+    await user.keyboard("{Enter}");
+    const editInput = await screen.findByPlaceholderText("tokenEditor.editPlaceholder");
+    await user.clear(editInput);
+    await user.type(editInput, "planet");
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(screen.getByRole("button", { name: "planet" })).toBeInTheDocument());
+
+    // Begin another edit but hit undo while the input is active; should cancel edit and undo last change.
+    const planetBtn = screen.getByRole("button", { name: "planet" });
+    await user.click(planetBtn);
+    await user.keyboard("{Enter}");
+    const editInput2 = await screen.findByPlaceholderText("tokenEditor.editPlaceholder");
+    await user.clear(editInput2);
+    await user.type(editInput2, "globe");
+
+    fireEvent.keyDown(window, { key: "z", ctrlKey: true });
+    await waitFor(() => expect(screen.getByRole("button", { name: "world" })).toBeInTheDocument());
+    const pressedAfterUndo = screen.queryAllByRole("button").filter((el) => el.getAttribute("aria-pressed") === "true");
+    expect(pressedAfterUndo.length).toBe(0);
+    expect(screen.queryByPlaceholderText("tokenEditor.editPlaceholder")).not.toBeInTheDocument();
+
+    // Redo should reapply the prior edit.
+    fireEvent.keyDown(window, { key: "z", ctrlKey: true, shiftKey: true });
+    await waitFor(() => expect(screen.getByRole("button", { name: "planet" })).toBeInTheDocument());
+  }, 15000);
+
+  it("toolbar undo clears selection highlights", async () => {
+    await renderEditor("hello world");
+    const user = userEvent.setup();
+
+    const world = await screen.findByRole("button", { name: "world" });
+    await user.click(world);
+    await user.keyboard("{Enter}");
+    const editInput = await screen.findByPlaceholderText("tokenEditor.editPlaceholder");
+    await user.clear(editInput);
+    await user.type(editInput, "planet");
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(screen.getByRole("button", { name: "planet" })).toBeInTheDocument());
+
+    const planetBtn = screen.getByRole("button", { name: "planet" });
+    await user.click(planetBtn);
+    await waitFor(() => expect(planetBtn).toHaveAttribute("aria-pressed", "true"));
+
+    const undoButton = screen.getByTitle("tokenEditor.undo");
+    await user.click(undoButton);
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "world" })).toBeInTheDocument());
+    const pressed = screen.queryAllByRole("button").filter((el) => el.getAttribute("aria-pressed") === "true");
+    expect(pressed.length).toBe(0);
+  });
+
   it("toggles between original and corrected text panel and persists collapse", async () => {
     const base = tokenEditorReducer(createInitialHistoryState(), { type: "INIT_FROM_TEXT", text: "hello world" });
     const edited = tokenEditorReducer(base, {

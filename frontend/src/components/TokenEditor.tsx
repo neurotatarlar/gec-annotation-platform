@@ -1909,6 +1909,22 @@ const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
     setSelection({ start, end });
   };
 
+  const performUndo = () => {
+    if (editingRange) {
+      cancelEdit();
+    }
+    setSelection({ start: null, end: null });
+    dispatch({ type: "UNDO" });
+  };
+
+  const performRedo = () => {
+    if (editingRange) {
+      cancelEdit();
+    }
+    setSelection({ start: null, end: null });
+    dispatch({ type: "REDO" });
+  };
+
   // Keyboard shortcuts.
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
@@ -1920,6 +1936,15 @@ const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
       const key = event.key.toLowerCase();
       const isUndoKey = ctrlOrMeta && key === "z" && !event.shiftKey;
       const isRedoKey = ctrlOrMeta && (key === "y" || (event.shiftKey && key === "z"));
+      if (isUndoKey || isRedoKey) {
+        event.preventDefault();
+        if (isUndoKey) {
+          performUndo();
+        } else {
+          performRedo();
+        }
+        return;
+      }
       if (editingRange) {
         if (event.key === "Escape") {
           event.preventDefault();
@@ -3058,8 +3083,8 @@ const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
           <div style={workspaceStyle}>
             <div style={actionBarStyle}>
               <div style={toolbarRowStyle}>
-                {toolbarButton(t("tokenEditor.undo"), () => dispatch({ type: "UNDO" }), history.past.length === 0, "Ctrl+Z", "↺")}
-                {toolbarButton(t("tokenEditor.redo"), () => dispatch({ type: "REDO" }), history.future.length === 0, "Ctrl+Y", "↻")}
+                {toolbarButton(t("tokenEditor.undo"), performUndo, history.past.length === 0, "Ctrl+Z", "↺")}
+                {toolbarButton(t("tokenEditor.redo"), performRedo, history.future.length === 0, "Ctrl+Y", "↻")}
                 {toolbarButton(t("tokenEditor.delete"), () => {
                   if (!hasSelectionTokens) return;
                   const [s, e] = [selection.start!, selection.end!];
