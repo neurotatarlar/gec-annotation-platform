@@ -118,7 +118,7 @@ def test_next_text_allows_additional_reviews_until_required(client):
     assert body["text"]["content"] == "text A"
 
 
-def test_next_text_ignores_texts_already_assigned_to_user(client):
+def test_next_text_returns_existing_assignment_for_user(client):
     with db.SessionLocal() as session:
         text_a = session.query(TextSample).filter_by(content="text A").one()
         session.add(AnnotationTask(text_id=text_a.id, annotator_id=TEST_USER_ID, status="in_progress"))
@@ -127,8 +127,13 @@ def test_next_text_ignores_texts_already_assigned_to_user(client):
     resp = client.post("/api/texts/assignments/next", params={"category_id": 1})
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    # text A is already assigned to the current user; next should be text B
-    assert body["text"]["content"] == "text B"
+    # text A is already assigned to the current user; it should be returned again
+    assert body["text"]["content"] == "text A"
+    with db.SessionLocal() as session:
+        refreshed = session.get(TextSample, body["text"]["id"])
+        assert refreshed.locked_by_id == TEST_USER_ID
+        assert refreshed.state == "in_annotation"
+        assert refreshed.locked_at is not None
 
 
 def test_import_sets_required_annotations_and_assignment_respects_skip_states(client):

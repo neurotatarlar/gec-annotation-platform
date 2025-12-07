@@ -117,6 +117,36 @@ def get_next_text(
         AnnotationTask.annotator_id == current_user.id, AnnotationTask.status == "submitted"
     )
 
+    existing_task_row = (
+        db.query(AnnotationTask, TextSample)
+        .join(TextSample, AnnotationTask.text_id == TextSample.id)
+        .filter(
+            AnnotationTask.annotator_id == current_user.id,
+            AnnotationTask.status != "submitted",
+            TextSample.category_id == category_id,
+            TextSample.state.in_(["pending", "in_annotation"]),
+        )
+        .order_by(AnnotationTask.updated_at.desc(), AnnotationTask.id.desc())
+        .with_for_update(skip_locked=True)
+        .first()
+    )
+
+    if existing_task_row:
+        task, text = existing_task_row
+        text.locked_by_id = current_user.id
+        text.locked_at = now
+        text.state = "in_annotation"
+        if task.status != "in_progress":
+            task.status = "in_progress"
+
+        annotations = (
+            db.query(Annotation)
+            .filter(Annotation.text_id == text.id, Annotation.author_id == current_user.id)
+            .all()
+        )
+        db.commit()
+        return TextAssignmentResponse(text=text, annotations=annotations, lock_expires_at=now + LOCK_DURATION)
+
     submitted_count_subq = (
         select(func.count())
         .select_from(AnnotationTask)

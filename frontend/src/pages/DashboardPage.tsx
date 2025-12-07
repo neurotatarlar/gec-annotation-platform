@@ -45,6 +45,14 @@ const toIsoDate = (value: string, isEnd?: boolean) => {
 const combinePages = <T,>(pages: Array<{ items: T[] } | undefined>) =>
   pages?.flatMap((page) => page?.items ?? []) ?? [];
 
+const toDateTimeLocalValue = (value: string) => {
+  const iso = toIsoDate(value);
+  if (!iso) return "";
+  const date = new Date(iso);
+  const pad = (val: number) => val.toString().padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+};
+
 type DashboardFilters = {
   categories: number[];
   annotators: string[];
@@ -312,9 +320,8 @@ export const DashboardPage = () => {
       <label className="flex flex-col gap-1 text-sm text-slate-200">
         <span className="text-xs uppercase tracking-wide text-slate-400">{t("dashboard.dateFrom")}</span>
         <input
-          type="text"
-          value={dateFrom}
-          placeholder="dd/MM/yyyy hh:mm"
+          type="datetime-local"
+          value={toDateTimeLocalValue(dateFrom)}
           className="rounded-xl border border-slate-700 bg-slate-950/60 p-2 text-sm text-slate-100"
           onChange={(event) => setDateFrom(event.target.value)}
         />
@@ -322,9 +329,8 @@ export const DashboardPage = () => {
       <label className="flex flex-col gap-1 text-sm text-slate-200">
         <span className="text-xs uppercase tracking-wide text-slate-400">{t("dashboard.dateTo")}</span>
         <input
-          type="text"
-          value={dateTo}
-          placeholder="dd/MM/yyyy hh:mm"
+          type="datetime-local"
+          value={toDateTimeLocalValue(dateTo)}
           className="rounded-xl border border-slate-700 bg-slate-950/60 p-2 text-sm text-slate-100"
           onChange={(event) => setDateTo(event.target.value)}
         />
