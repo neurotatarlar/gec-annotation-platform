@@ -123,3 +123,73 @@ export interface FlaggedTextEntry {
   created_at: string;
   flag_type: string;
 }
+
+export interface AnnotatorSummary {
+  id: string;
+  username: string;
+  full_name?: string | null;
+}
+
+export interface DashboardCategorySummary {
+  id: number;
+  name: string;
+}
+
+export interface DashboardFlaggedEntry {
+  id: number;
+  flag_type: string;
+  reason?: string | null;
+  created_at: string;
+  text_id: number;
+  text_preview: string;
+  category: DashboardCategorySummary;
+  annotator: AnnotatorSummary;
+}
+
+export interface DashboardTaskEntry {
+  task_id: number;
+  text_id: number;
+  status: string;
+  updated_at: string;
+  text_preview: string;
+  category: DashboardCategorySummary;
+  annotator: AnnotatorSummary;
+}
+
+export interface PaginatedFlagged {
+  items: DashboardFlaggedEntry[];
+  next_offset?: number | null;
+}
+
+export interface PaginatedTasks {
+  items: DashboardTaskEntry[];
+  next_offset?: number | null;
+}
+
+export interface ActivityItem {
+  id: number;
+  text_id: number;
+  kind: "skip" | "trash" | "task";
+  status?: string | null;
+  occurred_at: string;
+  text_preview: string;
+  category: DashboardCategorySummary;
+  annotator: AnnotatorSummary;
+}
+
+export interface PaginatedActivity {
+  items: ActivityItem[];
+  next_offset?: number | null;
+}
+
+export interface DashboardStats {
+  total_texts: number;
+  pending_texts: number;
+  in_annotation_texts: number;
+  awaiting_review_texts: number;
+  completed_texts: number;
+  submitted_tasks: number;
+  skipped_count: number;
+  trashed_count: number;
+  last_updated: string;
+}

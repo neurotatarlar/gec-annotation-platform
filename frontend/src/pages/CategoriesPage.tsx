@@ -429,30 +429,14 @@ export const CategoriesPage = () => {
                   <span className="text-base font-semibold leading-none">{category.total_texts}</span>
                   <span>{t("categories.statTotal")}</span>
                 </span>
-                <button
-                  type="button"
-                  className="flex items-center gap-1 rounded-xl border border-violet-500/40 bg-violet-500/10 px-3 py-1 font-medium text-violet-100 transition hover:border-violet-300 hover:bg-violet-500/20"
-                  onClick={(event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    navigate(`/categories/${category.id}/flags/skip`);
-                  }}
-                >
+                <span className="flex items-center gap-1 rounded-xl border border-violet-500/30 bg-violet-500/5 px-3 py-1 font-medium text-violet-100/90">
                   <span className="text-base font-semibold leading-none">{skippedCount}</span>
                   <span>{t("categories.statSkipped")}</span>
-                </button>
-                <button
-                  type="button"
-                  className="flex items-center gap-1 rounded-xl border border-rose-500/40 bg-rose-500/10 px-3 py-1 font-medium text-rose-100 transition hover:border-rose-300 hover:bg-rose-500/20"
-                  onClick={(event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    navigate(`/categories/${category.id}/flags/trash`);
-                  }}
-                >
+                </span>
+                <span className="flex items-center gap-1 rounded-xl border border-rose-500/30 bg-rose-500/5 px-3 py-1 font-medium text-rose-100/90">
                   <span className="text-base font-semibold leading-none">{trashCount}</span>
                   <span>{t("categories.statTrash")}</span>
-                </button>
+                </span>
               </div>
               {category.description && (
                 <p className="mt-4 text-left text-sm leading-relaxed text-slate-300">{category.description}</p>

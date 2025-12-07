@@ -78,10 +78,10 @@ export const AppHeader = () => {
       <div className="flex flex-wrap items-center gap-2">
         <LanguageSwitcher />
         <Link
-          to="/history"
+          to="/dashboard"
           className="rounded-lg border border-slate-600 px-4 py-2 text-sm text-slate-100 hover:border-emerald-400 hover:text-emerald-100"
         >
-          {t("common.history")}
+          {t("dashboard.title")}
         </Link>
         <Link
           to="/settings"
