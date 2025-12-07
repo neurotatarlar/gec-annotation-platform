@@ -1,5 +1,6 @@
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 
 import { useAuthedApi } from "../api/client";
 import { useI18n } from "../context/I18nContext";
@@ -37,6 +38,7 @@ export const DashboardPage = () => {
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
   const [search, setSearch] = useState("");
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
+  const navigate = useNavigate();
 
   const { data: categories = [] } = useQuery<CategorySummary[]>({
     queryKey: ["categories"],
@@ -258,37 +260,60 @@ export const DashboardPage = () => {
 
   const renderActivityCard = (item: ActivityItem) => {
     const isFlag = item.kind === "skip" || item.kind === "trash";
-    const accent =
+    const tone =
       item.kind === "skip"
-        ? "text-violet-100"
+        ? {
+            badge: "bg-violet-500/10 text-violet-100",
+            halo: "from-violet-500/20 via-slate-900/60 to-slate-900/40"
+          }
         : item.kind === "trash"
-          ? "text-rose-100"
-          : "text-emerald-100";
+          ? {
+              badge: "bg-rose-500/10 text-rose-100",
+              halo: "from-rose-500/20 via-slate-900/60 to-slate-900/40"
+            }
+          : {
+              badge: "bg-emerald-500/10 text-emerald-100",
+              halo: "from-emerald-500/20 via-slate-900/60 to-slate-900/40"
+            };
     const badge =
       item.kind === "skip"
         ? t("dashboard.flaggedSkip")
         : item.kind === "trash"
           ? t("dashboard.flaggedTrash")
           : item.status || "task";
+    const focusAction =
+      item.kind === "skip" ? "skip" : item.kind === "trash" ? "trash" : item.status === "submitted" ? "submit" : null;
+
     return (
       <article
         key={`${item.kind}-${item.id}-${item.occurred_at}`}
-        className="rounded-2xl border border-slate-800/70 bg-slate-950/50 p-4 text-right"
+        className="overflow-hidden rounded-2xl border border-slate-800/70 bg-gradient-to-br from-slate-950 via-slate-900/70 to-slate-950 text-right shadow-[0_10px_40px_-25px_rgba(0,0,0,0.7)]"
       >
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="text-left">
-            <p className={`text-sm font-semibold ${accent}`}>
-              #{item.text_id} · {badge}
-            </p>
-            <p className="text-xs text-slate-400">{new Date(item.occurred_at).toLocaleString()}</p>
+        <div className={`h-1 w-full bg-gradient-to-r ${tone.halo}`} aria-hidden />
+        <div className="flex flex-wrap items-center justify-between gap-3 px-4 pt-4">
+          <div className="flex flex-wrap items-center gap-2 text-left">
+            <span className={`rounded-lg px-3 py-1 text-[0.7rem] font-semibold uppercase ${tone.badge}`}>
+              {badge}
+            </span>
+            <span className="rounded-lg bg-slate-800/60 px-3 py-1 text-xs font-semibold text-slate-100">{item.category.name}</span>
+            <span className="rounded-lg bg-slate-800/40 px-3 py-1 text-xs text-slate-200">
+              {item.annotator.full_name || item.annotator.username}
+            </span>
+            <span className="rounded-lg bg-slate-800/40 px-3 py-1 text-[0.7rem] text-slate-400">
+              {new Date(item.occurred_at).toLocaleString()}
+            </span>
           </div>
-          <div className="flex flex-col text-right text-xs text-slate-300">
-            <span className="font-semibold text-slate-100">{item.category.name}</span>
-            <span>{item.annotator.full_name || item.annotator.username}</span>
-            {isFlag && item.status && <span className="text-slate-400">{item.status}</span>}
-          </div>
+          <button
+            type="button"
+            onClick={() => navigate(`/annotate/${item.text_id}${focusAction ? `?focusAction=${focusAction}` : ""}`)}
+            className="rounded-full border border-emerald-400/60 bg-emerald-500/10 px-3 py-1 text-xs font-semibold text-emerald-100 transition hover:border-emerald-300 hover:bg-emerald-500/20"
+          >
+            {t("history.open")}
+          </button>
         </div>
-        <p className="mt-3 text-sm leading-relaxed text-slate-200">{item.text_preview || "…"}</p>
+        <p className="mt-3 border-t border-slate-800/60 bg-slate-950/40 px-4 py-3 text-left text-sm leading-relaxed text-slate-200">
+          {item.text_preview || "…"}
+        </p>
       </article>
     );
   };

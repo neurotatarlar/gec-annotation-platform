@@ -1378,11 +1378,13 @@ export const TokenEditor: React.FC<{
   initialText: string;
   textId: number;
   categoryId: number;
+  highlightAction?: "skip" | "trash" | "submit";
   onSaveStatusChange?: (status: SaveStatus) => void;
 }> = ({
   initialText,
   textId,
   categoryId,
+  highlightAction,
   onSaveStatusChange,
 }) => {
   const { t, locale } = useI18n();
@@ -3113,6 +3115,7 @@ const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
                   <button
                     style={{
                       ...secondaryActionStyle,
+                      ...(highlightAction === "skip" ? { boxShadow: "0 0 0 2px rgba(139,92,246,0.5)", borderColor: "#a78bfa" } : {}),
                       opacity: isSkipping ? 0.6 : 1,
                       cursor: isSkipping ? "not-allowed" : "pointer",
                     }}
@@ -3124,6 +3127,7 @@ const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
                   <button
                     style={{
                       ...dangerActionStyle,
+                      ...(highlightAction === "trash" ? { boxShadow: "0 0 0 2px rgba(248,113,113,0.5)", borderColor: "#fb7185" } : {}),
                       opacity: isTrashing ? 0.6 : 1,
                       cursor: isTrashing ? "not-allowed" : "pointer",
                     }}
@@ -3136,6 +3140,7 @@ const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
                   <button
                     style={{
                       ...primaryActionStyle,
+                      ...(highlightAction === "submit" ? { boxShadow: "0 0 0 2px rgba(74,222,128,0.6)", borderColor: "#34d399" } : {}),
                       opacity: isSubmitting || hasUnassignedCorrections ? 0.6 : 1,
                       cursor: isSubmitting || hasUnassignedCorrections ? "not-allowed" : "pointer",
                     }}

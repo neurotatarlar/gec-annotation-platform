@@ -98,8 +98,11 @@ describe("DashboardPage", () => {
 
     expect(await screen.findByText("dashboard.title")).toBeInTheDocument();
     expect(await screen.findByText("10")).toBeInTheDocument();
-    expect(await screen.findByText("#101 · dashboard.flaggedSkip")).toBeInTheDocument();
-    expect(await screen.findByText("#102 · submitted")).toBeInTheDocument();
+    const badge = await screen.findAllByText("dashboard.flaggedSkip");
+    expect(badge.length).toBeGreaterThan(0);
+    const openButtons = await screen.findAllByText("history.open");
+    expect(openButtons.length).toBeGreaterThan(0);
+    expect(await screen.findByText("submitted text")).toBeInTheDocument();
 
     const loadMoreButtons = screen.queryAllByText("dashboard.loadMore");
     expect(loadMoreButtons.length).toBeGreaterThanOrEqual(0);
