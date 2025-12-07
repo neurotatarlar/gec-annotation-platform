@@ -24,7 +24,11 @@ def _load_category_stats(db: Session, category_ids: list[int] | None = None):
         func.count(TextSample.id).label("total"),
         func.sum(
             case(
-                (submitted_count_expr < TextSample.required_annotations, 1),
+                (
+                    (submitted_count_expr < TextSample.required_annotations)
+                    & ~TextSample.state.in_(["skipped", "trash"]),
+                    1,
+                ),
                 else_=0,
             )
         ).label("remaining"),

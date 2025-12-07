@@ -10,7 +10,7 @@ os.environ.setdefault("SKIP_CREATE_ALL", "1")
 
 import app.database as db
 from app.main import app
-from app.models import Base, Category, User
+from app.models import AnnotationTask, Base, Category, TextSample, User
 from app.services.auth import get_current_user, get_db
 
 
@@ -37,11 +37,15 @@ def override_get_current_user():
 
 @pytest.fixture(autouse=True)
 def setup_db():
-    from app.models import TextSample  # import here to avoid circular import in test discovery
-
     db.configure_engine("sqlite:///:memory:")
-    Base.metadata.drop_all(bind=db.engine, tables=[User.__table__, Category.__table__, TextSample.__table__])
-    Base.metadata.create_all(bind=db.engine, tables=[User.__table__, Category.__table__, TextSample.__table__])
+    Base.metadata.drop_all(
+        bind=db.engine,
+        tables=[User.__table__, Category.__table__, TextSample.__table__, AnnotationTask.__table__],
+    )
+    Base.metadata.create_all(
+        bind=db.engine,
+        tables=[User.__table__, Category.__table__, TextSample.__table__, AnnotationTask.__table__],
+    )
 
     with db.SessionLocal() as session:
         session.add(
@@ -58,7 +62,10 @@ def setup_db():
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_current_user] = override_get_current_user
     yield
-    Base.metadata.drop_all(bind=db.engine, tables=[User.__table__, Category.__table__, TextSample.__table__])
+    Base.metadata.drop_all(
+        bind=db.engine,
+        tables=[User.__table__, Category.__table__, TextSample.__table__, AnnotationTask.__table__],
+    )
     app.dependency_overrides.clear()
 
 
@@ -97,3 +104,39 @@ def test_update_category_hides_and_unhides(client):
     resp_show = client.put(f"/api/categories/{cat_id}", json={"is_hidden": False})
     assert resp_show.status_code == 200
     assert resp_show.json()["is_hidden"] is False
+
+
+def test_remaining_texts_excludes_skipped_and_trashed(client):
+    other_user = User(
+        id=uuid.uuid4(),
+        username="second",
+        password_hash="x",
+        role="annotator",
+        is_active=True,
+    )
+    with db.SessionLocal() as session:
+        session.add(other_user)
+        session.commit()
+
+        cat = Category(name="Demo", description=None)
+        session.add(cat)
+        session.commit()
+        session.refresh(cat)
+
+        text_pending = TextSample(category_id=cat.id, content="p", required_annotations=2, state="pending")
+        text_trash = TextSample(category_id=cat.id, content="t", required_annotations=2, state="trash")
+        text_submitted = TextSample(category_id=cat.id, content="s", required_annotations=1, state="pending")
+        text_skipped = TextSample(category_id=cat.id, content="k", required_annotations=2, state="skipped")
+        session.add_all([text_pending, text_trash, text_submitted, text_skipped])
+        session.commit()
+        session.refresh(text_submitted)
+
+        session.add(
+            AnnotationTask(text_id=text_submitted.id, annotator_id=other_user.id, status="submitted")
+        )
+        session.commit()
+
+    resp = client.get("/api/categories/")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data[0]["remaining_texts"] == 1
