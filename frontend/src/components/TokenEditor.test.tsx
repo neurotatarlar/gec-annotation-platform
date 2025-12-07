@@ -280,6 +280,18 @@ describe("tokenEditorReducer core flows", () => {
     });
   });
 
+  it("clears tab pressed state when collapsing the preview panel", async () => {
+    localStorage.clear();
+    await renderEditor("hello world");
+    const toggle = await screen.findByTestId("text-panel-toggle");
+    const correctedTab = await screen.findByRole("button", { name: /tokeneditor\.corrected/i });
+    expect(correctedTab).toHaveAttribute("aria-pressed", "true");
+    await userEvent.click(toggle);
+    expect(correctedTab).toHaveAttribute("aria-pressed", "false");
+    await userEvent.click(toggle);
+    expect(correctedTab).toHaveAttribute("aria-pressed", "true");
+  });
+
   it("buildHotkeyMap keeps active hotkeys, supports modifiers, and normalizes order plus code variants", () => {
     const errorTypes: any[] = [
       { id: 1, is_active: true, default_hotkey: "A" },

@@ -354,23 +354,33 @@ export const CategoriesPage = () => {
         const renderCard = (category: CategorySummary) => {
           const skippedCount = skippedCounts[category.id] ?? 0;
           const trashCount = trashedCounts[category.id] ?? 0;
+          const hasPendingTexts = category.remaining_texts > 0;
 
           return (
             <article
               key={category.id}
-              role="button"
-              tabIndex={0}
-              onClick={() => handleRequest(category)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" || event.key === " ") {
-                  event.preventDefault();
-                  handleRequest(category);
-                }
-              }}
-              className="cursor-pointer rounded-2xl border border-slate-800 bg-slate-900/80 p-6 transition hover:border-emerald-400 hover:bg-slate-900/90 focus:outline focus:outline-2 focus:outline-emerald-400"
+              role={hasPendingTexts ? "button" : undefined}
+              tabIndex={hasPendingTexts ? 0 : -1}
+              aria-disabled={!hasPendingTexts}
+              onClick={hasPendingTexts ? () => handleRequest(category) : undefined}
+              onKeyDown={
+                hasPendingTexts
+                  ? (event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        handleRequest(category);
+                      }
+                    }
+                  : undefined
+              }
+              className={
+                hasPendingTexts
+                  ? "cursor-pointer rounded-2xl border border-slate-800 bg-slate-900/80 p-6 transition hover:border-emerald-400 hover:bg-slate-900/90 focus:outline focus:outline-2 focus:outline-emerald-400"
+                  : "rounded-2xl border border-dashed border-slate-800/60 bg-slate-800/70 p-6 text-slate-400/90"
+              }
             >
               <div className="flex items-start justify-between text-left">
-                <div>
+                <div className="flex flex-col gap-2">
                   <h2 className="text-lg font-semibold">{category.name}</h2>
                 </div>
                 <div className="flex gap-2">

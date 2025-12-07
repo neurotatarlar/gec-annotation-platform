@@ -1,5 +1,5 @@
 import React from "react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
@@ -20,6 +20,12 @@ vi.mock("../api/client", () => ({
     put: mockPut,
   }),
 }));
+
+beforeEach(() => {
+  mockGet.mockReset();
+  mockPost.mockReset();
+  mockPut.mockReset();
+});
 
 const renderPage = (categories: any[]) => {
   mockGet.mockResolvedValueOnce({ data: categories });
@@ -101,5 +107,42 @@ describe("CategoriesPage visibility", () => {
     const hideBtn = screen.getByText("categories.hideCategory");
     fireEvent.click(hideBtn);
     await waitFor(() => expect(mockPut).toHaveBeenCalled());
+  });
+});
+
+describe("CategoriesPage interactions", () => {
+  it("disables requesting a text when the category has none pending", async () => {
+    const categories = [
+      { id: 1, name: "Empty", description: null, is_hidden: false, total_texts: 0, remaining_texts: 0, in_progress_texts: 0, awaiting_review_texts: 0 },
+    ];
+    renderPage(categories);
+
+    const title = await screen.findByText("Empty");
+    const card = title.closest("article");
+    expect(card).not.toBeNull();
+    expect(card).toHaveAttribute("aria-disabled", "true");
+    expect(card).toHaveAttribute("tabindex", "-1");
+    expect(card).not.toHaveAttribute("role");
+    expect(card?.getAttribute("class")).toContain("bg-slate-800/70");
+
+    fireEvent.click(card as Element);
+    expect(mockPost).not.toHaveBeenCalled();
+  });
+
+  it("allows requesting a text when the category has pending texts", async () => {
+    mockPost.mockResolvedValueOnce({ data: { text: { id: 99 } } });
+    const categories = [
+      { id: 2, name: "Active", description: null, is_hidden: false, total_texts: 5, remaining_texts: 2, in_progress_texts: 0, awaiting_review_texts: 0 },
+    ];
+    renderPage(categories);
+
+    const title = await screen.findByText("Active");
+    const card = title.closest("article");
+    expect(card).not.toBeNull();
+    expect(card).toHaveAttribute("role", "button");
+    expect(card).toHaveAttribute("tabindex", "0");
+
+    fireEvent.click(card as Element);
+    await waitFor(() => expect(mockPost).toHaveBeenCalled());
   });
 });
