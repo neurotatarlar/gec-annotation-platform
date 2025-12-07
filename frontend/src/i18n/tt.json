@@ -16,7 +16,7 @@
     "pickCorrectionHint": "Төзәтүне сайлагыз",
     "removeToken": "Бетерү",
     "selectPrompt": "Токен һәм хата төрен сайлагыз",
-    "skipConfirm": "Дәвам ми",
+    "skipConfirm": "Дәвам ит",
     "skipModalTitle": "Бу текстны узып китү",
     "skipPlaceholder": "Сәбәп (ихтыяри)",
     "skipSubmitting": "Узып китәм...",
@@ -93,7 +93,7 @@
     "completedCount": "{{count}} тәмамланган",
     "pending": "Тамгалауны көтә",
     "inAnnotation": "{{count}} эшкәртелә",
-    "awaiting": "Тикшерү көтә",
+    "awaiting": "Тикшерүне көтә",
     "submittedCount": "{{count}} томаланган",
     "flags": "Калдырылган",
     "flagBreakdown": "Үтеп кителгән: {{skip}}, Чүп: {{trash}}",
@@ -116,7 +116,9 @@
     "sortAnnotator": "Тамгадар",
     "sortTextId": "Текст ID",
     "orderDesc": "Башта яңалар",
-    "orderAsc": "Башта искеләр"
+    "orderAsc": "Башта искеләр",
+    "searchText": "Эзләү",
+    "searchPlaceholder": "Сүз кисәген табырга..."
   },
   "flags": {
     "created": "Тамгаланган {{date}}",

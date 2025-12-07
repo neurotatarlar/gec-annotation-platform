@@ -12,6 +12,12 @@ export const HistoryPage = () => {
   const { t } = useI18n();
   const navigate = useNavigate();
 
+  const formatDateTime = (iso: string) => {
+    const date = new Date(iso);
+    const pad = (value: number) => value.toString().padStart(2, "0");
+    return `${pad(date.getDate())}/${pad(date.getMonth() + 1)}/${date.getFullYear()} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  };
+
   const {
     data: items = [],
     isLoading,
@@ -62,7 +68,7 @@ export const HistoryPage = () => {
                     <p className="text-sm font-semibold text-slate-100">
                       #{item.text_id} · {item.status}
                     </p>
-                    <p className="text-xs text-slate-500">{new Date(item.updated_at).toLocaleString()}</p>
+                    <p className="text-xs text-slate-500">{formatDateTime(item.updated_at)}</p>
                   </div>
                   <button
                     className="rounded-lg border border-emerald-400/50 px-3 py-1 text-xs text-emerald-100"

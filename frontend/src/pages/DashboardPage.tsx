@@ -13,6 +13,7 @@ import {
 } from "../types";
 
 const PAGE_SIZE = 30;
+const storageKey = "dashboardFilters";
 
 const toIsoDate = (value: string, isEnd?: boolean) => {
   if (!value) return undefined;
@@ -23,22 +24,99 @@ const toIsoDate = (value: string, isEnd?: boolean) => {
 const combinePages = <T,>(pages: Array<{ items: T[] } | undefined>) =>
   pages?.flatMap((page) => page?.items ?? []) ?? [];
 
+type DashboardFilters = {
+  categories: number[];
+  annotators: string[];
+  dateFrom: string;
+  dateTo: string;
+  showSkip: boolean;
+  showTrash: boolean;
+  showSubmitted: boolean;
+  sortField: string;
+  sortOrder: "asc" | "desc";
+  search: string;
+};
+
+const defaultFilters: DashboardFilters = {
+  categories: [],
+  annotators: [],
+  dateFrom: "",
+  dateTo: "",
+  showSkip: true,
+  showTrash: true,
+  showSubmitted: true,
+  sortField: "occurred_at",
+  sortOrder: "desc",
+  search: ""
+};
+
+const loadPersistedFilters = (): DashboardFilters | null => {
+  try {
+    const raw = localStorage.getItem(storageKey);
+    if (!raw) {
+      return null;
+    }
+    const parsed = JSON.parse(raw);
+    return {
+      categories: parsed.categories ?? [],
+      annotators: parsed.annotators ?? [],
+      dateFrom: parsed.dateFrom ?? "",
+      dateTo: parsed.dateTo ?? "",
+      showSkip: parsed.showSkip ?? true,
+      showTrash: parsed.showTrash ?? true,
+      showSubmitted: parsed.showSubmitted ?? true,
+      sortField: parsed.sortField ?? "occurred_at",
+      sortOrder: parsed.sortOrder ?? "desc",
+      search: parsed.search ?? ""
+    };
+  } catch {
+    return null;
+  }
+};
+
 export const DashboardPage = () => {
   const api = useAuthedApi();
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
+  const persisted = useMemo(() => ({ ...defaultFilters, ...(loadPersistedFilters() ?? {}) }), []);
 
-  const [selectedCategories, setSelectedCategories] = useState<number[]>([]);
-  const [selectedAnnotators, setSelectedAnnotators] = useState<string[]>([]);
-  const [dateFrom, setDateFrom] = useState("");
-  const [dateTo, setDateTo] = useState("");
-  const [showSkip, setShowSkip] = useState(true);
-  const [showTrash, setShowTrash] = useState(true);
-  const [showSubmitted, setShowSubmitted] = useState(true);
-  const [sortField, setSortField] = useState("occurred_at");
-  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
-  const [search, setSearch] = useState("");
+  const formatDateTime = (iso: string) => {
+    const date = new Date(iso);
+    const pad = (value: number) => value.toString().padStart(2, "0");
+    return `${pad(date.getDate())}/${pad(date.getMonth() + 1)}/${date.getFullYear()} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  };
+
+  const [selectedCategories, setSelectedCategories] = useState<number[]>(persisted.categories);
+  const [selectedAnnotators, setSelectedAnnotators] = useState<string[]>(persisted.annotators);
+  const [dateFrom, setDateFrom] = useState(persisted.dateFrom);
+  const [dateTo, setDateTo] = useState(persisted.dateTo);
+  const [showSkip, setShowSkip] = useState(persisted.showSkip);
+  const [showTrash, setShowTrash] = useState(persisted.showTrash);
+  const [showSubmitted, setShowSubmitted] = useState(persisted.showSubmitted);
+  const [sortField, setSortField] = useState(persisted.sortField);
+  const [sortOrder, setSortOrder] = useState<"asc" | "desc">(persisted.sortOrder);
+  const [search, setSearch] = useState(persisted.search);
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
   const navigate = useNavigate();
+
+  useEffect(() => {
+    const payload = {
+      categories: selectedCategories,
+      annotators: selectedAnnotators,
+      dateFrom,
+      dateTo,
+      showSkip,
+      showTrash,
+      showSubmitted,
+      sortField,
+      sortOrder,
+      search
+    };
+    try {
+      localStorage.setItem(storageKey, JSON.stringify(payload));
+    } catch {
+      // ignore
+    }
+  }, [selectedCategories, selectedAnnotators, dateFrom, dateTo, showSkip, showTrash, showSubmitted, sortField, sortOrder, search]);
 
   const { data: categories = [] } = useQuery<CategorySummary[]>({
     queryKey: ["categories"],
@@ -90,6 +168,8 @@ export const DashboardPage = () => {
       sortField,
       sortOrder
     ],
+    initialPageParam: 0,
+    keepPreviousData: true,
     getNextPageParam: (last) => last?.next_offset ?? undefined,
     queryFn: async ({ pageParam = 0 }) => {
       const kinds: string[] = [];
@@ -99,6 +179,10 @@ export const DashboardPage = () => {
 
       const taskStatuses: string[] = [];
       if (showSubmitted) taskStatuses.push("submitted");
+
+       if (kinds.length === 0) {
+         return { items: [], next_offset: null };
+       }
 
       const response = await api.get("/api/dashboard/activity", {
         params: {
@@ -116,24 +200,39 @@ export const DashboardPage = () => {
     }
   });
 
-  const activityItems = combinePages<ActivityItem>(activityQuery.data?.pages);
+  const [activityItems, setActivityItems] = useState<ActivityItem[]>([]);
+  const combinedActivityItems = useMemo(
+    () => combinePages<ActivityItem>(activityQuery.data?.pages),
+    [activityQuery.data]
+  );
+
+  useEffect(() => {
+    if (combinedActivityItems.length > 0 || (!activityQuery.isFetching && activityQuery.data)) {
+      setActivityItems(combinedActivityItems);
+    }
+  }, [combinedActivityItems, activityQuery.isFetching, activityQuery.data]);
+
+  const isInitialLoading = activityQuery.isLoading && activityItems.length === 0;
 
   useEffect(() => {
     if (!activityQuery.hasNextPage || activityQuery.isFetchingNextPage) return;
     const element = loadMoreRef.current;
     if (!element) return;
 
-    const observer = new IntersectionObserver((entries) => {
-      entries.forEach((entry) => {
-        if (entry.isIntersecting && activityQuery.hasNextPage && !activityQuery.isFetchingNextPage) {
-          activityQuery.fetchNextPage();
-        }
-      });
-    });
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting && activityQuery.hasNextPage && !activityQuery.isFetchingNextPage) {
+            activityQuery.fetchNextPage();
+          }
+        });
+      },
+      { rootMargin: "200px 0px" }
+    );
 
     observer.observe(element);
     return () => observer.disconnect();
-  }, [activityQuery]);
+  }, [activityQuery.hasNextPage, activityQuery.isFetchingNextPage, activityQuery.fetchNextPage]);
 
   const renderChipGroup = <T extends string | number>({
     label,
@@ -262,19 +361,10 @@ export const DashboardPage = () => {
     const isFlag = item.kind === "skip" || item.kind === "trash";
     const tone =
       item.kind === "skip"
-        ? {
-            badge: "bg-violet-500/10 text-violet-100",
-            halo: "from-violet-500/20 via-slate-900/60 to-slate-900/40"
-        }
-      : item.kind === "trash"
-        ? {
-            badge: "bg-rose-500/10 text-rose-100",
-            halo: "from-rose-500/20 via-slate-900/60 to-slate-900/40"
-            }
-          : {
-              badge: "bg-emerald-500/10 text-emerald-100",
-              halo: "from-emerald-500/20 via-slate-900/60 to-slate-900/40"
-            };
+        ? { badge: "bg-violet-500/10 text-violet-100" }
+        : item.kind === "trash"
+          ? { badge: "bg-rose-500/10 text-rose-100" }
+          : { badge: "bg-emerald-500/10 text-emerald-100" };
     const badge =
       item.kind === "skip"
         ? t("dashboard.flaggedSkip")
@@ -304,7 +394,7 @@ export const DashboardPage = () => {
         </div>
         <div className="table-cell px-3 py-2 align-middle">
           <span className="rounded-lg bg-slate-800/40 px-3 py-1 text-[0.7rem] text-slate-400 whitespace-nowrap">
-            {new Date(item.occurred_at).toLocaleString()}
+            {formatDateTime(item.occurred_at)}
           </span>
         </div>
         <div className="table-cell px-3 py-2 align-middle">
@@ -333,7 +423,9 @@ export const DashboardPage = () => {
           </div>
           {stats && (
             <p className="text-xs text-slate-500">
-              {t("dashboard.lastUpdated", { date: new Date(stats.last_updated).toLocaleTimeString() })}
+          {t("dashboard.lastUpdated", {
+            date: formatDateTime(stats.last_updated)
+          })}
             </p>
           )}
         </div>
@@ -457,21 +549,13 @@ export const DashboardPage = () => {
           })}
         </div>
         <div className="mt-4 space-y-3">
-          {activityQuery.isLoading ? (
+          {isInitialLoading ? (
             <p className="text-sm text-slate-300">{t("common.loading")}</p>
           ) : activityItems.length === 0 ? (
             <p className="text-sm text-slate-300">{t("dashboard.empty")}</p>
           ) : (
             <div className="overflow-hidden rounded-xl border border-slate-800/60">
               <div className="table w-full border-collapse">
-                <div className="table-row bg-slate-900/70 text-[0.7rem] uppercase tracking-wide text-slate-400">
-                  <div className="table-cell px-3 py-2 font-semibold">{t("dashboard.flaggedSkip")}</div>
-                  <div className="table-cell px-3 py-2 font-semibold">{t("dashboard.categories")}</div>
-                  <div className="table-cell px-3 py-2 font-semibold">{t("dashboard.annotators")}</div>
-                  <div className="table-cell px-3 py-2 font-semibold">{t("dashboard.dateFrom")}</div>
-                  <div className="table-cell px-3 py-2 font-semibold">{t("dashboard.subtitle")}</div>
-                  <div className="table-cell px-3 py-2" />
-                </div>
                 {activityItems.map((item, index) => renderActivityCard(item, index))}
               </div>
             </div>

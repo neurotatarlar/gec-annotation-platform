@@ -16,6 +16,12 @@ export const FlaggedTextsPage = () => {
   const normalizedFlag = flagType === "trash" ? "trash" : "skip";
   const numericCategoryId = Number(categoryId);
 
+  const formatDateTime = (iso: string) => {
+    const date = new Date(iso);
+    const pad = (value: number) => value.toString().padStart(2, "0");
+    return `${pad(date.getDate())}/${pad(date.getMonth() + 1)}/${date.getFullYear()} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  };
+
   const { data: categories } = useQuery<CategorySummary[]>({
     queryKey: ["categories"],
     queryFn: async () => {
@@ -133,7 +139,7 @@ export const FlaggedTextsPage = () => {
                   <div className="text-right">
                     <p className="text-sm text-slate-500">
                       {t("flags.created", {
-                        date: new Date(entry.created_at).toLocaleString()
+                        date: formatDateTime(entry.created_at)
                       })}
                     </p>
                     {entry.reason && (
