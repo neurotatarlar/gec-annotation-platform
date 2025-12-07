@@ -164,7 +164,7 @@ describe("DashboardPage", () => {
       expect(last?.query).toBe("abc");
     });
 
-    const submittedToggle = screen.getByText("dashboard.submittedTitle");
+    const submittedToggle = screen.getByRole("button", { name: "dashboard.submittedTitle" });
     fireEvent.click(submittedToggle);
     await waitFor(() => {
       const last = activityCalls[activityCalls.length - 1];
@@ -263,7 +263,7 @@ describe("DashboardPage", () => {
     fireEvent.click(skipBtn);
     fireEvent.click(trashBtn);
     const beforeFinal = activityCalls.length;
-    fireEvent.click(screen.getByText("dashboard.submittedTitle"));
+    fireEvent.click(screen.getByRole("button", { name: "dashboard.submittedTitle" }));
 
     await waitFor(() => {
       expect(activityCalls.length).toBe(beforeFinal);

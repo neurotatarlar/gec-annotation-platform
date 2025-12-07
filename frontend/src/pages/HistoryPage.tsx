@@ -18,6 +18,12 @@ export const HistoryPage = () => {
     return `${pad(date.getDate())}/${pad(date.getMonth() + 1)}/${date.getFullYear()} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
   };
 
+  const formatStatusLabel = (status: string | null | undefined) => {
+    const normalized = (status ?? "").toString().trim().toLowerCase();
+    if (normalized === "submitted") return t("dashboard.submittedTitle");
+    return status ?? "task";
+  };
+
   const {
     data: items = [],
     isLoading,
@@ -66,7 +72,7 @@ export const HistoryPage = () => {
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="text-left">
                     <p className="text-sm font-semibold text-slate-100">
-                      #{item.text_id} · {item.status}
+                      #{item.text_id} · {formatStatusLabel(item.status)}
                     </p>
                     <p className="text-xs text-slate-500">{formatDateTime(item.updated_at)}</p>
                   </div>

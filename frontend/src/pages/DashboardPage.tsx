@@ -17,8 +17,29 @@ const storageKey = "dashboardFilters";
 
 const toIsoDate = (value: string, isEnd?: boolean) => {
   if (!value) return undefined;
-  const suffix = isEnd ? "T23:59:59.999Z" : "T00:00:00.000Z";
-  return `${value}${suffix}`;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+
+  const hasTime = trimmed.includes("T") || /\d{1,2}:\d{2}/.test(trimmed);
+  const isIsoLike = /^\d{4}-\d{2}-\d{2}/.test(trimmed) && !trimmed.includes("/");
+
+  if (isIsoLike) {
+    const date = new Date(trimmed);
+    if (Number.isNaN(date.getTime())) return undefined;
+    if (!hasTime) {
+      date.setHours(isEnd ? 23 : 0, isEnd ? 59 : 0, isEnd ? 59 : 0, isEnd ? 999 : 0);
+    }
+    return date.toISOString();
+  }
+
+  const [datePart, timePartRaw] = trimmed.split(/\s+/);
+  const [day, month, year] = datePart.split(/[./-]/).map(Number);
+  if (!day || !month || !year) return undefined;
+  const [hour = 0, minute = 0] = (timePartRaw || "").split(":").map((v) => Number(v || 0));
+
+  const date = new Date(Date.UTC(year, month - 1, day, hour, minute, isEnd ? 59 : 0, isEnd ? 999 : 0));
+  if (Number.isNaN(date.getTime())) return undefined;
+  return date.toISOString();
 };
 
 const combinePages = <T,>(pages: Array<{ items: T[] } | undefined>) =>
@@ -48,6 +69,13 @@ const defaultFilters: DashboardFilters = {
   sortField: "occurred_at",
   sortOrder: "desc",
   search: ""
+};
+
+const formatStatusLabel = (status: string | null | undefined, t: (k: string, params?: any) => string) => {
+  const normalized = (status ?? "").toString().trim().toLowerCase();
+  if (!normalized) return "task";
+  if (normalized === "submitted") return t("dashboard.submittedTitle");
+  return status ?? "task";
 };
 
 const loadPersistedFilters = (): DashboardFilters | null => {
@@ -284,8 +312,9 @@ export const DashboardPage = () => {
       <label className="flex flex-col gap-1 text-sm text-slate-200">
         <span className="text-xs uppercase tracking-wide text-slate-400">{t("dashboard.dateFrom")}</span>
         <input
-          type="date"
+          type="text"
           value={dateFrom}
+          placeholder="dd/MM/yyyy hh:mm"
           className="rounded-xl border border-slate-700 bg-slate-950/60 p-2 text-sm text-slate-100"
           onChange={(event) => setDateFrom(event.target.value)}
         />
@@ -293,8 +322,9 @@ export const DashboardPage = () => {
       <label className="flex flex-col gap-1 text-sm text-slate-200">
         <span className="text-xs uppercase tracking-wide text-slate-400">{t("dashboard.dateTo")}</span>
         <input
-          type="date"
+          type="text"
           value={dateTo}
+          placeholder="dd/MM/yyyy hh:mm"
           className="rounded-xl border border-slate-700 bg-slate-950/60 p-2 text-sm text-slate-100"
           onChange={(event) => setDateTo(event.target.value)}
         />
@@ -358,7 +388,6 @@ export const DashboardPage = () => {
   );
 
   const renderActivityCard = (item: ActivityItem, index: number) => {
-    const isFlag = item.kind === "skip" || item.kind === "trash";
     const tone =
       item.kind === "skip"
         ? { badge: "bg-violet-500/10 text-violet-100" }
@@ -370,7 +399,7 @@ export const DashboardPage = () => {
         ? t("dashboard.flaggedSkip")
         : item.kind === "trash"
           ? t("dashboard.flaggedTrash")
-          : item.status || "task";
+          : formatStatusLabel(item.status, t);
     const focusAction =
       item.kind === "skip" ? "skip" : item.kind === "trash" ? "trash" : item.status === "submitted" ? "submit" : null;
 
