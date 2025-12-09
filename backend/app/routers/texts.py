@@ -2,10 +2,12 @@ import hashlib
 import logging
 from datetime import datetime, timedelta, timezone
 from itertools import combinations
+from typing import Iterable
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import or_, select, func
-from sqlalchemy.orm import Session
+from fastapi.responses import PlainTextResponse
+from sqlalchemy import func, or_, select
+from sqlalchemy.orm import Session, joinedload
 from pydantic import BaseModel
 
 from ..models import Annotation, AnnotationTask, AnnotationVersion, Category, CrossValidationResult, SkippedText, TextSample
@@ -37,6 +39,17 @@ def _sha256_text(text: str) -> str:
 def _sha256_tokens(tokens: list[str]) -> str:
     joined = "\u241f".join(tokens)  # unit separator to minimize collision with token text
     return _sha256_text(joined)
+
+
+def _parse_int_list(raw: str | None) -> list[int]:
+    if not raw:
+        return []
+    parsed: list[int] = []
+    for chunk in raw.split(","):
+        chunk = chunk.strip()
+        if chunk.isdigit():
+            parsed.append(int(chunk))
+    return parsed
 
 
 @router.post("/import", response_model=TextImportResponse, status_code=status.HTTP_201_CREATED)
@@ -437,6 +450,13 @@ def submit_annotations(
 
     text.locked_by_id = None
     text.locked_at = None
+    # Clear any previous skip/trash markers for this annotator so the latest
+    # state (submission) is exclusive going forward.
+    (
+        db.query(SkippedText)
+        .filter(SkippedText.text_id == text_id, SkippedText.annotator_id == current_user.id)
+        .delete(synchronize_session=False)
+    )
 
     completed_count = (
         db.query(AnnotationTask)
@@ -446,6 +466,9 @@ def submit_annotations(
     if completed_count >= text.required_annotations:
         text.state = "awaiting_cross_validation"
         _queue_cross_validation(db=db, text_id=text_id)
+    else:
+        # Return the text to the queue for other annotators if more submissions are needed.
+        text.state = "pending"
     db.commit()
     return {"status": "submitted"}
 
@@ -460,6 +483,17 @@ def _flag_text(
     text = db.get(TextSample, text_id)
     if not text:
         raise HTTPException(status_code=404, detail="Text not found")
+
+    # Remove opposite flag types for this user/text to keep the latest flag exclusive.
+    (
+        db.query(SkippedText)
+        .filter(
+            SkippedText.text_id == text_id,
+            SkippedText.annotator_id == current_user.id,
+            SkippedText.flag_type != flag_type,
+        )
+        .delete(synchronize_session=False)
+    )
 
     skip = (
         db.query(SkippedText)
@@ -485,6 +519,14 @@ def _flag_text(
     if text.locked_by_id == current_user.id:
         text.locked_by_id = None
         text.locked_at = None
+
+    task = (
+        db.query(AnnotationTask)
+        .filter(AnnotationTask.text_id == text_id, AnnotationTask.annotator_id == current_user.id)
+        .one_or_none()
+    )
+    if task:
+        task.status = flag_type
 
     # Make the text unavailable for further assignment until restored.
     text.locked_by_id = None
@@ -628,6 +670,117 @@ def list_annotation_history(
             )
         )
     return history
+
+
+def _resolve_label(ann: Annotation) -> str:
+    if ann.error_type:
+        return (
+            ann.error_type.en_name
+            or ann.error_type.tt_name
+            or ann.error_type.category_en
+            or ann.error_type.category_tt
+            or "OTHER"
+        )
+    return "OTHER"
+
+
+def _render_replacement(ann: Annotation) -> str:
+    if ann.replacement:
+        return ann.replacement
+    payload = ann.payload or {}
+    after_tokens = payload.get("after_tokens")
+    if isinstance(after_tokens, list):
+        texts: list[str] = []
+        for token in after_tokens:
+            if isinstance(token, dict):
+                texts.append(str(token.get("text") or ""))
+            else:
+                text_val = getattr(token, "text", "") or ""
+                texts.append(str(text_val))
+        candidate = " ".join(texts).strip()
+        if candidate:
+            return candidate
+    return "-NONE-"
+
+
+def _build_m2_block(tokens: Iterable[str], annotations: list[Annotation]) -> str:
+    base_tokens = [t for t in tokens if t is not None]
+    lines = [f"S {' '.join(base_tokens)}"]
+    if not annotations:
+        lines.append("A -1 -1|||noop|||-NONE-|||REQUIRED|||-NONE-|||0")
+        return "\n".join(lines)
+    for ann in annotations:
+        label = _resolve_label(ann)
+        replacement = _render_replacement(ann)
+        lines.append(f"A {ann.start_token} {ann.end_token}|||{label}|||{replacement}|||REQUIRED|||-NONE-|||0")
+    return "\n".join(lines)
+
+
+@router.get("/export", response_class=PlainTextResponse)
+def export_submitted_texts(
+    category_ids: str | None = Query(None, description="Comma-separated category ids"),
+    start: datetime | None = Query(None, description="Start datetime (inclusive)"),
+    end: datetime | None = Query(None, description="End datetime (inclusive)"),
+    db: Session = Depends(get_db),
+    _: str = Depends(get_current_user),
+):
+    categories = _parse_int_list(category_ids)
+    task_query = (
+        db.query(AnnotationTask)
+        .join(TextSample, AnnotationTask.text_id == TextSample.id)
+        .options(joinedload(AnnotationTask.text))
+        .filter(AnnotationTask.status == "submitted")
+        .filter(TextSample.state.notin_(["trash", "skipped"]))
+    )
+    if categories:
+        task_query = task_query.filter(TextSample.category_id.in_(categories))
+    if start:
+        task_query = task_query.filter(AnnotationTask.updated_at >= start)
+    if end:
+        task_query = task_query.filter(AnnotationTask.updated_at <= end)
+
+    tasks = task_query.order_by(AnnotationTask.updated_at.desc()).all()
+    if not tasks:
+        return PlainTextResponse("", media_type="text/plain")
+
+    task_ids = [task.id for task in tasks]
+    ann_rows = (
+        db.query(Annotation, AnnotationTask.id)
+        .join(AnnotationTask, AnnotationTask.text_id == Annotation.text_id)
+        .filter(AnnotationTask.id.in_(task_ids), Annotation.author_id == AnnotationTask.annotator_id)
+        .options(joinedload(Annotation.error_type))
+        .all()
+    )
+    anns_by_task: dict[int, list[Annotation]] = {task.id: [] for task in tasks}
+    for ann, task_id in ann_rows:
+        anns_by_task.setdefault(task_id, []).append(ann)
+
+    blocks: list[str] = []
+    for task in tasks:
+        anns = anns_by_task.get(task.id) or []
+        text = task.text
+        if not text:
+            continue
+        tokens: Iterable[str] = []
+        # Prefer a saved snapshot from any annotation payload to preserve tokenization.
+        snapshot = None
+        for ann in anns:
+            payload = ann.payload or {}
+            maybe_tokens = payload.get("text_tokens")
+            if isinstance(maybe_tokens, list) and maybe_tokens:
+                snapshot = maybe_tokens
+                break
+        tokens = snapshot or text.content.split()
+        if not tokens:
+            continue
+        blocks.append(_build_m2_block(tokens, anns))
+
+    filename = f"export_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.m2"
+    return PlainTextResponse(
+        "\n\n".join(blocks),
+        media_type="text/plain",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.get("/{text_id}", response_model=TextRead)

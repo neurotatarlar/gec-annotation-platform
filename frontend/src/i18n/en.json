@@ -121,6 +121,17 @@
     "searchText": "Search text",
     "searchPlaceholder": "Find by text content…"
   },
+  "export": {
+    "open": "Export",
+    "title": "Export annotations",
+    "subtitle": "Download submitted texts in M2 format.",
+    "format": "Format: M2",
+    "submittedOnly": "Only texts in submitted status are included.",
+    "categories": "Categories",
+    "download": "Export file",
+    "preparing": "Preparing…",
+    "error": "Could not export file"
+  },
   "flags": {
     "created": "Flagged {{date}}",
     "empty": "No texts in this list.",

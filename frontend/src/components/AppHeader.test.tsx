@@ -1,11 +1,21 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import React, { useEffect } from "react";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 
 import { AppHeader } from "./AppHeader";
 import { SaveStatusProvider, useSaveStatus } from "../context/SaveStatusContext";
+
+const getMock = vi.fn((url: string) => {
+  if (url.includes("/api/auth/me")) {
+    return Promise.resolve({ data: { username: "alice", full_name: "Alice" } });
+  }
+  if (url.includes("/api/categories")) {
+    return Promise.resolve({ data: [] });
+  }
+  return Promise.resolve({ data: {} });
+});
 
 vi.mock("../context/AuthContext", () => ({
   useAuth: () => ({ token: "token", logout: vi.fn() }),
@@ -17,7 +27,7 @@ vi.mock("../context/I18nContext", () => ({
 
 vi.mock("../api/client", () => ({
   useAuthedApi: () => ({
-    get: vi.fn().mockResolvedValue({ data: { username: "alice", full_name: "Alice" } }),
+    get: getMock,
   }),
 }));
 
@@ -65,5 +75,13 @@ describe("AppHeader save status indicator", () => {
     await screen.findByText("Alice");
     expect(screen.queryByTitle("common.saving")).not.toBeInTheDocument();
     expect(screen.queryByText("⏳")).not.toBeInTheDocument();
+  });
+
+  it("opens export modal when clicking export button", async () => {
+    renderHeader("/dashboard", { state: "idle", unsaved: false });
+    await screen.findByText("Alice");
+    const exportBtn = screen.getByText("export.open");
+    fireEvent.click(exportBtn);
+    expect(await screen.findByText("export.title")).toBeInTheDocument();
   });
 });

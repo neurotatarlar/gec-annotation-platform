@@ -219,6 +219,99 @@ def test_import_skips_duplicates_by_external_id(client):
         assert existing.content == "existing"
 
 
+def test_submission_clears_flags_for_exclusive_state(client):
+    with db.SessionLocal() as session:
+        text = session.query(TextSample).filter_by(content="text B").one()
+        session.add(AnnotationTask(text_id=text.id, annotator_id=TEST_USER_ID, status="in_progress"))
+        session.commit()
+
+    resp_skip = client.post(f"/api/texts/{text.id}/skip", json={"reason": "later"})
+    assert resp_skip.status_code == 204, resp_skip.text
+    with db.SessionLocal() as session:
+        skip_row = (
+            session.query(SkippedText)
+            .filter_by(text_id=text.id, annotator_id=TEST_USER_ID, flag_type="skip")
+            .one_or_none()
+        )
+        task = (
+            session.query(AnnotationTask)
+            .filter_by(text_id=text.id, annotator_id=TEST_USER_ID)
+            .one()
+        )
+        assert skip_row is not None
+        assert task.status == "skip"
+
+    resp_submit = client.post(f"/api/texts/{text.id}/submit")
+    assert resp_submit.status_code == 202, resp_submit.text
+
+    with db.SessionLocal() as session:
+        remaining_flags = (
+            session.query(SkippedText)
+            .filter_by(text_id=text.id, annotator_id=TEST_USER_ID)
+            .all()
+        )
+        task = (
+            session.query(AnnotationTask)
+            .filter_by(text_id=text.id, annotator_id=TEST_USER_ID)
+            .one()
+        )
+        text_row = session.get(TextSample, text.id)
+
+        assert remaining_flags == []
+        assert task.status == "submitted"
+        assert text_row.state != "skipped"
+        assert text_row.state != "trash"
+
+
+def test_flag_overrides_prior_submission_exclusively(client):
+    with db.SessionLocal() as session:
+        text = session.query(TextSample).filter_by(content="text B").one()
+        session.add(AnnotationTask(text_id=text.id, annotator_id=TEST_USER_ID, status="submitted"))
+        session.commit()
+
+    resp = client.post(f"/api/texts/{text.id}/trash", json={"reason": "bad"})
+    assert resp.status_code == 204, resp.text
+
+    with db.SessionLocal() as session:
+        flags = session.query(SkippedText).filter_by(text_id=text.id, annotator_id=TEST_USER_ID).all()
+        task = (
+            session.query(AnnotationTask)
+            .filter_by(text_id=text.id, annotator_id=TEST_USER_ID)
+            .one()
+        )
+        text_row = session.get(TextSample, text.id)
+
+        assert len(flags) == 1
+        assert flags[0].flag_type == "trash"
+        assert task.status == "trash"
+        assert text_row.state == "trash"
+
+
+def test_switch_between_skip_and_trash_is_exclusive(client):
+    with db.SessionLocal() as session:
+        text = session.query(TextSample).filter_by(content="text B").one()
+        session.add(AnnotationTask(text_id=text.id, annotator_id=TEST_USER_ID, status="in_progress"))
+        session.commit()
+
+    resp_skip = client.post(f"/api/texts/{text.id}/skip", json={"reason": "skip first"})
+    assert resp_skip.status_code == 204, resp_skip.text
+
+    resp_trash = client.post(f"/api/texts/{text.id}/trash", json={"reason": "actually trash"})
+    assert resp_trash.status_code == 204, resp_trash.text
+
+    with db.SessionLocal() as session:
+        flags = session.query(SkippedText).filter_by(text_id=text.id, annotator_id=TEST_USER_ID).all()
+        task = (
+            session.query(AnnotationTask)
+            .filter_by(text_id=text.id, annotator_id=TEST_USER_ID)
+            .one()
+        )
+
+        assert len(flags) == 1
+        assert flags[0].flag_type == "trash"
+        assert task.status == "trash"
+
+
 def test_import_skips_duplicate_plain_strings_by_hash(client):
     payload = {
         "category_id": 1,

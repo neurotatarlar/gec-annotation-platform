@@ -1,14 +1,7 @@
 export
 preannotations
 less spacing before punctuation marks than comparing to normal whitespaces
-text can be in all three states trash/skip/submitted - it is confusing
 audit_logs table is empty 
 remove cross_validation, user_error_types, annotations tables
 show all 
 remove obsolete i18n keys
-
-
-› Good. Currently the text can be submitted and trash/skipped. I want to be has only one exclusive state. So if we mark skip text and then return to the
-  text again we can make changes and submit it. After that I expect it marked as submitted and not skipped or trashed anymore. Same thing with trashing/
-  skipping already submitted texts - it should have only lastest state and should have one of exclusive states: skipped/trashed/submitted
- revert all also remove submit state
