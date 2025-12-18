@@ -11,7 +11,7 @@ os.environ.setdefault("SKIP_CREATE_ALL", "1")
 
 import app.database as db
 from app.main import app
-from app.models import Annotation, AnnotationTask, Base, Category, TextSample, User, SkippedText
+from app.models import Annotation, AnnotationTask, Base, Category, CrossValidationResult, ErrorType, TextSample, User, SkippedText
 from app.services.auth import get_current_user, get_db
 
 
@@ -46,6 +46,8 @@ def setup_db():
         AnnotationTask.__table__,
         SkippedText.__table__,
         Annotation.__table__,
+        ErrorType.__table__,
+        CrossValidationResult.__table__,
     ]
     # JSONB not supported in SQLite; coerce to JSON for tests.
     Annotation.__table__.c.payload.type = JSON()
@@ -64,6 +66,8 @@ def setup_db():
         category = Category(name="Demo")
         session.add(category)
         session.flush()
+        error_type = ErrorType(en_name="OTHER", default_color="#f97316", is_active=True)
+        session.add(error_type)
         session.add_all(
             [
                 TextSample(content="text A", category_id=category.id, required_annotations=2),
@@ -219,6 +223,64 @@ def test_import_skips_duplicates_by_external_id(client):
         assert existing.content == "existing"
 
 
+def test_import_m2_creates_annotations(client):
+    m2 = """S hello world
+A 0 0|||ART|||hi|||REQUIRED|||-NONE-|||0
+"""
+    resp = client.post(
+        "/api/texts/import",
+        json={"category_id": 1, "required_annotations": 1, "m2_content": m2},
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["inserted"] == 1
+    with db.SessionLocal() as session:
+        text = session.query(TextSample).filter_by(content="hello world").one()
+        task = session.query(AnnotationTask).filter_by(text_id=text.id).one()
+        annotations = session.query(Annotation).filter_by(text_id=text.id).all()
+        assert task.status == "submitted"
+        assert len(annotations) == 1
+        assert annotations[0].replacement == "hi"
+        assert annotations[0].payload.get("operation") == "replace"
+        assert text.state == "awaiting_cross_validation"
+
+
+def test_list_annotations_all_authors(client):
+    with db.SessionLocal() as session:
+        text = session.query(TextSample).filter_by(content="text A").one()
+        other_user = User(
+            id=uuid.uuid4(),
+            username="other",
+            password_hash="x",
+            role="annotator",
+            is_active=True,
+        )
+        session.add(other_user)
+        session.add_all(
+            [
+                AnnotationTask(text_id=text.id, annotator_id=TEST_USER_ID, status="in_progress"),
+                AnnotationTask(text_id=text.id, annotator_id=other_user.id, status="submitted"),
+            ]
+        )
+        session.add(
+            Annotation(
+                text_id=text.id,
+                author_id=other_user.id,
+                start_token=0,
+                end_token=0,
+                replacement="x",
+                error_type_id=session.query(ErrorType).first().id,
+                payload={"operation": "replace", "before_tokens": ["text"], "after_tokens": [{"text": "x", "origin": "base"}], "text_tokens": ["text", "A"]},
+            )
+        )
+        session.commit()
+
+    resp = client.get(f"/api/texts/{text.id}/annotations?all_authors=true")
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert len(data) == 1
+    assert data[0]["author_id"] != str(TEST_USER_ID)
+
+
 def test_submission_clears_flags_for_exclusive_state(client):
     with db.SessionLocal() as session:
         text = session.query(TextSample).filter_by(content="text B").one()
@@ -285,6 +347,42 @@ def test_flag_overrides_prior_submission_exclusively(client):
         assert flags[0].flag_type == "trash"
         assert task.status == "trash"
         assert text_row.state == "trash"
+
+
+def test_submit_creates_assignment_and_noop_when_missing(client):
+    with db.SessionLocal() as session:
+        text = session.query(TextSample).filter_by(content="text B").one()
+        session.query(AnnotationTask).delete()
+        session.query(Annotation).delete()
+        session.commit()
+        text_id = text.id
+
+    resp = client.post(f"/api/texts/{text_id}/submit")
+    assert resp.status_code == 202, resp.text
+
+    with db.SessionLocal() as session:
+        task = (
+            session.query(AnnotationTask)
+            .filter_by(text_id=text_id, annotator_id=TEST_USER_ID)
+            .one()
+        )
+        anns = (
+            session.query(Annotation)
+            .filter_by(text_id=text_id, author_id=TEST_USER_ID)
+            .all()
+        )
+        text_row = session.get(TextSample, text_id)
+        cv = session.query(CrossValidationResult).filter_by(text_id=text_id).one_or_none()
+
+        assert task.status == "submitted"
+        assert len(anns) == 1
+        ann = anns[0]
+        assert ann.payload.get("operation") == "noop"
+        assert ann.start_token == -1 and ann.end_token == -1
+        assert ann.payload.get("text_tokens") == text_row.content.split()
+        assert session.get(ErrorType, ann.error_type_id) is not None
+        assert text_row.state == "awaiting_cross_validation"
+        assert cv is not None
 
 
 def test_switch_between_skip_and_trash_is_exclusive(client):

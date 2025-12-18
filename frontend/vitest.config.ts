@@ -6,6 +6,14 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     setupFiles: "./src/setupTests.ts",
+    globalTeardown: "./src/testTeardown.ts",
     globals: true,
+    watch: false,
+    pool: "threads",
+    poolOptions: {
+      threads: {
+        singleThread: true,
+      },
+    },
   },
 });

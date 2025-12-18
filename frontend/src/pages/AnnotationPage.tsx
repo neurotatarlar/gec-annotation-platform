@@ -16,6 +16,13 @@ export const AnnotationPage: React.FC = () => {
   const [searchParams] = useSearchParams();
   const focusActionParam = searchParams.get("focusAction");
   const focusAction = focusActionParam === "skip" || focusActionParam === "trash" || focusActionParam === "submit" ? focusActionParam : undefined;
+  const { data: profile } = useQuery<{ id: string }>({
+    queryKey: ["me"],
+    queryFn: async () => {
+      const response = await api.get("/api/auth/me");
+      return response.data;
+    },
+  });
 
   const { data, isLoading, isError } = useQuery<TextData>({
     queryKey: ["text", textId],
@@ -38,7 +45,15 @@ export const AnnotationPage: React.FC = () => {
     return <p className="p-6 text-rose-200">Failed to load text.</p>;
   }
 
-  return <AnnotationScreen textId={data.id} categoryId={data.category_id} content={data.content} highlightAction={focusAction} />;
+  return (
+    <AnnotationScreen
+      textId={data.id}
+      categoryId={data.category_id}
+      content={data.content}
+      highlightAction={focusAction}
+      currentUserId={profile?.id}
+    />
+  );
 };
 
 export default AnnotationPage;
@@ -48,11 +63,13 @@ const AnnotationScreen = ({
   categoryId,
   content,
   highlightAction,
+  currentUserId,
 }: {
   textId: number;
   categoryId: number;
   content: string;
   highlightAction?: "skip" | "trash" | "submit";
+  currentUserId?: string;
 }) => {
   const { setStatus } = useSaveStatus();
 
@@ -68,6 +85,7 @@ const AnnotationScreen = ({
         textId={textId}
         categoryId={categoryId}
         highlightAction={highlightAction}
+        currentUserId={currentUserId}
         onSaveStatusChange={setStatus}
       />
     </div>

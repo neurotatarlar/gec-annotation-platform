@@ -125,12 +125,14 @@ class TextAssignmentResponse(BaseModel):
 class TextImportItem(BaseModel):
     id: Optional[str] = None
     text: str
+    annotations: Optional[list[AnnotationPayload]] = None
 
 
 class TextImportRequest(BaseModel):
     category_id: int
-    texts: list[TextImportItem | str]
+    texts: list[TextImportItem | str] = Field(default_factory=list)
     required_annotations: int = Field(default=2, ge=1)
+    m2_content: Optional[str] = None
 
 
 class TextImportResponse(BaseModel):

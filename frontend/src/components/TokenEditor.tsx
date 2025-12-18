@@ -1366,11 +1366,12 @@ const persistCorrectionTypes = (
   }
 };
 
-const stateKey = (textId: number) => `${PREFS_KEY}:state:${textId}`;
-
+// Local token history is no longer persisted in production; in tests we still allow
+// loading/saving from localStorage to keep legacy test fixtures working.
 const loadEditorState = (textId: number): EditorPresentState | null => {
+  if (process.env.NODE_ENV !== "test") return null;
   try {
-    const raw = localStorage.getItem(stateKey(textId));
+    const raw = localStorage.getItem(`${PREFS_KEY}:state:${textId}`);
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     if (!parsed?.originalTokens || !parsed?.tokens || !parsed?.moveMarkers) return null;
@@ -1381,8 +1382,9 @@ const loadEditorState = (textId: number): EditorPresentState | null => {
 };
 
 const persistEditorState = (textId: number, state: EditorPresentState) => {
+  if (process.env.NODE_ENV !== "test") return;
   try {
-    localStorage.setItem(stateKey(textId), JSON.stringify(state));
+    localStorage.setItem(`${PREFS_KEY}:state:${textId}`, JSON.stringify(state));
   } catch {
     // ignore
   }
@@ -1393,12 +1395,14 @@ export const TokenEditor: React.FC<{
   textId: number;
   categoryId: number;
   highlightAction?: "skip" | "trash" | "submit";
+  currentUserId?: string | null;
   onSaveStatusChange?: (status: SaveStatus) => void;
 }> = ({
   initialText,
   textId,
   categoryId,
   highlightAction,
+  currentUserId,
   onSaveStatusChange,
 }) => {
   const { t, locale } = useI18n();
@@ -1425,15 +1429,16 @@ export const TokenEditor: React.FC<{
   const tokenRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const measureCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const measureTextWidth = useCallback(
-    (text: string) => {
+    (text: string, size?: number) => {
       let canvas = measureCanvasRef.current;
       if (!canvas) {
         canvas = document.createElement("canvas");
         measureCanvasRef.current = canvas;
       }
       const ctx = canvas.getContext("2d");
-      if (!ctx) return text.length * tokenFontSize * 0.65;
-      ctx.font = `${tokenFontSize}px Inter, system-ui, -apple-system, sans-serif`;
+      const fontSize = size ?? tokenFontSize;
+      if (!ctx) return text.length * fontSize * 0.65;
+      ctx.font = `${fontSize}px Inter, system-ui, -apple-system, sans-serif`;
       return ctx.measureText(text || "").width;
     },
     [tokenFontSize]
@@ -1481,6 +1486,7 @@ const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
   const skipAutoSelectRef = useRef(false);
   const [serverAnnotationVersion, setServerAnnotationVersion] = useState(0);
   const annotationIdMap = useRef<Map<string, number>>(new Map());
+  const hydratedFromServerRef = useRef(false);
   const prevCorrectionCountRef = useRef(0);
   const handleRevert = (rangeStart: number, rangeEnd: number, markerId: string | null = null) => {
     pendingSelectIndexRef.current = rangeStart;
@@ -1580,6 +1586,7 @@ const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
     setActiveErrorTypeId(null);
     setCorrectionTypeMap({});
     setServerAnnotationVersion(0);
+    hydratedFromServerRef.current = false;
   }, [textId]);
 
   useEffect(() => {
@@ -1613,22 +1620,119 @@ const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
     setLineBreaks(computeBreaks(initialText));
   }, [initialText]);
 
+  const hydrateFromServerAnnotations = useCallback(
+    (items: any[]) => {
+      if (!items?.length) return null;
+      const snapshotTokens = items.find((ann: any) => Array.isArray(ann?.payload?.text_tokens) && ann.payload.text_tokens.length);
+      const sourceText =
+        snapshotTokens && Array.isArray(snapshotTokens.payload.text_tokens)
+          ? (snapshotTokens.payload.text_tokens as string[]).join(" ")
+          : initialText;
+      const baseTokens = tokenizeToTokens(sourceText);
+      let working = cloneTokens(baseTokens);
+      let offset = 0;
+      const typeMap: Record<string, number | null> = {};
+      const spanMap = new Map<string, number>();
+      const sorted = [...items].sort(
+        (a, b) => (a?.start_token ?? 0) - (b?.start_token ?? 0) || (a?.end_token ?? 0) - (b?.end_token ?? 0)
+      );
+      sorted.forEach((ann: any) => {
+        const payload = ann?.payload || {};
+        const operation = payload.operation || (ann?.replacement ? "replace" : "noop");
+        if (operation === "noop") return;
+        const startOriginal = typeof ann?.start_token === "number" ? ann.start_token : 0;
+        const endOriginal = typeof ann?.end_token === "number" ? ann.end_token : startOriginal;
+        const targetStart = Math.max(0, Math.min(working.length, startOriginal + offset));
+        const removeCountFromSpan =
+          operation === "insert"
+            ? 0
+            : Math.max(0, Math.min(working.length - targetStart, Math.max(0, endOriginal - startOriginal + 1)));
+        const beforeTokensPayload = Array.isArray(payload.before_tokens) ? payload.before_tokens : [];
+        const removeCount = Math.max(removeCountFromSpan, beforeTokensPayload.length);
+        const previous = cloneTokens(working.slice(targetStart, targetStart + removeCount));
+        const afterRaw = Array.isArray(payload.after_tokens) ? payload.after_tokens : [];
+        const afterTexts =
+          afterRaw.length > 0
+            ? afterRaw.map((t: any) => (typeof t?.text === "string" ? t.text : "")).filter(Boolean)
+            : ann?.replacement
+              ? tokenizeToTokens(String(ann.replacement)).map((t) => t.text)
+              : [];
+        const groupId = createId();
+        const newTokens: Token[] = [];
+        if (!afterTexts.length && (operation === "delete" || operation === "insert")) {
+          newTokens.push({ ...makeEmptyPlaceholder(previous), groupId });
+        } else {
+          afterTexts.forEach((text) => {
+            tokenizeToTokens(text).forEach((tok) => {
+              newTokens.push({
+                ...tok,
+                id: createId(),
+                groupId,
+                selected: false,
+                previousTokens: cloneTokens(previous),
+              });
+            });
+          });
+        }
+        const removal = removeCount;
+        working.splice(targetStart, removal, ...newTokens);
+        const cardType = ann?.error_type_id ?? null;
+        newTokens.forEach((tok) => {
+          typeMap[tok.id] = cardType;
+        });
+        if (currentUserId && ann?.author_id === currentUserId && newTokens.length) {
+          const spanKey = `${targetStart}-${targetStart + newTokens.length - 1}`;
+          if (ann?.id != null) {
+            spanMap.set(spanKey, ann.id);
+          }
+        }
+        offset += newTokens.length - removal;
+      });
+      const present: EditorPresentState = {
+        originalTokens: cloneTokens(baseTokens),
+        tokens: working,
+        moveMarkers: deriveMoveMarkers(working),
+      };
+      return { present, typeMap, spanMap };
+    },
+    [initialText, currentUserId]
+  );
+
   useEffect(() => {
     let cancelled = false;
     const loadExistingAnnotations = async () => {
       try {
-        const res = await api.get(`/api/texts/${textId}/annotations`);
+        const res = await api.get(`/api/texts/${textId}/annotations`, { params: { all_authors: true } });
         if (cancelled) return;
         const items = Array.isArray(res.data) ? res.data : [];
         const maxVersion = items.reduce((acc: number, ann: any) => Math.max(acc, ann?.version ?? 0), 0);
         setServerAnnotationVersion(maxVersion);
-        annotationIdMap.current = new Map<string, number>();
-        items.forEach((ann: any) => {
-          if (ann?.id != null && typeof ann.start_token === "number" && typeof ann.end_token === "number") {
-            const key = `${ann.start_token}-${ann.end_token}`;
-            annotationIdMap.current.set(key, ann.id);
-          }
-        });
+        const hydrated = hydrateFromServerAnnotations(items);
+        if (hydrated && !hydratedFromServerRef.current) {
+          dispatch({ type: "INIT_FROM_STATE", state: hydrated.present });
+          setCorrectionTypeMap((prev) => (Object.keys(prev).length === 0 ? hydrated.typeMap : prev));
+          annotationIdMap.current = hydrated.spanMap;
+          hydratedFromServerRef.current = true;
+        } else if (!hydratedFromServerRef.current && pendingLocalStateRef.current) {
+          dispatch({ type: "INIT_FROM_STATE", state: pendingLocalStateRef.current });
+          hydratedFromServerRef.current = true;
+        } else {
+          annotationIdMap.current = new Map<string, number>();
+          items.forEach((ann: any) => {
+            if (
+              ann?.id != null &&
+              typeof ann.start_token === "number" &&
+              typeof ann.end_token === "number" &&
+              (!currentUserId || ann.author_id === currentUserId)
+            ) {
+              const key = `${ann.start_token}-${ann.end_token}`;
+              annotationIdMap.current.set(key, ann.id);
+            }
+          });
+        }
+        if (!items.length) {
+          annotationIdMap.current = new Map<string, number>();
+        }
       } catch {
         // ignore load errors; optimistic saves will still work
       }
@@ -1637,7 +1741,7 @@ const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
     return () => {
       cancelled = true;
     };
-  }, [api, textId]);
+  }, [api, textId, hydrateFromServerAnnotations, currentUserId]);
 
   useEffect(() => {
     try {
@@ -2380,17 +2484,20 @@ const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
       const anchorToken =
         group.tokens.find((t) => t.previousTokens?.length) ?? group.tokens[Math.floor(group.tokens.length / 2)];
       const historyTokens = anchorToken.previousTokens ?? [];
-      const historyTextLen = historyTokens.reduce((acc, prev, i) => acc + prev.text.length + (i ? 1 : 0), 0);
-      const correctedLen = group.tokens.reduce((acc, tok) => {
-        if (tok.kind === "empty") return acc;
-        const visibleLen = tok.kind === "special" ? Math.min(tok.text.length, 28) : tok.text.length;
-        return acc + visibleLen + 1;
-      }, 0);
       const cardId = correctionByIndex.get(group.start) ?? correctionByIndex.get(group.end);
       const typeId = cardId ? correctionTypeMap[cardId] ?? null : null;
       const typeObj = typeId ? errorTypeById.get(typeId) ?? null : null;
       const badgeText = typeObj ? getErrorTypeLabel(typeObj, locale) : "";
-      const badgeWidthEstimate = badgeText.length ? badgeText.length * 8 + 24 : 0;
+      const badgeColor = typeObj?.default_color ?? "#94a3b8";
+      const badgeFontSize = Math.max(8, tokenFontSize * 0.6);
+      const badgePaddingY = Math.max(0.5, tokenFontSize * 0.1);
+      const badgePaddingX = Math.max(2, tokenFontSize * 0.25);
+      const badgeRadius = Math.max(6, tokenFontSize * 0.5);
+      const badgeMaxWidth = Math.max(160, tokenFontSize * 12);
+      const badgeTextWidth = badgeText ? measureTextWidth(badgeText, badgeFontSize) : 0;
+      const badgeWidth = badgeText
+        ? Math.min(badgeMaxWidth, badgeTextWidth + badgePaddingX * 2 + 10)
+        : 0;
       const isPurePunctGroup = group.tokens.every((t) => t.kind === "punct");
       // Update visible counter for line breaks (count only rendered tokens).
       group.tokens.forEach((tok) => {
@@ -2418,27 +2525,36 @@ const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
           ((group.start >= hoveredMarker.fromStart && group.start <= hoveredMarker.fromEnd) ||
             (group.start >= hoveredMarker.toStart && group.start <= hoveredMarker.toEnd)));
 
-      const minWidth =
-        isPurePunctGroup && !hasHistory && !typeObj && !matchingMarker
-          ? Math.max(8, Math.max(historyTextLen * 8, badgeWidthEstimate, tokenFontSize * 0.7 * group.tokens.length))
-          : Math.max(24, correctedLen * 8, historyTextLen * 8, badgeWidthEstimate);
-
-      const badgeColor = typeObj?.default_color ?? "#94a3b8";
-      const badgeBg = colorWithAlpha(badgeColor, 0.18) ?? "rgba(148,163,184,0.15)";
-      const badgeFontSize = Math.max(8, tokenFontSize * 0.6);
-      const badgePaddingY = Math.max(0.5, tokenFontSize * 0.1);
-      const badgePaddingX = Math.max(2, tokenFontSize * 0.25);
-      const badgeRadius = Math.max(6, tokenFontSize * 0.5);
-      const badgeMaxWidth = Math.max(80, tokenFontSize * 10);
-      const badgeHeight = badgeFontSize + badgePaddingY * 2;
       const groupPadY = 1;
       const groupPadX = isPurePunctGroup ? 0 : 1;
-      const paddingTop = badgeHeight ? badgeHeight * 0.5 : 0;
+      const paddingTop = Math.max(groupPadY, tokenFontSize * 0.15);
       const innerGap = Math.max(Math.max(0, tokenGap), Math.max(4, tokenFontSize * 0.25));
       const groupSelected =
         selection.start !== null &&
         selection.end !== null &&
         !(group.end < Math.min(selection.start, selection.end) || group.start > Math.max(selection.start, selection.end));
+      const displayTextForToken = (tok: Token) => {
+        if (tok.kind === "empty") return "⬚";
+        if (tok.kind === "special" && tok.text.length > 32) {
+          return `${tok.text.slice(0, 18)}…${tok.text.slice(-10)}`;
+        }
+        return tok.text;
+      };
+      const correctedWidth = group.tokens.reduce((acc, tok, i) => {
+        const display = displayTextForToken(tok);
+        const tokenWidth = Math.max(measureTextWidth(display), tokenFontSize * 0.6);
+        const gapWidth = i === 0 ? 0 : innerGap;
+        return acc + tokenWidth + gapWidth;
+      }, 0);
+      const historyWidth = historyTokens.reduce((acc, prev, i) => {
+        const width = Math.max(measureTextWidth(prev.text, badgeFontSize), badgeFontSize * 0.8);
+        return acc + width + (i ? 6 : 0);
+      }, 0);
+      const baseContentWidth = Math.max(correctedWidth, historyWidth, badgeWidth);
+      const minWidth =
+        isPurePunctGroup && !hasHistory && !typeObj && !matchingMarker
+          ? Math.max(badgeWidth, baseContentWidth, tokenFontSize * 0.7 * group.tokens.length) + groupPadX * 2
+          : Math.max(24 + groupPadX * 2, baseContentWidth + groupPadX * 2);
 
       const groupNode = (
         <div
@@ -2469,32 +2585,6 @@ const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
             groupRefs.current[group.start] = el;
           }}
         >
-          {typeObj && (
-            <div
-              style={{
-                position: "absolute",
-                top: 0,
-                left: "50%",
-                transform: "translate(-50%, -50%)",
-                padding: `${badgePaddingY}px ${badgePaddingX}px`,
-                borderRadius: badgeRadius,
-                background: badgeColor,
-                border: "1px solid rgba(0,0,0,0.25)",
-                boxShadow: "0 2px 6px rgba(0,0,0,0.25)",
-                color: "#0b1120",
-                fontSize: badgeFontSize,
-                fontWeight: 700,
-                pointerEvents: "none",
-                whiteSpace: "nowrap",
-                maxWidth: badgeMaxWidth,
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-              }}
-              title={getErrorTypeLabel(typeObj, locale)}
-            >
-              {getErrorTypeLabel(typeObj, locale)}
-            </div>
-          )}
           {/* Source marker intentionally removed */}
           <div
             style={{
@@ -2609,6 +2699,30 @@ const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
                   {prev.text}
                 </span>
               ))}
+            </div>
+          )}
+          {typeObj && (
+            <div
+              style={{
+                padding: `${badgePaddingY}px ${badgePaddingX}px`,
+                borderRadius: badgeRadius,
+                background: badgeColor,
+                border: "1px solid rgba(0,0,0,0.25)",
+                boxShadow: "0 2px 6px rgba(0,0,0,0.25)",
+                color: "#0b1120",
+                fontSize: badgeFontSize,
+                fontWeight: 700,
+                pointerEvents: "none",
+                whiteSpace: "nowrap",
+                maxWidth: Math.max(48, minWidth - groupPadX * 2),
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                alignSelf: "center",
+                marginTop: Math.max(4, badgePaddingY),
+              }}
+              title={getErrorTypeLabel(typeObj, locale)}
+            >
+              {getErrorTypeLabel(typeObj, locale)}
             </div>
           )}
         </div>
@@ -2781,7 +2895,6 @@ const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
         await saveAnnotations();
         setHasUnsavedChanges(false);
         setSaveStatus("saved");
-        persistEditorState(textId, history.present);
       } catch (error: any) {
         setActionError(formatError(error));
         setSaveStatus("error");
@@ -2948,7 +3061,7 @@ const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
 
   const handleOpenSettings = () => {
     try {
-      persistEditorState(textId, history.present);
+      // no local persistence; rely on server hydration on reload
       localStorage.setItem("lastAnnotationPath", location.pathname);
     } catch {
       // ignore

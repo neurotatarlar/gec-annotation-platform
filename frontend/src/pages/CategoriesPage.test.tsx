@@ -29,7 +29,7 @@ beforeEach(() => {
 
 const renderPage = (categories: any[]) => {
   mockGet.mockResolvedValueOnce({ data: categories });
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0, cacheTime: 0 } } });
   return render(
     <MemoryRouter>
       <QueryClientProvider client={qc}>

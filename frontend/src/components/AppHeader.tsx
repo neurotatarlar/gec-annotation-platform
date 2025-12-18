@@ -14,6 +14,7 @@ import { CategorySummary } from "../types";
 interface Profile {
   username: string;
   full_name?: string | null;
+  id?: string;
 }
 
 export const AppHeader = () => {
@@ -205,7 +206,7 @@ export const AppHeader = () => {
               </div>
               <div className="grid gap-4 md:grid-cols-2">
                 <div className="flex flex-col gap-2">
-                  <label className="text-sm text-slate-300">{t("dashboard.dateFrom")}</label>
+                  <label className="text-sm text-slate-300">{t("common.dateFrom")}</label>
                   <input
                     type="datetime-local"
                     value={startDate}
@@ -214,7 +215,7 @@ export const AppHeader = () => {
                   />
                 </div>
                 <div className="flex flex-col gap-2">
-                  <label className="text-sm text-slate-300">{t("dashboard.dateTo")}</label>
+                  <label className="text-sm text-slate-300">{t("common.dateTo")}</label>
                   <input
                     type="datetime-local"
                     value={endDate}

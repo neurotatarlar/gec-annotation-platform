@@ -318,7 +318,7 @@ export const DashboardPage = () => {
   const renderDateInputs = (
     <div className="grid grid-cols-2 gap-3">
       <label className="flex flex-col gap-1 text-sm text-slate-200">
-        <span className="text-xs uppercase tracking-wide text-slate-400">{t("dashboard.dateFrom")}</span>
+        <span className="text-xs uppercase tracking-wide text-slate-400">{t("common.dateFrom")}</span>
         <input
           type="datetime-local"
           value={toDateTimeLocalValue(dateFrom)}
@@ -327,7 +327,7 @@ export const DashboardPage = () => {
         />
       </label>
       <label className="flex flex-col gap-1 text-sm text-slate-200">
-        <span className="text-xs uppercase tracking-wide text-slate-400">{t("dashboard.dateTo")}</span>
+        <span className="text-xs uppercase tracking-wide text-slate-400">{t("common.dateTo")}</span>
         <input
           type="datetime-local"
           value={toDateTimeLocalValue(dateTo)}
@@ -366,7 +366,7 @@ export const DashboardPage = () => {
   }) => (
     <div className="flex flex-wrap gap-3 text-sm text-slate-200">
       <label className="flex items-center gap-2">
-        <span className="text-xs uppercase tracking-wide text-slate-400">{t("dashboard.sortBy")}</span>
+        <span className="text-xs uppercase tracking-wide text-slate-400">{t("common.sortBy")}</span>
         <select
           value={sort}
           onChange={(event) => onSortChange(event.target.value)}
@@ -380,14 +380,14 @@ export const DashboardPage = () => {
         </select>
       </label>
       <label className="flex items-center gap-2">
-        <span className="text-xs uppercase tracking-wide text-slate-400">{t("dashboard.sortOrder")}</span>
+        <span className="text-xs uppercase tracking-wide text-slate-400">{t("common.sortOrder")}</span>
         <select
           value={order}
           onChange={(event) => onOrderChange(event.target.value as "asc" | "desc")}
           className="rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2 text-sm"
         >
-          <option value="desc">{t("dashboard.orderDesc")}</option>
-          <option value="asc">{t("dashboard.orderAsc")}</option>
+          <option value="desc">{t("common.orderDesc")}</option>
+          <option value="asc">{t("common.orderAsc")}</option>
         </select>
       </label>
     </div>
@@ -509,7 +509,7 @@ export const DashboardPage = () => {
               setSearch("");
             }}
           >
-            {t("dashboard.clearFilters")}
+            {t("common.clearFilters")}
           </button>
         </div>
         <div className="grid gap-4 lg:grid-cols-[2fr_2fr_1fr]">
@@ -526,15 +526,15 @@ export const DashboardPage = () => {
             onChange: setSelectedAnnotators
           })}
           <div className="flex flex-col gap-3 rounded-2xl border border-slate-800 bg-slate-950/60 p-3">
-            <span className="text-xs uppercase tracking-wide text-slate-400">{t("dashboard.dateFrom")}</span>
+            <span className="text-xs uppercase tracking-wide text-slate-400">{t("common.dateFrom")}</span>
             {renderDateInputs}
             <label className="mt-2 flex flex-col gap-1 text-sm text-slate-200">
-              <span className="text-xs uppercase tracking-wide text-slate-400">{t("dashboard.searchText")}</span>
+              <span className="text-xs uppercase tracking-wide text-slate-400">{t("common.searchText")}</span>
               <input
                 type="search"
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
-                placeholder={t("dashboard.searchPlaceholder")}
+                placeholder={t("common.searchPlaceholder")}
                 className="rounded-xl border border-slate-700 bg-slate-950/60 p-2 text-sm text-slate-100"
               />
             </label>

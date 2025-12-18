@@ -10,7 +10,16 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, joinedload
 from pydantic import BaseModel
 
-from ..models import Annotation, AnnotationTask, AnnotationVersion, Category, CrossValidationResult, SkippedText, TextSample
+from ..models import (
+    Annotation,
+    AnnotationTask,
+    AnnotationVersion,
+    Category,
+    CrossValidationResult,
+    ErrorType,
+    SkippedText,
+    TextSample,
+)
 from ..schemas.common import (
     AnnotationPayload,
     AnnotationRead,
@@ -41,6 +50,20 @@ def _sha256_tokens(tokens: list[str]) -> str:
     return _sha256_text(joined)
 
 
+def _get_or_create_noop_error_type(db: Session) -> ErrorType:
+    noop = (
+        db.query(ErrorType)
+        .filter(func.lower(ErrorType.en_name) == "noop")
+        .one_or_none()
+    )
+    if noop:
+        return noop
+    noop = ErrorType(en_name="noop", default_color="#94a3b8", is_active=True)
+    db.add(noop)
+    db.flush()
+    return noop
+
+
 def _parse_int_list(raw: str | None) -> list[int]:
     if not raw:
         return []
@@ -56,27 +79,119 @@ def _parse_int_list(raw: str | None) -> list[int]:
 def import_texts(
     request: TextImportRequest,
     db: Session = Depends(get_db),
-    _=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     category = db.get(Category, request.category_id)
     if not category:
         raise HTTPException(status_code=404, detail=f"Category with id '{request.category_id}' not found")
-    normalized: list[tuple[str, str]] = []
+
+    def _resolve_error_type(label: str) -> int:
+        name = label.strip() or "OTHER"
+        existing = (
+            db.query(ErrorType)
+            .filter(
+                or_(
+                    ErrorType.en_name == name,
+                    ErrorType.tt_name == name,
+                    ErrorType.category_en == name,
+                    ErrorType.category_tt == name,
+                )
+            )
+            .one_or_none()
+        )
+        if existing:
+            return existing.id
+        new = ErrorType(en_name=name, default_color="#f97316", is_active=True)
+        db.add(new)
+        db.flush()
+        return new.id
+
+    normalized: list[dict[str, object]] = []
+
+    def _append_normalized(body: str, ext_id: str | None, annotations: list[dict] | None = None):
+        if not isinstance(body, str) or not body.strip():
+            return
+        normalized.append({"body": body, "ext_id": ext_id, "annotations": annotations or []})
+
+    # Parse m2 content if provided.
+    if request.m2_content:
+        blocks = [b.strip() for b in request.m2_content.strip().split("\n\n") if b.strip()]
+        for block in blocks:
+            lines = [line.strip() for line in block.splitlines() if line.strip()]
+            if not lines or not lines[0].startswith("S "):
+                continue
+            tokens = lines[0][2:].split()
+            annotations: list[dict] = []
+            sha_tokens = _sha256_tokens(tokens)
+            for line in lines[1:]:
+                if not line.startswith("A "):
+                    continue
+                try:
+                    parts = line[2:].split("|||")
+                    span = parts[0].strip().split()
+                    start = int(span[0])
+                    end = int(span[1])
+                    label = parts[1].strip() or "OTHER"
+                    replacement_raw = parts[2].strip()
+                except Exception:
+                    continue
+                replacement = None if replacement_raw == "-NONE-" else replacement_raw
+                op = "noop" if start < 0 else ("delete" if replacement is None else "replace")
+                before_tokens = tokens[start : end + 1] if start >= 0 and end >= start else []
+                after_tokens = (
+                    []
+                    if replacement is None
+                    else [{"id": f"m2-{idx}", "text": tok, "origin": "base"} for idx, tok in enumerate(replacement.split())]
+                )
+                error_type_id = _resolve_error_type(label)
+                annotations.append(
+                    {
+                        "start_token": start,
+                        "end_token": end,
+                        "replacement": replacement,
+                        "error_type_id": error_type_id,
+                        "payload": {
+                            "operation": op,
+                            "before_tokens": before_tokens,
+                            "after_tokens": after_tokens,
+                            "text_tokens": tokens,
+                            "text_tokens_sha256": sha_tokens,
+                        },
+                    }
+                )
+            if not annotations:
+                annotations.append(
+                    {
+                        "start_token": -1,
+                        "end_token": -1,
+                        "replacement": None,
+                        "error_type_id": _resolve_error_type("noop"),
+                        "payload": {
+                            "operation": "noop",
+                            "before_tokens": [],
+                            "after_tokens": [],
+                            "text_tokens": tokens,
+                            "text_tokens_sha256": sha_tokens,
+                        },
+                    }
+                )
+            _append_normalized(" ".join(tokens), hashlib.sha256(" ".join(tokens).encode("utf-8")).hexdigest(), annotations)
+
     for item in request.texts:
         if isinstance(item, str):
             body = item
             ext_id = hashlib.sha256(body.encode("utf-8")).hexdigest()
+            annotations = None
         else:
             body = item.text
             ext_id = item.id or hashlib.sha256(body.encode("utf-8")).hexdigest()
-        if not isinstance(body, str) or not body.strip():
-            continue
-        normalized.append((body, ext_id))
+            annotations = item.annotations
+        _append_normalized(body, ext_id, annotations)
 
     if not normalized:
         raise HTTPException(status_code=400, detail="No texts provided")
 
-    external_ids = [eid for _, eid in normalized if eid]
+    external_ids = [str(entry["ext_id"]) for entry in normalized if entry.get("ext_id")]
     existing_ids: set[str] = set()
     if external_ids:
         rows = (
@@ -88,19 +203,50 @@ def import_texts(
 
     seen: set[str] = set()
     inserted = 0
-    for body, ext_id in normalized:
+    for entry in normalized:
+        body = entry["body"]
+        ext_id = entry.get("ext_id")
+        ext_id_value = str(ext_id) if ext_id is not None else None
+        annotations = entry.get("annotations") or []
         # skip duplicates by external_id (either already in DB or repeated in payload)
         if ext_id and (ext_id in existing_ids or ext_id in seen):
             continue
-        seen.add(ext_id)
-        db.add(
-            TextSample(
-                content=body,
-                external_id=ext_id,
-                category_id=category.id,
-                required_annotations=request.required_annotations,
-            )
+        if ext_id:
+            seen.add(ext_id)
+        text = TextSample(
+            content=body,
+            external_id=ext_id_value,  # type: ignore[arg-type]
+            category_id=category.id,
+            required_annotations=request.required_annotations,
         )
+        db.add(text)
+        db.flush()
+        if annotations:
+            task = AnnotationTask(text_id=text.id, annotator_id=current_user.id, status="submitted")
+            db.add(task)
+            for item in annotations:
+                payload = item.get("payload") or {}
+                db.add(
+                    Annotation(
+                        text_id=text.id,
+                        author_id=current_user.id,
+                        start_token=item.get("start_token", 0),
+                        end_token=item.get("end_token", 0),
+                        replacement=item.get("replacement"),
+                        error_type_id=item.get("error_type_id"),
+                        payload=payload,
+                    )
+                )
+            completed_count = (
+                db.query(AnnotationTask)
+                .filter(AnnotationTask.text_id == text.id, AnnotationTask.status == "submitted")
+                .count()
+            )
+            if completed_count >= text.required_annotations:
+                text.state = "awaiting_cross_validation"
+                _queue_cross_validation(db=db, text_id=text.id)
+            else:
+                text.state = "pending"
         inserted += 1
     db.commit()
     return TextImportResponse(inserted=inserted)
@@ -216,15 +362,14 @@ def get_next_text(
 @router.get("/{text_id}/annotations", response_model=list[AnnotationRead])
 def list_annotations(
     text_id: int,
+    all_authors: bool = Query(False, description="Include annotations from all annotators"),
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    return (
-        db.query(Annotation)
-        .filter(Annotation.text_id == text_id, Annotation.author_id == current_user.id)
-        .order_by(Annotation.id)
-        .all()
-    )
+    query = db.query(Annotation).filter(Annotation.text_id == text_id)
+    if not all_authors:
+        query = query.filter(Annotation.author_id == current_user.id)
+    return query.order_by(Annotation.id).all()
 
 
 @router.post("/{text_id}/annotations", response_model=list[AnnotationRead])
@@ -435,18 +580,20 @@ def submit_annotations(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
+    text = db.get(TextSample, text_id)
+    if not text:
+        raise HTTPException(status_code=404, detail="Text not found")
+
     task = (
         db.query(AnnotationTask)
         .filter(AnnotationTask.text_id == text_id, AnnotationTask.annotator_id == current_user.id)
         .one_or_none()
     )
     if not task:
-        raise HTTPException(status_code=404, detail="Assignment not found")
-    task.status = "submitted"
-
-    text = db.get(TextSample, text_id)
-    if not text:
-        raise HTTPException(status_code=404, detail="Text not found")
+        task = AnnotationTask(text_id=text_id, annotator_id=current_user.id, status="submitted")
+        db.add(task)
+    else:
+        task.status = "submitted"
 
     text.locked_by_id = None
     text.locked_at = None
@@ -458,6 +605,49 @@ def submit_annotations(
         .delete(synchronize_session=False)
     )
 
+    existing_annotations = (
+        db.query(Annotation)
+        .filter(Annotation.text_id == text_id, Annotation.author_id == current_user.id)
+        .all()
+    )
+    if not existing_annotations:
+        tokens_snapshot = text.content.split()
+        noop_type = _get_or_create_noop_error_type(db)
+        payload = {
+            "operation": "noop",
+            "before_tokens": [],
+            "after_tokens": [],
+            "text_tokens": tokens_snapshot,
+            "text_tokens_sha256": _sha256_tokens(tokens_snapshot),
+            "text_sha256": _sha256_text(text.content),
+            "source": "manual",
+        }
+        annotation = Annotation(
+            text_id=text_id,
+            author_id=current_user.id,
+            start_token=-1,
+            end_token=-1,
+            replacement=None,
+            error_type_id=noop_type.id,
+            payload=payload,
+        )
+        db.add(annotation)
+        db.flush()
+        db.add(
+            AnnotationVersion(
+                annotation_id=annotation.id,
+                version=annotation.version,
+                snapshot={
+                    "start_token": annotation.start_token,
+                    "end_token": annotation.end_token,
+                    "replacement": annotation.replacement,
+                    "payload": annotation.payload,
+                    "error_type_id": annotation.error_type_id,
+                },
+            )
+        )
+
+    db.flush()
     completed_count = (
         db.query(AnnotationTask)
         .filter(AnnotationTask.text_id == text_id, AnnotationTask.status == "submitted")

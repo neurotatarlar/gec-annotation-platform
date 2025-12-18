@@ -44,25 +44,32 @@ vi.mock("../api/client", () => ({
 const createQueryClient = () =>
   new QueryClient({
     defaultOptions: {
-      queries: { retry: false },
+      queries: { retry: false, gcTime: 0, cacheTime: 0 },
     },
   });
 
-// Silence React Router future-flag warnings that are not actionable in tests.
+// Silence React Router future-flag warnings and noisy act warnings that don't affect assertions.
 const originalWarn = console.warn;
+const originalError = console.error;
 beforeAll(() => {
   vi.spyOn(console, "warn").mockImplementation((msg: any, ...rest: any[]) => {
     if (typeof msg === "string" && msg.includes("React Router Future Flag Warning")) return;
     originalWarn(msg, ...rest);
   });
+  vi.spyOn(console, "error").mockImplementation((msg: any, ...rest: any[]) => {
+    if (typeof msg === "string" && msg.includes("not wrapped in act")) return;
+    originalError(msg, ...rest);
+  });
 });
 
 afterAll(() => {
   (console.warn as any).mockRestore?.();
+  (console.error as any).mockRestore?.();
 });
 
-const renderEditor = (initialText: string) => {
+const renderEditor = (initialText: string, opts?: { getImpl?: (url: string) => Promise<any> }) => {
   mockGet.mockImplementation((url: string) => {
+    if (opts?.getImpl) return opts.getImpl(url);
     if (url.includes("/api/error-types")) {
       return Promise.resolve({ data: [] });
     }
@@ -701,6 +708,41 @@ describe("TokenEditor view toggles", () => {
 
     const secondBtn = screen.getByRole("button", { name: "second" });
     await waitFor(() => expect(secondBtn).toHaveAttribute("aria-pressed", "true"));
+  });
+
+  it("hydrates multi-token deletions from server annotations", async () => {
+    localStorage.clear();
+    await renderEditor("alpha beta gamma", {
+      getImpl: (url: string) => {
+        if (url.includes("/api/error-types")) return Promise.resolve({ data: [] });
+        if (url.includes("/annotations")) {
+          return Promise.resolve({
+            data: [
+              {
+                id: 10,
+                author_id: "user-1",
+                start_token: 0,
+                end_token: 1,
+                replacement: null,
+                error_type_id: 1,
+                payload: {
+                  operation: "delete",
+                  before_tokens: ["alpha", "beta"],
+                  after_tokens: [],
+                  text_tokens: ["alpha", "beta", "gamma"],
+                },
+              },
+            ],
+          });
+        }
+        return Promise.resolve({ data: {} });
+      },
+    });
+    const corrected = await screen.findByTestId("corrected-panel");
+    await waitFor(() => expect(within(corrected).getByText("⬚")).toBeInTheDocument());
+    expect(within(corrected).getByText("gamma")).toBeInTheDocument();
+    expect(within(corrected).queryByRole("button", { name: "alpha" })).not.toBeInTheDocument();
+    expect(within(corrected).queryByRole("button", { name: "beta" })).not.toBeInTheDocument();
   });
 
   it("toggles between original and corrected text panel and persists collapse", async () => {

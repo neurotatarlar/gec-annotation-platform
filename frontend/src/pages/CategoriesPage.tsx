@@ -72,6 +72,8 @@ export const CategoriesPage = () => {
   const [uploadTarget, setUploadTarget] = useState<CategorySummary | null>(null);
   const [uploadText, setUploadText] = useState("");
   const [uploadFileContent, setUploadFileContent] = useState("");
+  const [uploadFileName, setUploadFileName] = useState("");
+  const [uploadFileIsM2, setUploadFileIsM2] = useState(false);
   const [uploadRequired, setUploadRequired] = useState(2);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadSuccess, setUploadSuccess] = useState<string | null>(null);
@@ -166,7 +168,7 @@ export const CategoriesPage = () => {
   });
 
   const uploadTextsMutation = useMutation({
-    mutationFn: async (payload: { category_id: number; required_annotations: number; texts: UploadEntry[] }) => {
+    mutationFn: async (payload: { category_id: number; required_annotations: number; texts?: UploadEntry[]; m2_content?: string }) => {
       const response = await api.post("/api/texts/import", payload);
       return response.data as { inserted: number };
     },
@@ -175,6 +177,8 @@ export const CategoriesPage = () => {
       setUploadTarget(null);
       setUploadText("");
       setUploadFileContent("");
+      setUploadFileName("");
+      setUploadFileIsM2(false);
       setUploadError(null);
       setUploadSuccess(t("categories.uploadSuccess", { count: data.inserted }));
       setEmptyNotice((prev) => (prev && variables && prev.id === variables.category_id ? null : prev));
@@ -227,8 +231,12 @@ export const CategoriesPage = () => {
     const file = event.target.files?.[0];
     if (!file) {
       setUploadFileContent("");
+      setUploadFileName("");
+      setUploadFileIsM2(false);
       return;
     }
+    setUploadFileName(file.name);
+    setUploadFileIsM2(file.name.toLowerCase().endsWith(".m2"));
     const reader = new FileReader();
     reader.onload = (loadEvent) => {
       const text = typeof loadEvent.target?.result === "string" ? loadEvent.target.result : "";
@@ -246,7 +254,7 @@ export const CategoriesPage = () => {
       if (uploadText.trim()) {
         parts.push(parseUploadJson(uploadText));
       }
-      if (uploadFileContent.trim()) {
+      if (uploadFileContent.trim() && !uploadFileIsM2) {
         parts.push(parseUploadJson(uploadFileContent));
       }
       entries = mergeUploadEntries(parts);
@@ -255,15 +263,21 @@ export const CategoriesPage = () => {
       setUploadError(t(message));
       return;
     }
-    if (entries.length === 0) {
+    const payload: Record<string, unknown> = {
+      category_id: uploadTarget.id,
+      required_annotations: uploadRequired,
+    };
+    if (entries.length) {
+      payload.texts = entries;
+    }
+    if (uploadFileContent.trim() && uploadFileIsM2) {
+      payload.m2_content = uploadFileContent;
+    }
+    if ((!payload.texts || (Array.isArray(payload.texts) && (payload.texts as UploadEntry[]).length === 0)) && !payload.m2_content) {
       setUploadError(t("categories.uploadEmptyError"));
       return;
     }
-    uploadTextsMutation.mutate({
-      category_id: uploadTarget.id,
-      required_annotations: uploadRequired,
-      texts: entries
-    });
+    uploadTextsMutation.mutate(payload);
   };
 
   return (
@@ -515,10 +529,15 @@ export const CategoriesPage = () => {
               <span>{t("categories.uploadFileLabel")}</span>
               <input
                 type="file"
-                accept=".json,application/json,text/json"
+                accept=".json,.m2,application/json,text/json,text/plain"
                 className="mt-1 w-full text-right text-xs text-slate-400"
                 onChange={handleFileChange}
               />
+              {uploadFileName && (
+                <p className="mt-1 text-[11px] text-slate-500">
+                  {uploadFileName} {uploadFileIsM2 ? "(M2)" : ""}
+                </p>
+              )}
             </label>
             <label className="mt-4 block text-right text-sm text-slate-300">
               <span>{t("categories.uploadRequiredLabel")}</span>
