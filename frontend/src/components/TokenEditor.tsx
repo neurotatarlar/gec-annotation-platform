@@ -202,6 +202,33 @@ export const tokenizeToTokens = (text: string): Token[] => {
   return tokens;
 };
 
+// When editing an existing correction, respect the literal text the annotator typed,
+// splitting only on explicit whitespace they inserted (punctuation stays inline).
+const tokenizeEditedText = (text: string): Token[] => {
+  const tokens: Token[] = [];
+  if (!text) return tokens;
+  const parts = text.split(/(\s+)/);
+  let spaceBefore = false;
+  parts.forEach((part) => {
+    if (!part) return;
+    if (/^\s+$/.test(part)) {
+      spaceBefore = true;
+      return;
+    }
+    const isWord = /[\p{L}\p{N}]/u.test(part);
+    tokens.push({
+      id: createId(),
+      text: part,
+      kind: isWord ? "word" : "punct",
+      selected: false,
+      spaceBefore,
+      origin: undefined,
+    });
+    spaceBefore = false;
+  });
+  return tokens;
+};
+
 export const buildHotkeyMap = (errorTypes: ErrorType[]) => {
   const map: Record<string, number> = {};
   errorTypes
@@ -603,7 +630,7 @@ const reducer = (state: EditorHistoryState, action: Action): EditorHistoryState 
           flattenedOld.push(...cloneTokens(tok.previousTokens));
         }
       });
-      const newTokensRaw = tokenizeToTokens(action.newText);
+      const newTokensRaw = tokenizeEditedText(action.newText);
       // If this was a newly inserted placeholder and user left it empty, revert to previous present.
       const newlyInsertedEmpty = newTokensRaw.length === 0 && isInsertPlaceholder(oldSlice);
       if (newlyInsertedEmpty && state.past.length) {

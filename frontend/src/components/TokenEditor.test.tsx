@@ -175,6 +175,23 @@ describe("tokenEditorReducer core flows", () => {
     expect(merged[1].text).toBe("baz");
   });
 
+  it("treats edited text literally and splits only on whitespace", () => {
+    const state1 = initState("foobar");
+    const state2 = tokenEditorReducer(state1, {
+      type: "EDIT_SELECTED_RANGE_AS_TEXT",
+      range: [0, 0],
+      newText: "foo-bar",
+    });
+    expect(state2.present.tokens.map((t) => t.text)).toEqual(["foo-bar"]);
+
+    const state3 = tokenEditorReducer(state2, {
+      type: "EDIT_SELECTED_RANGE_AS_TEXT",
+      range: [0, 0],
+      newText: "foo bar",
+    });
+    expect(state3.present.tokens.map((t) => t.text)).toEqual(["foo", "bar"]);
+  });
+
   it("buildTextFromTokens skips empty placeholders", () => {
     const tokens = [
       { id: "1", text: "hello", kind: "word", selected: false },
@@ -522,7 +539,7 @@ describe("insertion splitting", () => {
       range: [0, 0],
       newText: "foo, bar",
     });
-    expect(edited.present.tokens.map((t) => t.text)).toEqual(["foo", ",", "bar", "hello", "world"]);
+    expect(edited.present.tokens.map((t) => t.text)).toEqual(["foo,", "bar", "hello", "world"]);
   });
 
   it("renders split tokens as separate chips after editing insertion", async () => {
@@ -776,6 +793,30 @@ describe("revert clears selection", () => {
     const badgeFont = parseFloat(window.getComputedStyle(badge).fontSize || "0");
     expect(badgeFont).toBeGreaterThan(0);
     expect(badgeFont).toBeLessThan(tokenFont);
+  });
+
+  it("exports replacement without inserting whitespace when editing punctuation inline", async () => {
+    const base = initState("foobar");
+    const edited = tokenEditorReducer(base, {
+      type: "EDIT_SELECTED_RANGE_AS_TEXT",
+      range: [0, 0],
+      newText: "foo-bar",
+    });
+    const correctionCards = [
+      { id: "c1", rangeStart: 0, rangeEnd: 0, markerId: null },
+    ];
+    const correctionTypeMap = { c1: 1 };
+    const payloads = await buildAnnotationsPayloadStandalone({
+      initialText: "foobar",
+      tokens: edited.present.tokens,
+      originalTokens: edited.present.originalTokens,
+      correctionCards,
+      correctionTypeMap,
+      moveMarkers: [],
+    });
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0].replacement).toBe("foo-bar");
+    expect(payloads[0].payload.after_tokens.map((t: any) => t.text)).toEqual(["foo-bar"]);
   });
 });
 
