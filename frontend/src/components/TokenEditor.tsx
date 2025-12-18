@@ -2489,10 +2489,10 @@ const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
       const typeObj = typeId ? errorTypeById.get(typeId) ?? null : null;
       const badgeText = typeObj ? getErrorTypeLabel(typeObj, locale) : "";
       const badgeColor = typeObj?.default_color ?? "#94a3b8";
-      const badgeFontSize = Math.max(8, tokenFontSize * 0.6);
-      const badgePaddingY = Math.max(0.5, tokenFontSize * 0.1);
-      const badgePaddingX = Math.max(2, tokenFontSize * 0.25);
-      const badgeRadius = Math.max(6, tokenFontSize * 0.5);
+      const badgeFontSize = Math.max(8, tokenFontSize * 0.45);
+      const badgePaddingY = Math.max(0.5, tokenFontSize * 0.07);
+      const badgePaddingX = Math.max(2, tokenFontSize * 0.18);
+      const badgeRadius = Math.max(6, tokenFontSize * 0.45);
       const badgeMaxWidth = Math.max(160, tokenFontSize * 12);
       const badgeTextWidth = badgeText ? measureTextWidth(badgeText, badgeFontSize) : 0;
       const badgeWidth = badgeText
@@ -2525,10 +2525,11 @@ const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
           ((group.start >= hoveredMarker.fromStart && group.start <= hoveredMarker.fromEnd) ||
             (group.start >= hoveredMarker.toStart && group.start <= hoveredMarker.toEnd)));
 
-      const groupPadY = 1;
+      const groupPadY = 0;
       const groupPadX = isPurePunctGroup ? 0 : 1;
-      const paddingTop = Math.max(groupPadY, tokenFontSize * 0.15);
+      const paddingTop = Math.max(groupPadY, tokenFontSize * 0.12);
       const innerGap = Math.max(Math.max(0, tokenGap), Math.max(4, tokenFontSize * 0.25));
+      const verticalGap = Math.max(0, tokenFontSize * 0.02);
       const groupSelected =
         selection.start !== null &&
         selection.end !== null &&
@@ -2563,7 +2564,7 @@ const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
             display: "flex",
             flexDirection: "column",
             alignItems: "center",
-            gap: innerGap,
+            gap: verticalGap,
             padding: `${paddingTop}px ${groupPadX}px ${groupPadY}px ${groupPadX}px`,
             borderRadius: 14,
             border: showBorder || groupSelected ? "1px solid rgba(148,163,184,0.35)" : "1px solid transparent",
@@ -2593,6 +2594,7 @@ const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
               flexWrap: "wrap",
               justifyContent: "flex-start",
               alignItems: "center",
+              marginBottom: Math.max(0, tokenFontSize * 0.03),
             }}
             onDragOver={(e) => {
               e.preventDefault();
@@ -2686,14 +2688,23 @@ const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
             })}
           </div>
           {historyTokens.length > 0 && (
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "center", textAlign: "center" }}>
+            <div
+              style={{
+                display: "flex",
+                gap: 6,
+                flexWrap: "wrap",
+                justifyContent: "center",
+                textAlign: "center",
+                marginBottom: 0,
+              }}
+            >
               {historyTokens.map((prev) => (
                 <span
                   key={`${groupIndex}-prev-${prev.id}`}
                   style={{
                     ...chipStyles.previous,
-                    fontSize: Math.max(8, tokenFontSize * 0.7),
-                    padding: `${Math.max(0, tokenFontSize * 0.1)}px ${Math.max(1, tokenFontSize * 0.25)}px`,
+                    fontSize: Math.max(8, tokenFontSize * 0.6),
+                    padding: `${Math.max(0, tokenFontSize * 0.08)}px ${Math.max(1, tokenFontSize * 0.2)}px`,
                   }}
                 >
                   {prev.text}
@@ -2718,7 +2729,7 @@ const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
                 overflow: "hidden",
                 textOverflow: "ellipsis",
                 alignSelf: "center",
-                marginTop: Math.max(4, badgePaddingY),
+                marginTop: 0,
               }}
               title={getErrorTypeLabel(typeObj, locale)}
             >
