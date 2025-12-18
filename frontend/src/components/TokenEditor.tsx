@@ -1489,6 +1489,7 @@ const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
   const hydratedFromServerRef = useRef(false);
   const prevCorrectionCountRef = useRef(0);
   const handleRevert = (rangeStart: number, rangeEnd: number, markerId: string | null = null) => {
+    skipAutoSelectRef.current = true;
     pendingSelectIndexRef.current = rangeStart;
     dispatch({ type: "REVERT_CORRECTION", rangeStart, rangeEnd, markerId });
     setSelection({ start: null, end: null });
@@ -3847,6 +3848,7 @@ const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
                 style={{ ...miniOutlineButton, borderColor: "rgba(239,68,68,0.6)", color: "#fecdd3" }}
                 onClick={() => {
                   setShowClearConfirm(false);
+                  skipAutoSelectRef.current = true;
                   dispatch({ type: "CLEAR_ALL" });
                   setSelection({ start: null, end: null });
                   setEditingRange(null);

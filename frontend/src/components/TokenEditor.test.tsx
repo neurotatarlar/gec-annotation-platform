@@ -606,6 +606,20 @@ describe("empty placeholder selection", () => {
 });
 
 describe("revert clears selection", () => {
+  const seedEditedStateWithType = () => {
+    const base = tokenEditorReducer(createInitialHistoryState(), { type: "INIT_FROM_TEXT", text: "hello world" });
+    const edited = tokenEditorReducer(base, {
+      type: "EDIT_SELECTED_RANGE_AS_TEXT",
+      range: [0, 0],
+      newText: "hi",
+    });
+    localStorage.setItem("tokenEditorPrefs:state:1", JSON.stringify(edited.present));
+    localStorage.setItem(
+      "tokenEditorPrefs:types:1",
+      JSON.stringify({ activeErrorTypeId: 1, assignments: {} })
+    );
+  };
+
   it("removes selection highlight when undoing a correction", async () => {
     mockGet.mockReset();
     mockPost.mockReset();
@@ -628,6 +642,140 @@ describe("revert clears selection", () => {
       expect(screen.getByRole("button", { name: "hello" })).toHaveAttribute("aria-pressed", "false");
       expect(screen.getByRole("button", { name: "world" })).toHaveAttribute("aria-pressed", "false");
     });
+  });
+
+  it("deselects tokens after reverting from the corrections list", async () => {
+    mockGet.mockReset();
+    mockPost.mockReset();
+    localStorage.clear();
+    seedEditedStateWithType();
+    await renderEditor("hello world", {
+      getImpl: (url) => {
+        if (url.includes("/api/error-types")) {
+          return Promise.resolve({
+            data: [{ id: 1, en_name: "Type A", tt_name: "Type A", default_color: "#94a3b8", is_active: true }],
+          });
+        }
+        return Promise.resolve({ data: {} });
+      },
+    });
+    const user = userEvent.setup();
+
+    const corrected = await screen.findByRole("button", { name: "hi" });
+    await user.click(corrected);
+    expect(corrected).toHaveAttribute("aria-pressed", "true");
+
+    const revertButtons = await screen.findAllByText("tokenEditor.removeAction");
+    await user.click(revertButtons[0]);
+
+    await waitFor(() => {
+      const tokens = screen.getAllByRole("button").filter((el) => ["hello", "world"].includes(el.textContent ?? ""));
+      expect(tokens.every((el) => el.getAttribute("aria-pressed") === "false")).toBe(true);
+    });
+  });
+
+  it("deselects tokens after clearing all corrections", async () => {
+    mockGet.mockReset();
+    mockPost.mockReset();
+    localStorage.clear();
+    seedEditedStateWithType();
+    await renderEditor("hello world", {
+      getImpl: (url) => {
+        if (url.includes("/api/error-types")) {
+          return Promise.resolve({
+            data: [{ id: 1, en_name: "Type A", tt_name: "Type A", default_color: "#94a3b8", is_active: true }],
+          });
+        }
+        return Promise.resolve({ data: {} });
+      },
+    });
+    const user = userEvent.setup();
+
+    const corrected = await screen.findByRole("button", { name: "hi" });
+    await user.click(corrected);
+    expect(corrected).toHaveAttribute("aria-pressed", "true");
+
+    const clearAll = await screen.findByText("tokenEditor.clearAll");
+    await user.click(clearAll);
+    const confirm = await screen.findByText("tokenEditor.clearConfirm");
+    await user.click(confirm);
+
+    await waitFor(() => {
+      const tokens = screen.getAllByRole("button").filter((el) => ["hello", "world"].includes(el.textContent ?? ""));
+      expect(tokens.every((el) => el.getAttribute("aria-pressed") === "false")).toBe(true);
+    });
+  });
+
+  it("deselects tokens when reverting from the inline group undo", async () => {
+    mockGet.mockReset();
+    mockPost.mockReset();
+    localStorage.clear();
+    seedEditedStateWithType();
+    await renderEditor("hello world", {
+      getImpl: (url) => {
+        if (url.includes("/api/error-types")) {
+          return Promise.resolve({
+            data: [{ id: 1, en_name: "Type A", tt_name: "Type A", default_color: "#94a3b8", is_active: true }],
+          });
+        }
+        return Promise.resolve({ data: {} });
+      },
+    });
+    const user = userEvent.setup();
+
+    const corrected = await screen.findByRole("button", { name: "hi" });
+    await user.click(corrected);
+    expect(corrected).toHaveAttribute("aria-pressed", "true");
+
+    const inlineUndo = await screen.findByTitle("tokenEditor.undo");
+    await user.click(inlineUndo);
+
+    await waitFor(() => {
+      const tokens = screen.getAllByRole("button").filter((el) => ["hello", "world"].includes(el.textContent ?? ""));
+      expect(tokens.every((el) => el.getAttribute("aria-pressed") === "false")).toBe(true);
+    });
+  });
+
+  it("renders correction stack in order: updated tokens, history, then badge with smaller font", async () => {
+    mockGet.mockReset();
+    mockPost.mockReset();
+    localStorage.clear();
+    seedEditedStateWithType();
+    await renderEditor("hello world", {
+      getImpl: (url) => {
+        if (url.includes("/api/error-types")) {
+          return Promise.resolve({
+            data: [{ id: 1, en_name: "Type A", tt_name: "Type A", default_color: "#94a3b8", is_active: true }],
+          });
+        }
+        return Promise.resolve({ data: {} });
+      },
+    });
+
+    const corrected = await screen.findByRole("button", { name: "hi" });
+    const historySpan = screen
+      .getAllByText("hello")
+      .find((el) => el.getAttribute("role") !== "button") as HTMLElement;
+    const badgeCandidates = await screen.findAllByText("Type A");
+    const badge = badgeCandidates.find((el) => el.getAttribute("title") === "Type A") as HTMLElement;
+    expect(corrected).toBeTruthy();
+    expect(historySpan).toBeTruthy();
+    expect(badge).toBeTruthy();
+
+    let group: HTMLElement | null = badge as HTMLElement;
+    while (group && !(group.contains(corrected) && group.contains(historySpan))) {
+      group = group.parentElement;
+    }
+    expect(group).toBeTruthy();
+    const children = Array.from(group!.children);
+    expect(children[0].contains(corrected)).toBe(true);
+    expect(children[1].contains(historySpan)).toBe(true);
+    expect(children[2]).toBe(badge);
+
+    const tokenFont = parseFloat(window.getComputedStyle(corrected).fontSize || "0");
+    const badgeFont = parseFloat(window.getComputedStyle(badge).fontSize || "0");
+    expect(badgeFont).toBeGreaterThan(0);
+    expect(badgeFont).toBeLessThan(tokenFont);
   });
 });
 

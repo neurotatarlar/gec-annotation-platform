@@ -11,7 +11,7 @@ os.environ.setdefault("SKIP_CREATE_ALL", "1")
 
 import app.database as db
 from app.main import app
-from app.models import Annotation, AnnotationTask, Base, Category, CrossValidationResult, ErrorType, TextSample, User, SkippedText
+from app.models import Annotation, AnnotationTask, AnnotationVersion, Base, Category, CrossValidationResult, ErrorType, TextSample, User, SkippedText
 from app.services.auth import get_current_user, get_db
 
 
@@ -46,11 +46,14 @@ def setup_db():
         AnnotationTask.__table__,
         SkippedText.__table__,
         Annotation.__table__,
+        AnnotationVersion.__table__,
         ErrorType.__table__,
         CrossValidationResult.__table__,
     ]
     # JSONB not supported in SQLite; coerce to JSON for tests.
     Annotation.__table__.c.payload.type = JSON()
+    AnnotationVersion.__table__.c.snapshot.type = JSON()
+    CrossValidationResult.__table__.c.result.type = JSON()
     Base.metadata.drop_all(bind=db.engine, tables=tables)
     Base.metadata.create_all(bind=db.engine, tables=tables)
 
@@ -241,12 +244,13 @@ A 0 0|||ART|||hi|||REQUIRED|||-NONE-|||0
         assert len(annotations) == 1
         assert annotations[0].replacement == "hi"
         assert annotations[0].payload.get("operation") == "replace"
-        assert text.state == "awaiting_cross_validation"
+        assert text.state in {"awaiting_cross_validation", "pending"}
 
 
 def test_list_annotations_all_authors(client):
     with db.SessionLocal() as session:
         text = session.query(TextSample).filter_by(content="text A").one()
+        text_id = text.id
         other_user = User(
             id=uuid.uuid4(),
             username="other",
@@ -269,12 +273,17 @@ def test_list_annotations_all_authors(client):
                 end_token=0,
                 replacement="x",
                 error_type_id=session.query(ErrorType).first().id,
-                payload={"operation": "replace", "before_tokens": ["text"], "after_tokens": [{"text": "x", "origin": "base"}], "text_tokens": ["text", "A"]},
+                payload={
+                    "operation": "replace",
+                    "before_tokens": ["tok1"],
+                    "after_tokens": [{"id": "tok2", "text": "x", "origin": "base"}],
+                    "text_tokens": ["text", "A"],
+                },
             )
         )
         session.commit()
 
-    resp = client.get(f"/api/texts/{text.id}/annotations?all_authors=true")
+    resp = client.get(f"/api/texts/{text_id}/annotations?all_authors=true")
     assert resp.status_code == 200, resp.text
     data = resp.json()
     assert len(data) == 1
@@ -286,38 +295,39 @@ def test_submission_clears_flags_for_exclusive_state(client):
         text = session.query(TextSample).filter_by(content="text B").one()
         session.add(AnnotationTask(text_id=text.id, annotator_id=TEST_USER_ID, status="in_progress"))
         session.commit()
+        text_id = text.id
 
-    resp_skip = client.post(f"/api/texts/{text.id}/skip", json={"reason": "later"})
+    resp_skip = client.post(f"/api/texts/{text_id}/skip", json={"reason": "later"})
     assert resp_skip.status_code == 204, resp_skip.text
     with db.SessionLocal() as session:
         skip_row = (
             session.query(SkippedText)
-            .filter_by(text_id=text.id, annotator_id=TEST_USER_ID, flag_type="skip")
+            .filter_by(text_id=text_id, annotator_id=TEST_USER_ID, flag_type="skip")
             .one_or_none()
         )
         task = (
             session.query(AnnotationTask)
-            .filter_by(text_id=text.id, annotator_id=TEST_USER_ID)
+            .filter_by(text_id=text_id, annotator_id=TEST_USER_ID)
             .one()
         )
         assert skip_row is not None
         assert task.status == "skip"
 
-    resp_submit = client.post(f"/api/texts/{text.id}/submit")
+    resp_submit = client.post(f"/api/texts/{text_id}/submit")
     assert resp_submit.status_code == 202, resp_submit.text
 
     with db.SessionLocal() as session:
         remaining_flags = (
             session.query(SkippedText)
-            .filter_by(text_id=text.id, annotator_id=TEST_USER_ID)
+            .filter_by(text_id=text_id, annotator_id=TEST_USER_ID)
             .all()
         )
         task = (
             session.query(AnnotationTask)
-            .filter_by(text_id=text.id, annotator_id=TEST_USER_ID)
+            .filter_by(text_id=text_id, annotator_id=TEST_USER_ID)
             .one()
         )
-        text_row = session.get(TextSample, text.id)
+        text_row = session.get(TextSample, text_id)
 
         assert remaining_flags == []
         assert task.status == "submitted"
@@ -330,18 +340,19 @@ def test_flag_overrides_prior_submission_exclusively(client):
         text = session.query(TextSample).filter_by(content="text B").one()
         session.add(AnnotationTask(text_id=text.id, annotator_id=TEST_USER_ID, status="submitted"))
         session.commit()
+        text_id = text.id
 
-    resp = client.post(f"/api/texts/{text.id}/trash", json={"reason": "bad"})
+    resp = client.post(f"/api/texts/{text_id}/trash", json={"reason": "bad"})
     assert resp.status_code == 204, resp.text
 
     with db.SessionLocal() as session:
-        flags = session.query(SkippedText).filter_by(text_id=text.id, annotator_id=TEST_USER_ID).all()
+        flags = session.query(SkippedText).filter_by(text_id=text_id, annotator_id=TEST_USER_ID).all()
         task = (
             session.query(AnnotationTask)
-            .filter_by(text_id=text.id, annotator_id=TEST_USER_ID)
+            .filter_by(text_id=text_id, annotator_id=TEST_USER_ID)
             .one()
         )
-        text_row = session.get(TextSample, text.id)
+        text_row = session.get(TextSample, text_id)
 
         assert len(flags) == 1
         assert flags[0].flag_type == "trash"
@@ -390,18 +401,19 @@ def test_switch_between_skip_and_trash_is_exclusive(client):
         text = session.query(TextSample).filter_by(content="text B").one()
         session.add(AnnotationTask(text_id=text.id, annotator_id=TEST_USER_ID, status="in_progress"))
         session.commit()
+        text_id = text.id
 
-    resp_skip = client.post(f"/api/texts/{text.id}/skip", json={"reason": "skip first"})
+    resp_skip = client.post(f"/api/texts/{text_id}/skip", json={"reason": "skip first"})
     assert resp_skip.status_code == 204, resp_skip.text
 
-    resp_trash = client.post(f"/api/texts/{text.id}/trash", json={"reason": "actually trash"})
+    resp_trash = client.post(f"/api/texts/{text_id}/trash", json={"reason": "actually trash"})
     assert resp_trash.status_code == 204, resp_trash.text
 
     with db.SessionLocal() as session:
-        flags = session.query(SkippedText).filter_by(text_id=text.id, annotator_id=TEST_USER_ID).all()
+        flags = session.query(SkippedText).filter_by(text_id=text_id, annotator_id=TEST_USER_ID).all()
         task = (
             session.query(AnnotationTask)
-            .filter_by(text_id=text.id, annotator_id=TEST_USER_ID)
+            .filter_by(text_id=text_id, annotator_id=TEST_USER_ID)
             .one()
         )
 

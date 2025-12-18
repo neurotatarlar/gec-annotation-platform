@@ -899,7 +899,11 @@ def _build_m2_block(tokens: Iterable[str], annotations: list[Annotation]) -> str
     if not annotations:
         lines.append("A -1 -1|||noop|||-NONE-|||REQUIRED|||-NONE-|||0")
         return "\n".join(lines)
-    for ann in annotations:
+    sorted_anns = sorted(
+        annotations,
+        key=lambda ann: (ann.start_token, ann.end_token, ann.id or 0),
+    )
+    for ann in sorted_anns:
         label = _resolve_label(ann)
         replacement = _render_replacement(ann)
         lines.append(f"A {ann.start_token} {ann.end_token}|||{label}|||{replacement}|||REQUIRED|||-NONE-|||0")
