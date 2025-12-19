@@ -818,6 +818,219 @@ describe("revert clears selection", () => {
     expect(payloads[0].replacement).toBe("foo-bar");
     expect(payloads[0].payload.after_tokens.map((t: any) => t.text)).toEqual(["foo-bar"]);
   });
+
+  it("does not add an extra group highlight when selecting a corrected token", async () => {
+    mockGet.mockReset();
+    mockPost.mockReset();
+    localStorage.clear();
+    const correctedGroup = {
+      originalTokens: [{ id: "o1", text: "hello", kind: "word", selected: false }],
+      tokens: [
+        {
+          id: "t1",
+          text: "hi",
+          kind: "word",
+          selected: false,
+          groupId: "g1",
+          previousTokens: [{ id: "o1", text: "hello", kind: "word", selected: false }],
+        },
+        { id: "t2", text: "world", kind: "word", selected: false },
+      ],
+      moveMarkers: [],
+    };
+    localStorage.setItem("tokenEditorPrefs:state:1", JSON.stringify(correctedGroup));
+    await renderEditor("placeholder");
+    const user = userEvent.setup();
+    const chip = await screen.findByRole("button", { name: "hi" });
+    let groupDiv: HTMLElement | null = chip;
+    while (groupDiv && groupDiv.style.borderRadius !== "14px") {
+      groupDiv = groupDiv.parentElement;
+    }
+    const initialBg = groupDiv?.style.background;
+    await user.click(chip);
+    expect(groupDiv?.style.background).toBe(initialBg);
+  });
+
+  it("auto-selects all tokens in a replaced group", async () => {
+    const edited = tokenEditorReducer(initState("hello world"), {
+      type: "EDIT_SELECTED_RANGE_AS_TEXT",
+      range: [0, 0],
+      newText: "foo bar",
+    });
+    localStorage.setItem("tokenEditorPrefs:state:1", JSON.stringify(edited.present));
+    await renderEditor("hello world");
+    await waitFor(() => {
+      const foo = screen.getByRole("button", { name: "foo" });
+      const bar = screen.getByRole("button", { name: "bar" });
+      expect(foo).toHaveAttribute("aria-pressed", "true");
+      expect(bar).toHaveAttribute("aria-pressed", "true");
+    });
+  });
+
+  it("selects placeholder and moved tokens after a right-to-left move", async () => {
+    const present = {
+      originalTokens: [
+        { id: "o1", text: "one", kind: "word", selected: false },
+        { id: "o2", text: "two", kind: "word", selected: false },
+      ],
+      tokens: [
+        {
+          id: "ph",
+          text: "",
+          kind: "empty",
+          selected: false,
+          origin: "base",
+          groupId: "g1",
+          moveId: "m1",
+          previousTokens: [{ id: "o2", text: "two", kind: "word", selected: false }],
+        },
+        { id: "t1", text: "one", kind: "word", selected: false, origin: "base", groupId: "g2", moveId: "m1" },
+      ],
+      moveMarkers: [{ id: "m1", fromStart: 1, fromEnd: 1, toStart: 0, toEnd: 0 }],
+    } as any;
+    localStorage.setItem("tokenEditorPrefs:state:1", JSON.stringify(present));
+    await renderEditor("two one");
+    const placeholder = await screen.findByRole("button", { name: "⬚" });
+    const moved = await screen.findByRole("button", { name: "one" });
+    await waitFor(() => {
+      expect(placeholder).toHaveAttribute("aria-pressed", "true");
+      expect(moved).toHaveAttribute("aria-pressed", "true");
+    });
+  });
+
+  it("selects placeholder and moved tokens after a left-to-right move", async () => {
+    const present = {
+      originalTokens: [
+        { id: "o1", text: "one", kind: "word", selected: false },
+        { id: "o2", text: "two", kind: "word", selected: false },
+      ],
+      tokens: [
+        { id: "t1", text: "two", kind: "word", selected: false, origin: "base", groupId: "g2", moveId: "m1" },
+        {
+          id: "ph",
+          text: "",
+          kind: "empty",
+          selected: false,
+          origin: "base",
+          groupId: "g1",
+          moveId: "m1",
+          previousTokens: [{ id: "o1", text: "one", kind: "word", selected: false }],
+        },
+      ],
+      moveMarkers: [{ id: "m1", fromStart: 0, fromEnd: 0, toStart: 1, toEnd: 1 }],
+    } as any;
+    localStorage.setItem("tokenEditorPrefs:state:1", JSON.stringify(present));
+    await renderEditor("one two");
+    const placeholder = await screen.findByRole("button", { name: "⬚" });
+    const moved = await screen.findByRole("button", { name: "two" });
+    await waitFor(() => {
+      expect(placeholder).toHaveAttribute("aria-pressed", "true");
+      expect(moved).toHaveAttribute("aria-pressed", "true");
+    });
+  });
+
+  it("auto-selects the most recent deletion even after prior deletes and reverts", async () => {
+    mockGet.mockReset();
+    mockPost.mockReset();
+    localStorage.clear();
+    const base = initState("one two three");
+    const firstDelete = tokenEditorReducer(base, { type: "DELETE_SELECTED_TOKENS", range: [0, 0] });
+    localStorage.setItem("tokenEditorPrefs:state:1", JSON.stringify(firstDelete.present));
+    await renderEditor("one two three");
+    const user = userEvent.setup();
+
+    const placeholderBefore = await screen.findByRole("button", { name: "⬚" });
+    expect(placeholderBefore).toHaveAttribute("aria-pressed", "true");
+
+    // Delete the last token to create a new correction.
+    const three = await screen.findByRole("button", { name: "three" });
+    await user.click(three);
+    await user.keyboard("{Delete}");
+
+    const placeholders = await screen.findAllByRole("button", { name: "⬚" });
+    expect(placeholders.length).toBe(2);
+    // The newest deletion (second placeholder) should be selected; the first should not.
+    await waitFor(() => {
+      expect(placeholders[0]).toHaveAttribute("aria-pressed", "false");
+      expect(placeholders[1]).toHaveAttribute("aria-pressed", "true");
+    });
+  });
+
+  it("selects only the placeholder and moved tokens for a lone move without touching intermediates", async () => {
+    mockGet.mockReset();
+    mockPost.mockReset();
+    localStorage.clear();
+    const moved = tokenEditorReducer(initState("alpha beta gamma delta"), {
+      type: "MOVE_SELECTED_BY_DRAG",
+      fromIndex: 0,
+      toIndex: 3,
+      count: 1,
+    });
+    localStorage.setItem("tokenEditorPrefs:state:1", JSON.stringify(moved.present));
+    await renderEditor("alpha beta gamma delta");
+    const placeholder = await screen.findByRole("button", { name: "⬚" });
+    const alpha = await screen.findByRole("button", { name: "alpha" });
+    const beta = screen.getByRole("button", { name: "beta" });
+    const gamma = screen.getByRole("button", { name: "gamma" });
+    await waitFor(() => {
+      expect(placeholder).toHaveAttribute("aria-pressed", "true");
+      expect(alpha).toHaveAttribute("aria-pressed", "true");
+      expect(beta).toHaveAttribute("aria-pressed", "false");
+      expect(gamma).toHaveAttribute("aria-pressed", "false");
+    });
+  });
+
+  it("selects the first deletion after clearing all corrections", async () => {
+    mockGet.mockReset();
+    mockPost.mockReset();
+    localStorage.clear();
+    await renderEditor("alpha beta");
+    const user = userEvent.setup();
+
+    const alpha = await screen.findByRole("button", { name: "alpha" });
+    await user.click(alpha);
+    await user.keyboard("{Delete}");
+
+    const clearAll = await screen.findByText("tokenEditor.clearAll");
+    await user.click(clearAll);
+    const confirm = await screen.findByText("tokenEditor.clearConfirm");
+    await user.click(confirm);
+
+    const beta = await screen.findByRole("button", { name: "beta" });
+    await user.click(beta);
+    await user.keyboard("{Delete}");
+    const placeholder = await screen.findByRole("button", { name: "⬚" });
+    await waitFor(() => expect(placeholder).toHaveAttribute("aria-pressed", "true"));
+  });
+
+  it("prefers the latest move selection even when earlier edits exist", async () => {
+    mockGet.mockReset();
+    mockPost.mockReset();
+    localStorage.clear();
+    const edited = tokenEditorReducer(initState("first second third"), {
+      type: "EDIT_SELECTED_RANGE_AS_TEXT",
+      range: [2, 2],
+      newText: "third!",
+    });
+    const moved = tokenEditorReducer(edited, {
+      type: "MOVE_SELECTED_BY_DRAG",
+      fromIndex: 0,
+      toIndex: 2,
+      count: 1,
+    });
+    localStorage.setItem("tokenEditorPrefs:state:1", JSON.stringify(moved.present));
+    await renderEditor("first second third");
+    const placeholder = await screen.findByRole("button", { name: "⬚" });
+    const movedToken = await screen.findByRole("button", { name: "first" });
+    const second = screen.getByRole("button", { name: "second" });
+    const third = screen.getByRole("button", { name: "third!" });
+    await waitFor(() => {
+      expect(placeholder).toHaveAttribute("aria-pressed", "true");
+      expect(movedToken).toHaveAttribute("aria-pressed", "true");
+      expect(second).toHaveAttribute("aria-pressed", "false");
+      expect(third).toHaveAttribute("aria-pressed", "false");
+    });
+  });
 });
 
 describe("TokenEditor view toggles", () => {
@@ -859,7 +1072,7 @@ describe("TokenEditor view toggles", () => {
     localStorage.setItem("tokenEditorPrefs:state:1", JSON.stringify(present));
   };
 
-  it("auto-selects the most recent edited group even when a move correction exists", async () => {
+  it("auto-selects the move correction when it is the newest change", async () => {
     const present = {
       originalTokens: [
         { id: "o1", text: "first", kind: "word", selected: false },
@@ -893,10 +1106,14 @@ describe("TokenEditor view toggles", () => {
     localStorage.setItem("tokenEditorPrefs:state:1", JSON.stringify(present));
 
     await renderEditor("third first second");
-    await waitFor(() => expect(screen.getByRole("button", { name: "second" })).toBeInTheDocument());
-
-    const secondBtn = screen.getByRole("button", { name: "second" });
-    await waitFor(() => expect(secondBtn).toHaveAttribute("aria-pressed", "true"));
+    const placeholder = await screen.findByRole("button", { name: "⬚" });
+    const moved = screen.getByRole("button", { name: "first" });
+    const other = screen.getByRole("button", { name: "second" });
+    await waitFor(() => {
+      expect(placeholder).toHaveAttribute("aria-pressed", "true");
+      expect(moved).toHaveAttribute("aria-pressed", "true");
+      expect(other).toHaveAttribute("aria-pressed", "false");
+    });
   });
 
   it("hydrates multi-token deletions from server annotations", async () => {

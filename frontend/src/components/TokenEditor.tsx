@@ -1444,7 +1444,15 @@ export const TokenEditor: React.FC<{
   });
 
   // Selection and editing UI state (kept outside history).
-  const [selection, setSelection] = useState<SelectionRange>({ start: null, end: null });
+  const [selection, setSelectionState] = useState<SelectionRange>({ start: null, end: null });
+  const [selectionMoveMarkerId, setSelectionMoveMarkerId] = useState<string | null>(null);
+  const setSelection = useCallback(
+    (range: SelectionRange, moveMarkerId: string | null = null) => {
+      setSelectionMoveMarkerId(moveMarkerId);
+      setSelectionState(range);
+    },
+    []
+  );
   const [editingRange, setEditingRange] = useState<SelectionRange | null>(null);
   const [editText, setEditText] = useState("");
   const prefs = useMemo(() => loadPrefs(), []);
@@ -1602,11 +1610,20 @@ const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
   const hasSelection = selection.start !== null && selection.end !== null;
   const selectedIndices = useMemo(() => {
     if (!hasSelection) return [];
+    if (selectionMoveMarkerId) {
+      const marker = history.present.moveMarkers.find((m) => m.id === selectionMoveMarkerId);
+      if (marker) {
+        const indices: number[] = [];
+        for (let i = marker.fromStart; i <= marker.fromEnd; i += 1) indices.push(i);
+        for (let i = marker.toStart; i <= marker.toEnd; i += 1) indices.push(i);
+        return Array.from(new Set(indices)).sort((a, b) => a - b);
+      }
+    }
     const [s, e] = [selection.start!, selection.end!];
     const start = Math.min(s, e);
     const end = Math.max(s, e);
     return rangeToArray([start, end]);
-  }, [selection, hasSelection]);
+  }, [hasSelection, history.present.moveMarkers, selection, selectionMoveMarkerId]);
 
   // Init from text on mount.
   useEffect(() => {
@@ -1880,6 +1897,26 @@ const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
     history.present.moveMarkers.forEach((m) => map.set(m.id, m));
     return map;
   }, [history.present.moveMarkers]);
+
+  useEffect(() => {
+    if (!selectionMoveMarkerId) return;
+    if (!hasSelection) {
+      setSelectionMoveMarkerId(null);
+      return;
+    }
+    const marker = moveMarkerById.get(selectionMoveMarkerId);
+    if (!marker) {
+      setSelectionMoveMarkerId(null);
+      return;
+    }
+    const minSel = Math.min(selection.start!, selection.end!);
+    const maxSel = Math.max(selection.start!, selection.end!);
+    const markerMin = Math.min(marker.fromStart, marker.toStart);
+    const markerMax = Math.max(marker.fromEnd, marker.toEnd);
+    if (minSel !== markerMin || maxSel !== markerMax) {
+      setSelectionMoveMarkerId(null);
+    }
+  }, [hasSelection, moveMarkerById, selection, selectionMoveMarkerId]);
 
   const requestNextText = useCallback(async () => {
     try {
@@ -2813,31 +2850,65 @@ const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
   }, [correctionCards, activeErrorTypeId, hasLoadedTypeState]);
 
   const correctionSignatureRef = useRef<string | null>(null);
+  const moveSignatureRef = useRef<string | null>(null);
+  const prevCorrectionIdsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     const signature = correctionCards.map((c) => `${c.id}:${c.rangeStart}-${c.rangeEnd}`).join("|");
+    const moveSignature = history.present.moveMarkers
+      .map((m) => `${m.id}:${m.fromStart}-${m.fromEnd}:${m.toStart}-${m.toEnd}`)
+      .join("|");
+    const moveChanged = moveSignature !== moveSignatureRef.current;
+    const prevIds = prevCorrectionIdsRef.current;
+    const currentIds = correctionCards.map((c) => c.id);
+    const addedIds = currentIds.filter((id) => !prevIds.has(id));
+    const prevCount = prevCorrectionCountRef.current;
+    const shouldSkipAuto = skipAutoSelectRef.current && correctionCards.length <= prevCount;
     if (signature !== correctionSignatureRef.current && correctionCards.length) {
-      if (skipAutoSelectRef.current) {
+      if (shouldSkipAuto) {
         setSelection({ start: null, end: null });
         skipAutoSelectRef.current = false;
       } else {
-      const desiredIdx = pendingSelectIndexRef.current;
-      if (desiredIdx !== null && tokens.length) {
-        const clamped = Math.max(0, Math.min(tokens.length - 1, desiredIdx));
-        const [start, end] = findGroupRangeForTokens(tokens, clamped);
-        setSelection({ start, end });
-      } else {
-        const target =
-          [...correctionCards].reverse().find((c) => !c.markerId) ?? correctionCards[correctionCards.length - 1];
-        if (target) {
-          setSelection({ start: target.rangeStart, end: target.rangeEnd });
+        const desiredIdx = pendingSelectIndexRef.current;
+        if (desiredIdx !== null && tokens.length) {
+          const clamped = Math.max(0, Math.min(tokens.length - 1, desiredIdx));
+          const [start, end] = findGroupRangeForTokens(tokens, clamped);
+          setSelection({ start, end });
+        } else {
+          const addedTargetId = addedIds.length ? addedIds[addedIds.length - 1] : null;
+          const addedTarget = addedTargetId ? correctionCards.find((c) => c.id === addedTargetId) : null;
+          const latestMove = moveChanged
+            ? history.present.moveMarkers[history.present.moveMarkers.length - 1]
+            : null;
+          const target =
+            addedTarget ||
+            (latestMove && correctionCards.find((c) => c.markerId === latestMove.id)) ||
+            [...correctionCards].reverse().find((c) => !c.markerId) ||
+            correctionCards[correctionCards.length - 1];
+          if (target) {
+            if (target.markerId) {
+              const marker = moveMarkerById.get(target.markerId);
+              if (marker) {
+                const start = Math.min(marker.fromStart, marker.toStart);
+                const end = Math.max(marker.fromEnd, marker.toEnd);
+                setSelection({ start, end }, target.markerId);
+              }
+            } else {
+              const [start, end] = findGroupRangeForTokens(tokens, target.rangeStart);
+              setSelection({ start, end });
+            }
+          }
         }
-      }
       }
     }
     correctionSignatureRef.current = signature;
+    moveSignatureRef.current = moveSignature;
+    if (!shouldSkipAuto) {
+      skipAutoSelectRef.current = false;
+    }
+    prevCorrectionIdsRef.current = new Set(currentIds);
     pendingSelectIndexRef.current = null;
     prevCorrectionCountRef.current = correctionCards.length;
-  }, [correctionCards, tokens]);
+  }, [correctionCards, history.present.moveMarkers, moveMarkerById, tokens]);
 
   const clearSelectionAfterTypePick = useCallback((cardId: string, typeId: number | null) => {
     updateCorrectionType(cardId, typeId);
