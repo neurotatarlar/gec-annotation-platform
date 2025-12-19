@@ -192,6 +192,62 @@ describe("tokenEditorReducer core flows", () => {
     expect(state3.present.tokens.map((t) => t.text)).toEqual(["foo", "bar"]);
   });
 
+  it("preserves explicit spaces before punctuation when re-editing a correction", async () => {
+    const edited = tokenEditorReducer(initState("hello world"), {
+      type: "EDIT_SELECTED_RANGE_AS_TEXT",
+      range: [0, 0],
+      newText: "foo , bar",
+    });
+    localStorage.setItem("tokenEditorPrefs:state:1", JSON.stringify(edited.present));
+    await renderEditor("hello world");
+    const user = userEvent.setup();
+    const foo = await screen.findByRole("button", { name: "foo" });
+    await user.dblClick(foo);
+    const input = await screen.findByPlaceholderText("tokenEditor.editPlaceholder");
+    expect((input as HTMLInputElement).value).toBe("foo , bar");
+  });
+
+  it("reverts corrections when edited text matches the original content", () => {
+    const state1 = initState("hello world");
+    const edited = tokenEditorReducer(state1, {
+      type: "EDIT_SELECTED_RANGE_AS_TEXT",
+      range: [0, 0],
+      newText: "hi",
+    });
+    const reverted = tokenEditorReducer(edited, {
+      type: "EDIT_SELECTED_RANGE_AS_TEXT",
+      range: [0, 0],
+      newText: "hello",
+    });
+    expect(reverted.present.tokens.map((t) => t.text)).toEqual(["hello", "world"]);
+    expect(reverted.present.tokens[0].previousTokens).toBeUndefined();
+    expect(reverted.present.moveMarkers.length).toBe(0);
+  });
+
+  it("clears selection after editing a correction back to the original text", async () => {
+    const base = initState("hello world");
+    const edited = tokenEditorReducer(base, {
+      type: "EDIT_SELECTED_RANGE_AS_TEXT",
+      range: [0, 0],
+      newText: "hi",
+    });
+    localStorage.setItem("tokenEditorPrefs:state:1", JSON.stringify(edited.present));
+    await renderEditor("hello world");
+    const user = userEvent.setup();
+    const hi = await screen.findByRole("button", { name: "hi" });
+    await user.dblClick(hi);
+    const input = await screen.findByPlaceholderText("tokenEditor.editPlaceholder");
+    await user.clear(input);
+    await user.type(input, "hello");
+    await user.tab();
+    await waitFor(() => expect(screen.queryByRole("button", { name: "hi" })).toBeNull());
+    await waitFor(() => {
+      const helloBtn = screen.getAllByRole("button").find((el) => el.textContent === "hello");
+      expect(helloBtn).toBeTruthy();
+      expect(helloBtn?.getAttribute("aria-pressed")).toBe("false");
+    });
+  });
+
   it("buildTextFromTokens skips empty placeholders", () => {
     const tokens = [
       { id: "1", text: "hello", kind: "word", selected: false },
@@ -1149,6 +1205,134 @@ describe("TokenEditor view toggles", () => {
     expect(within(corrected).getByText("gamma")).toBeInTheDocument();
     expect(within(corrected).queryByRole("button", { name: "alpha" })).not.toBeInTheDocument();
     expect(within(corrected).queryByRole("button", { name: "beta" })).not.toBeInTheDocument();
+  });
+
+  it("hydrates server insertions from another annotator", async () => {
+    localStorage.clear();
+    await renderEditor("hello world", {
+      getImpl: (url: string) => {
+        if (url.includes("/api/error-types")) return Promise.resolve({ data: [] });
+        if (url.includes("/annotations")) {
+          return Promise.resolve({
+            data: [
+              {
+                id: 20,
+                author_id: "other",
+                start_token: 1,
+                end_token: 1,
+                replacement: "there",
+                error_type_id: 1,
+                payload: {
+                  operation: "insert",
+                  before_tokens: [],
+                  after_tokens: [{ id: "t3", text: "there", origin: "base" }],
+                  text_tokens: ["hello", "world"],
+                },
+              },
+            ],
+          });
+        }
+        return Promise.resolve({ data: {} });
+      },
+    });
+
+    const corrected = await screen.findByTestId("corrected-panel");
+    const chips = within(corrected).getAllByRole("button");
+    const texts = chips.map((c) => c.textContent);
+    expect(texts).toContain("there");
+    expect(texts.join(" ")).toBe("hello there world");
+  });
+
+  it("hydrates server edits with literal punctuation spacing", async () => {
+    localStorage.clear();
+    await renderEditor("foo bar", {
+      getImpl: (url: string) => {
+        if (url.includes("/api/error-types")) return Promise.resolve({ data: [] });
+        if (url.includes("/annotations")) {
+          return Promise.resolve({
+            data: [
+              {
+                id: 21,
+                author_id: "other",
+                start_token: 0,
+                end_token: 0,
+                replacement: "foo , bar",
+                error_type_id: 1,
+                payload: {
+                  operation: "replace",
+                  before_tokens: ["foo"],
+                  after_tokens: [{ id: "a1", text: "foo , bar", origin: "base" }],
+                  text_tokens: ["foo", "bar"],
+                },
+              },
+            ],
+          });
+        }
+        return Promise.resolve({ data: {} });
+      },
+    });
+
+    const corrected = await screen.findByTestId("corrected-panel");
+    await waitFor(() => {
+      const tokens = within(corrected)
+        .getAllByRole("button")
+        .filter((el) => el.getAttribute("aria-pressed") !== null)
+        .map((el) => el.textContent);
+      expect(tokens.slice(0, 3)).toEqual(["foo", ",", "bar"]);
+    });
+  });
+
+  it("hydrates move-like preannotations (insert + delete) from another annotator", async () => {
+    localStorage.clear();
+    await renderEditor("alpha beta gamma", {
+      getImpl: (url: string) => {
+        if (url.includes("/api/error-types")) return Promise.resolve({ data: [] });
+        if (url.includes("/annotations")) {
+          return Promise.resolve({
+            data: [
+              {
+                id: 30,
+                author_id: "other",
+                start_token: 0,
+                end_token: 0,
+                replacement: "beta",
+                error_type_id: 1,
+                payload: {
+                  operation: "insert",
+                  before_tokens: [],
+                  after_tokens: [{ id: "i1", text: "beta", origin: "base" }],
+                  text_tokens: ["alpha", "beta", "gamma"],
+                },
+              },
+              {
+                id: 31,
+                author_id: "other",
+                start_token: 1,
+                end_token: 1,
+                replacement: null,
+                error_type_id: 1,
+                payload: {
+                  operation: "delete",
+                  before_tokens: ["beta"],
+                  after_tokens: [],
+                  text_tokens: ["alpha", "beta", "gamma"],
+                },
+              },
+            ],
+          });
+        }
+        return Promise.resolve({ data: {} });
+      },
+    });
+
+    const corrected = await screen.findByTestId("corrected-panel");
+    await waitFor(() => {
+      const tokens = within(corrected)
+        .getAllByRole("button")
+        .filter((el) => el.getAttribute("aria-pressed") !== null)
+        .map((el) => el.textContent);
+      expect(tokens.join(" ")).toBe("beta alpha ⬚ gamma");
+    });
   });
 
   it("toggles between original and corrected text panel and persists collapse", async () => {

@@ -53,7 +53,7 @@ export const SettingsPage = () => {
   const queryClient = useQueryClient();
   const { t, locale } = useI18n();
   const navigate = useNavigate();
-  const [profileForm, setProfileForm] = useState({ username: "", password: "" });
+  const [profileForm, setProfileForm] = useState({ username: "", password: "", passwordConfirm: "" });
   const [profileMessage, setProfileMessage] = useState<string | null>(null);
   const [profileError, setProfileError] = useState<string | null>(null);
   const { data: errorTypes = [] } = useQuery<ErrorType[]>({
@@ -162,7 +162,8 @@ export const SettingsPage = () => {
     if (profile) {
       setProfileForm({
         username: profile.username,
-        password: ""
+        password: "",
+        passwordConfirm: ""
       });
     }
   }, [profile]);

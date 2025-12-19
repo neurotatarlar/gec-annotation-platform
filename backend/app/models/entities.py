@@ -142,17 +142,6 @@ class AnnotationVersion(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
-class AuditLog(Base):
-    __tablename__ = "audit_logs"
-
-    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    actor_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
-    action: Mapped[str] = mapped_column(String(64))
-    entity: Mapped[str] = mapped_column(String(64))
-    entity_id: Mapped[str] = mapped_column(String(64))
-    payload: Mapped[dict] = mapped_column(JSONB, default=dict)
-
-
 class CrossValidationResult(Base):
     __tablename__ = "cross_validation_results"
 

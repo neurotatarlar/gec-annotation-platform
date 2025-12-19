@@ -276,12 +276,14 @@ def get_next_text(
         AnnotationTask.annotator_id == current_user.id, AnnotationTask.status == "submitted"
     )
 
+    terminal_statuses = ("submitted", "skip", "trash")
+
     existing_task_row = (
         db.query(AnnotationTask, TextSample)
         .join(TextSample, AnnotationTask.text_id == TextSample.id)
         .filter(
             AnnotationTask.annotator_id == current_user.id,
-            AnnotationTask.status != "submitted",
+            AnnotationTask.status.notin_(terminal_statuses),
             TextSample.category_id == category_id,
             TextSample.state.in_(["pending", "in_annotation"]),
         )
@@ -314,6 +316,8 @@ def get_next_text(
         .scalar_subquery()
     )
 
+    terminal_texts_subq = select(AnnotationTask.text_id).where(AnnotationTask.status.in_(terminal_statuses))
+
     stmt = (
         select(TextSample)
         .where(
@@ -322,6 +326,7 @@ def get_next_text(
             ~TextSample.id.in_(skipped_subquery),
             ~TextSample.id.in_(any_task_for_user),
             ~TextSample.id.in_(submitted_subquery),
+            ~TextSample.id.in_(terminal_texts_subq),
             or_(
                 TextSample.locked_by_id.is_(None),
                 TextSample.locked_by_id == current_user.id,

@@ -3,7 +3,6 @@ from .entities import (
     Annotation,
     AnnotationTask,
     AnnotationVersion,
-    AuditLog,
     Category,
     CrossValidationResult,
     ErrorType,
@@ -23,7 +22,6 @@ __all__ = [
     "UserErrorType",
     "Annotation",
     "AnnotationVersion",
-    "AuditLog",
     "CrossValidationResult",
     "SkippedText",
 ]

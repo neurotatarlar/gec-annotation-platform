@@ -3,14 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 
+import { SettingsPage } from "./SettingsPage";
+
 const apiMocks = vi.hoisted(() => ({
   mockGet: vi.fn(),
   mockPost: vi.fn(),
   mockPut: vi.fn(),
-}));
-
-const reactQueryMocks = vi.hoisted(() => ({
-  invalidateQueries: vi.fn(),
 }));
 
 vi.mock("../context/I18nContext", () => ({
@@ -25,47 +23,61 @@ vi.mock("../api/client", () => ({
   }),
 }));
 
+// Lightweight react-query mock to avoid hanging timers.
 vi.mock("@tanstack/react-query", () => {
-  const useQuery = vi.fn(({ queryKey }: { queryKey: unknown[] }) => {
+  const errorTypesData: any[] = [];
+  const profileData = { id: "u1", username: "tester", role: "admin" };
+  const useQuery = ({ queryKey }: { queryKey: unknown[] }) => {
     if (queryKey[0] === "error-types") {
-      return { data: [] };
+      return { data: errorTypesData };
     }
     if (queryKey[0] === "me") {
-      return { data: { id: "u1", username: "tester", role: "admin" } };
+      return { data: profileData };
     }
     return { data: undefined };
-  });
+  };
 
-  const useMutation = vi.fn((opts: any) => ({
-    mutate: (payload: any) => opts.mutationFn(payload).then(opts.onSuccess),
-    mutateAsync: (payload: any) => opts.mutationFn(payload).then(opts.onSuccess),
+  const useMutation = (opts: any) => ({
+    mutate: (payload: any) =>
+      Promise.resolve(opts.mutationFn(payload)).then((res) => {
+        opts.onSuccess?.(res, payload, undefined);
+        return res;
+      }),
+    mutateAsync: (payload: any) =>
+      Promise.resolve(opts.mutationFn(payload)).then((res) => {
+        opts.onSuccess?.(res, payload, undefined);
+        return res;
+      }),
     isPending: false,
-  }));
-
-  const useQueryClient = () => ({
-    invalidateQueries: reactQueryMocks.invalidateQueries,
   });
 
+  const useQueryClient = () => ({ invalidateQueries: vi.fn() });
   const QueryClientProvider = ({ children }: { children: React.ReactNode }) => <>{children}</>;
 
   return { useQuery, useMutation, useQueryClient, QueryClientProvider };
 });
 
-import { SettingsPage } from "./SettingsPage";
+describe("SettingsPage", () => {
+  const setup = async () => {
+    render(
+      <MemoryRouter>
+        <SettingsPage />
+      </MemoryRouter>
+    );
+    await screen.findByText("settings.errorTypesHeader");
+  };
 
-// Temporarily skipped while UI test hangs; keep the expectations nearby for later re-enable.
-describe.skip("SettingsPage error types", () => {
   beforeEach(() => {
     apiMocks.mockGet.mockReset();
     apiMocks.mockPost.mockReset();
     apiMocks.mockPut.mockReset();
-    reactQueryMocks.invalidateQueries.mockReset();
     apiMocks.mockGet.mockImplementation((url: string) => {
       if (url === "/api/error-types/") return Promise.resolve({ data: [] });
       if (url === "/api/auth/me") return Promise.resolve({ data: { id: "u1", username: "tester", role: "admin" } });
       throw new Error(`Unhandled GET ${url}`);
     });
     apiMocks.mockPost.mockResolvedValue({ data: { id: 123 } });
+    apiMocks.mockPut.mockResolvedValue({ data: {} });
   });
 
   afterEach(() => {
@@ -73,18 +85,11 @@ describe.skip("SettingsPage error types", () => {
   });
 
   it("sends create request when adding a new error type", async () => {
-    render(
-      <MemoryRouter>
-        <SettingsPage />
-      </MemoryRouter>
-    );
-
-    await screen.findByText("settings.errorTypesHeader");
+    await setup();
 
     fireEvent.click(screen.getByText("settings.addButton"));
     const nameInput = await screen.findByPlaceholderText("settings.enNameLabel");
     fireEvent.change(nameInput, { target: { value: " New type " } });
-
     fireEvent.click(screen.getByText("settings.add"));
 
     await waitFor(() => expect(apiMocks.mockPost).toHaveBeenCalledTimes(1));
@@ -98,5 +103,19 @@ describe.skip("SettingsPage error types", () => {
       tt_name: null,
       is_active: true,
     });
+  });
+
+  it("validates password confirmation when saving profile", async () => {
+    await setup();
+    const username = await screen.findByDisplayValue("tester");
+    const [password, confirm] = await screen.findAllByPlaceholderText("settings.profilePasswordPlaceholder");
+
+    fireEvent.change(username, { target: { value: "tester" } });
+    fireEvent.change(password, { target: { value: "secret" } });
+    fireEvent.change(confirm, { target: { value: "other" } });
+
+    const saveButton = screen.getByText("settings.profileSave");
+    expect(saveButton).toBeDisabled();
+    expect(apiMocks.mockPut).not.toHaveBeenCalled();
   });
 });

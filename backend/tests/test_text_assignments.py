@@ -93,36 +93,34 @@ def client():
     return TestClient(app)
 
 
-def test_next_text_skips_already_submitted_count(client):
+@pytest.mark.parametrize("status", ["submitted", "skip", "trash"])
+def test_next_text_ignores_terminal_tasks_from_any_annotator(client, status):
     with db.SessionLocal() as session:
         text = session.query(TextSample).filter_by(content="text A").one()
-        # two submitted tasks already, meeting required_annotations=2
+        session.add(AnnotationTask(text_id=text.id, annotator_id=uuid.uuid4(), status=status))
+        session.commit()
+
+    resp = client.post("/api/texts/assignments/next", params={"category_id": 1})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    # Should assign text B instead because text A already has a terminal task.
+    assert body["text"]["content"] == "text B"
+
+
+def test_next_text_returns_404_when_all_texts_terminal(client):
+    with db.SessionLocal() as session:
+        text_a = session.query(TextSample).filter_by(content="text A").one()
+        text_b = session.query(TextSample).filter_by(content="text B").one()
         session.add_all(
             [
-                AnnotationTask(text_id=text.id, annotator_id=uuid.uuid4(), status="submitted"),
-                AnnotationTask(text_id=text.id, annotator_id=uuid.uuid4(), status="submitted"),
+                AnnotationTask(text_id=text_a.id, annotator_id=uuid.uuid4(), status="submitted"),
+                AnnotationTask(text_id=text_b.id, annotator_id=uuid.uuid4(), status="trash"),
             ]
         )
         session.commit()
 
     resp = client.post("/api/texts/assignments/next", params={"category_id": 1})
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-    # Should assign text B instead, because text A already has enough submissions.
-    assert body["text"]["content"] == "text B"
-
-
-def test_next_text_allows_additional_reviews_until_required(client):
-    with db.SessionLocal() as session:
-        text = session.query(TextSample).filter_by(content="text A").one()
-        # only one submitted so far; required_annotations=2 means it should still be assignable
-        session.add(AnnotationTask(text_id=text.id, annotator_id=uuid.uuid4(), status="submitted"))
-        session.commit()
-
-    resp = client.post("/api/texts/assignments/next", params={"category_id": 1})
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-    assert body["text"]["content"] == "text A"
+    assert resp.status_code == 404, resp.text
 
 
 def test_next_text_returns_existing_assignment_for_user(client):

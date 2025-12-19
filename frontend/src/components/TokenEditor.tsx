@@ -653,6 +653,26 @@ const reducer = (state: EditorHistoryState, action: Action): EditorHistoryState 
       const reuseHistory = Boolean(existingGroupId && anchorExistingHistory?.previousTokens?.length);
       const baseHistoryRaw = reuseHistory ? cloneTokens(anchorExistingHistory!.previousTokens!) : flattenedOld;
       const baseHistory = dedupeTokens(unwindToOriginal(baseHistoryRaw));
+      const baseVisible = baseHistory.filter((t) => t.kind !== "empty");
+
+      // If the new text matches the original visible tokens exactly, treat this as a full revert.
+      if (newTokensRaw.length && sameTokenSequence(baseVisible, newTokensRaw)) {
+        const restored = baseVisible.map((tok) => ({
+          ...tok,
+          selected: false,
+          previousTokens: undefined,
+          groupId: undefined,
+          moveId: undefined,
+        }));
+        tokens.splice(start, oldSlice.length, ...restored);
+        const cleaned = dropRedundantEmpties(tokens);
+        const next: EditorPresentState = {
+          ...state.present,
+          tokens: cleaned,
+          moveMarkers: deriveMoveMarkers(cleaned),
+        };
+        return pushPresent(state, next);
+      }
 
       const groupId = reuseHistory && existingGroupId ? existingGroupId : createId();
       let replacement: Token[] = newTokensRaw.length
@@ -937,8 +957,14 @@ export const buildTextFromTokensWithBreaks = (tokens: Token[], breaks: number[])
 
 export const buildEditableTextFromTokens = (tokens: Token[]) => {
   const visible = tokens.filter((t) => t.kind !== "empty");
-  const joined = visible.map((t) => t.text).join(" ");
-  return joined.replace(/\s+([.,;:?!])/g, "$1 ").trim();
+  if (!visible.length) return "";
+  return visible
+    .map((t, idx) => {
+      const needsSpace = idx === 0 ? false : t.spaceBefore !== false;
+      const prefix = needsSpace ? " " : "";
+      return `${prefix}${t.text}`;
+    })
+    .join("");
 };
 
 type DiffOp = { type: "equal" | "delete" | "insert"; values: string[] };
@@ -2907,8 +2933,17 @@ const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
     }
     prevCorrectionIdsRef.current = new Set(currentIds);
     pendingSelectIndexRef.current = null;
-    prevCorrectionCountRef.current = correctionCards.length;
   }, [correctionCards, history.present.moveMarkers, moveMarkerById, tokens]);
+
+  useEffect(() => {
+    if (correctionCards.length < prevCorrectionCountRef.current) {
+      setSelection({ start: null, end: null });
+    }
+  }, [correctionCards.length, setSelection]);
+
+  useEffect(() => {
+    prevCorrectionCountRef.current = correctionCards.length;
+  }, [correctionCards.length]);
 
   const clearSelectionAfterTypePick = useCallback((cardId: string, typeId: number | null) => {
     updateCorrectionType(cardId, typeId);
