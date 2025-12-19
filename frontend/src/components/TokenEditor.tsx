@@ -2558,10 +2558,6 @@ const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
       const paddingTop = Math.max(groupPadY, tokenFontSize * 0.12);
       const innerGap = Math.max(Math.max(0, tokenGap), Math.max(4, tokenFontSize * 0.25));
       const verticalGap = Math.max(0, tokenFontSize * 0.02);
-      const groupSelected =
-        selection.start !== null &&
-        selection.end !== null &&
-        !(group.end < Math.min(selection.start, selection.end) || group.start > Math.max(selection.start, selection.end));
       const displayTextForToken = (tok: Token) => {
         if (tok.kind === "empty") return "⬚";
         if (tok.kind === "special" && tok.text.length > 32) {
@@ -2595,15 +2591,13 @@ const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
             gap: verticalGap,
             padding: `${paddingTop}px ${groupPadX}px ${groupPadY}px ${groupPadX}px`,
             borderRadius: 14,
-            border: showBorder || groupSelected ? "1px solid rgba(148,163,184,0.35)" : "1px solid transparent",
+            border: showBorder ? "1px solid rgba(148,163,184,0.35)" : "1px solid transparent",
             background: isHoveredGroup
               ? "rgba(94,234,212,0.05)"
-              : groupSelected
-                ? "rgba(59,130,246,0.08)"
-                : "transparent",
+              : "transparent",
             boxShadow: isHoveredGroup
               ? "0 0 0 1px rgba(94,234,212,0.4)"
-              : showBorder || groupSelected
+              : showBorder
                 ? "0 0 0 1px rgba(148,163,184,0.25)"
                 : "none",
             flex: "0 0 auto",
