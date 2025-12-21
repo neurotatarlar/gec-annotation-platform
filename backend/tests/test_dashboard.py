@@ -1,6 +1,6 @@
 import os
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -88,11 +88,12 @@ def setup_db():
         ]
         session.add_all(texts)
         session.flush()
+        now = datetime.now(timezone.utc)
         session.add_all(
             [
-                AnnotationTask(text_id=texts[0].id, annotator_id=other.id, status="submitted", updated_at=datetime.utcnow()),
-                AnnotationTask(text_id=texts[1].id, annotator_id=other.id, status="skip", updated_at=datetime.utcnow()),
-                AnnotationTask(text_id=texts[2].id, annotator_id=other.id, status="trash", updated_at=datetime.utcnow()),
+                AnnotationTask(text_id=texts[0].id, annotator_id=other.id, status="submitted", updated_at=now),
+                AnnotationTask(text_id=texts[1].id, annotator_id=other.id, status="skip", updated_at=now),
+                AnnotationTask(text_id=texts[2].id, annotator_id=other.id, status="trash", updated_at=now),
             ]
         )
         session.add_all(
@@ -129,3 +130,23 @@ def test_dashboard_activity_includes_terminal_events(client):
     data = resp.json()
     seen_statuses = {item["status"] for item in data["items"]}
     assert {"submitted", "skip", "trash"}.issubset(seen_statuses)
+
+
+def test_dashboard_activity_shows_recent_submission(client):
+    with db.SessionLocal() as session:
+        category = session.query(Category).first()
+        text = TextSample(content="newly submitted", category_id=category.id, required_annotations=1, state="pending")
+        session.add(text)
+        session.flush()
+        text_id = text.id
+        now = datetime.now(timezone.utc)
+        session.add(AnnotationTask(text_id=text_id, annotator_id=TEST_USER_ID, status="submitted", updated_at=now))
+        session.commit()
+
+    resp = client.get(
+        "/api/dashboard/activity",
+        params={"limit": 10, "offset": 0, "kinds": "task", "task_statuses": "submitted"},
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert any(item["text_id"] == text_id for item in data.get("items", []))

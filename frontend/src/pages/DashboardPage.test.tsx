@@ -267,4 +267,27 @@ describe("DashboardPage", () => {
       expect(screen.getByText("dashboard.empty")).toBeInTheDocument();
     });
   });
+
+  it("defaults to updated-time sorting and normalizes persisted sort data", async () => {
+    localStorage.setItem(
+      "dashboardFilters",
+      JSON.stringify({
+        sortField: "updated_at",
+        sortOrder: "sideways"
+      })
+    );
+
+    renderPage();
+    await screen.findAllByText("submitted text");
+
+    await waitFor(() => {
+      const last = activityCalls[activityCalls.length - 1];
+      expect(last?.sort).toBe("occurred_at");
+      expect(last?.order).toBe("desc");
+    });
+
+    const saved = JSON.parse(localStorage.getItem("dashboardFilters") || "{}");
+    expect(saved.sortField).toBe("occurred_at");
+    expect(saved.sortOrder).toBe("desc");
+  });
 });

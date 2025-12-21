@@ -14,6 +14,8 @@ import {
 
 const PAGE_SIZE = 30;
 const storageKey = "dashboardFilters";
+const sortOptions = ["occurred_at", "category", "annotator", "text"] as const;
+type SortField = (typeof sortOptions)[number];
 
 const toIsoDate = (value: string, isEnd?: boolean) => {
   if (!value) return undefined;
@@ -61,7 +63,7 @@ type DashboardFilters = {
   showSkip: boolean;
   showTrash: boolean;
   showSubmitted: boolean;
-  sortField: string;
+  sortField: SortField;
   sortOrder: "asc" | "desc";
   search: string;
 };
@@ -78,6 +80,14 @@ const defaultFilters: DashboardFilters = {
   sortOrder: "desc",
   search: ""
 };
+
+const normalizeSortField = (value: string | undefined | null): SortField => {
+  const candidate = (value ?? "").toString();
+  return (sortOptions as readonly string[]).includes(candidate) ? (candidate as SortField) : "occurred_at";
+};
+
+const normalizeSortOrder = (value: string | undefined | null): "asc" | "desc" =>
+  value === "asc" || value === "desc" ? value : "desc";
 
 const formatStatusLabel = (status: string | null | undefined, t: (k: string, params?: any) => string) => {
   const normalized = (status ?? "").toString().trim().toLowerCase();
@@ -101,8 +111,8 @@ const loadPersistedFilters = (): DashboardFilters | null => {
       showSkip: parsed.showSkip ?? true,
       showTrash: parsed.showTrash ?? true,
       showSubmitted: parsed.showSubmitted ?? true,
-      sortField: parsed.sortField ?? "occurred_at",
-      sortOrder: parsed.sortOrder ?? "desc",
+      sortField: normalizeSortField(parsed.sortField),
+      sortOrder: normalizeSortOrder(parsed.sortOrder),
       search: parsed.search ?? ""
     };
   } catch {

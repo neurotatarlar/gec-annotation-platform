@@ -2,11 +2,15 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func, JSON
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.sql.type_api import TypeEngine
 
 from .base import Base
+
+# Use JSON for sqlite while keeping JSONB on Postgres.
+JsonType: TypeEngine = JSON().with_variant(JSONB, "postgresql")
 
 
 class User(Base):
@@ -61,7 +65,7 @@ class AnnotationTask(Base):
     annotator_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
     status: Mapped[str] = mapped_column(String(32), default="in_progress")
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+        DateTime(timezone=True), default=func.now(), server_default=func.now(), onupdate=func.now()
     )
 
     text: Mapped[TextSample] = relationship()
@@ -124,7 +128,7 @@ class Annotation(Base):
     end_token: Mapped[int] = mapped_column(Integer)
     replacement: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     error_type_id: Mapped[int] = mapped_column(ForeignKey("error_types.id"))
-    payload: Mapped[dict] = mapped_column(JSONB, default=dict)
+    payload: Mapped[dict] = mapped_column(JsonType, default=dict)
     version: Mapped[int] = mapped_column(Integer, default=1)
 
     text: Mapped[TextSample] = relationship(back_populates="annotations")
@@ -138,7 +142,7 @@ class AnnotationVersion(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     annotation_id: Mapped[int] = mapped_column(ForeignKey("annotations.id", ondelete="CASCADE"))
     version: Mapped[int] = mapped_column(Integer)
-    snapshot: Mapped[dict] = mapped_column(JSONB)
+    snapshot: Mapped[dict] = mapped_column(JsonType)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -147,5 +151,5 @@ class CrossValidationResult(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     text_id: Mapped[int] = mapped_column(ForeignKey("texts.id"), nullable=False)
-    result: Mapped[dict] = mapped_column(JSONB, default=dict)
+    result: Mapped[dict] = mapped_column(JsonType, default=dict)
     status: Mapped[str] = mapped_column(String(32), default="pending")

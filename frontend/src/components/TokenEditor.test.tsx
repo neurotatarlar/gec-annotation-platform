@@ -304,6 +304,53 @@ describe("tokenEditorReducer core flows", () => {
     expect(Math.abs(inputTop - originalTop)).toBeLessThanOrEqual(4);
   });
 
+  it("respects line breaks from multiline text", async () => {
+    localStorage.clear();
+    await renderEditor("foo bar\nbaz qux");
+    const breaks = await screen.findAllByTestId("line-break");
+    expect(breaks.length).toBeGreaterThan(0);
+    const panel = screen.getByTestId("corrected-panel");
+    await waitFor(() => {
+      const labels = Array.from(panel.querySelectorAll('[role="button"], [data-testid="line-break"]'))
+        .map((node) => (node.getAttribute("data-testid") === "line-break" ? "BR" : node.textContent?.trim()))
+        .filter((label) => label && ["foo", "bar", "baz", "qux", "BR"].includes(label));
+      expect(labels).toEqual(["foo", "bar", "BR", "baz", "qux"]);
+    });
+  });
+
+  it("keeps line breaks when hydrating annotations without snapshot spacing", async () => {
+    localStorage.clear();
+    await renderEditor("hello\nworld", {
+      getImpl: (url: string) => {
+        if (url.includes("/api/error-types")) return Promise.resolve({ data: [] });
+        if (url.includes("/api/texts/1/annotations")) {
+          return Promise.resolve({
+            data: [
+              {
+                start_token: 0,
+                end_token: 0,
+                replacement: null,
+                payload: { operation: "noop", text_tokens: ["hello", "world"] },
+                error_type_id: null,
+                version: 1,
+              },
+            ],
+          });
+        }
+        return Promise.resolve({ data: {} });
+      },
+    });
+    const breaks = await screen.findAllByTestId("line-break");
+    expect(breaks.length).toBeGreaterThan(0);
+    const panel = screen.getByTestId("corrected-panel");
+    await waitFor(() => {
+      const labels = Array.from(panel.querySelectorAll('[role="button"], [data-testid="line-break"]'))
+        .map((node) => (node.getAttribute("data-testid") === "line-break" ? "BR" : node.textContent?.trim()))
+        .filter((label) => label && ["hello", "world", "BR"].includes(label));
+      expect(labels).toEqual(["hello", "BR", "world"]);
+    });
+  });
+
   it("keeps punctuation chips tight to their borders", async () => {
     localStorage.clear();
     await renderEditor("hi ) there");

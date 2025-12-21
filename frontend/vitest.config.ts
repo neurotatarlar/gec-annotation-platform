@@ -10,10 +10,5 @@ export default defineConfig({
     globals: true,
     watch: false,
     pool: "threads",
-    poolOptions: {
-      threads: {
-        singleThread: true,
-      },
-    },
   },
 });

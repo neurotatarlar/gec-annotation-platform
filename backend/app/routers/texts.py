@@ -599,6 +599,7 @@ def submit_annotations(
         db.add(task)
     else:
         task.status = "submitted"
+    task.updated_at = datetime.now(timezone.utc)
 
     text.locked_by_id = None
     text.locked_at = None
@@ -722,6 +723,7 @@ def _flag_text(
     )
     if task:
         task.status = flag_type
+        task.updated_at = datetime.now(timezone.utc)
 
     # Make the text unavailable for further assignment until restored.
     text.locked_by_id = None

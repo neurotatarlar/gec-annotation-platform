@@ -1512,8 +1512,8 @@ const [isSubmitting, setIsSubmitting] = useState(false);
   const [isTrashing, setIsTrashing] = useState(false);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [isAutosaving, setIsAutosaving] = useState(false);
-  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+const [isAutosaving, setIsAutosaving] = useState(false);
+const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
 const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
 const initialViewTab = useMemo<"original" | "corrected" | "m2" | "debug">(() => {
   if (prefs.viewTab === "original" || prefs.viewTab === "corrected" || prefs.viewTab === "m2" || prefs.viewTab === "debug") {
@@ -1523,7 +1523,20 @@ const initialViewTab = useMemo<"original" | "corrected" | "m2" | "debug">(() => 
 }, [prefs.viewTab]);
 const [viewTab, setViewTab] = useState<"original" | "corrected" | "m2" | "debug">(initialViewTab);
 const [isTextPanelOpen, setIsTextPanelOpen] = useState<boolean>(prefs.textPanelOpen ?? true);
-const [lineBreaks, setLineBreaks] = useState<number[]>([]);
+const computeLineBreaks = useCallback((text: string) => {
+  const breaks: number[] = [];
+  const lines = text.split(/\n/);
+  let count = 0;
+  lines.forEach((line, idx) => {
+    const lineTokens = tokenizeToTokens(line);
+    count += lineTokens.filter((t) => t.kind !== "empty").length;
+    if (idx < lines.length - 1) {
+      breaks.push(count);
+    }
+  });
+  return breaks;
+}, []);
+const [lineBreaks, setLineBreaks] = useState<number[]>(() => computeLineBreaks(initialText));
 const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
   const autosaveInitializedRef = useRef(false);
   const lastSavedSignatureRef = useRef<string | null>(null);
@@ -1675,31 +1688,13 @@ const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
   }, [initialText, textId]);
 
   useEffect(() => {
-    const computeBreaks = (text: string) => {
-      const breaks: number[] = [];
-      const lines = text.split(/\n/);
-      let count = 0;
-      lines.forEach((line, idx) => {
-        const lineTokens = tokenizeToTokens(line);
-        count += lineTokens.filter((t) => t.kind !== "empty").length;
-        if (idx < lines.length - 1) {
-          breaks.push(count);
-        }
-      });
-      return breaks;
-    };
-    setLineBreaks(computeBreaks(initialText));
-  }, [initialText]);
+    setLineBreaks(computeLineBreaks(initialText));
+  }, [initialText, computeLineBreaks]);
 
   const hydrateFromServerAnnotations = useCallback(
     (items: any[]) => {
       if (!items?.length) return null;
-      const snapshotTokens = items.find((ann: any) => Array.isArray(ann?.payload?.text_tokens) && ann.payload.text_tokens.length);
-      const sourceText =
-        snapshotTokens && Array.isArray(snapshotTokens.payload.text_tokens)
-          ? (snapshotTokens.payload.text_tokens as string[]).join(" ")
-          : initialText;
-      const baseTokens = tokenizeToTokens(sourceText);
+      const baseTokens = tokenizeToTokens(initialText);
       let working = cloneTokens(baseTokens);
       let offset = 0;
       const typeMap: Record<string, number | null> = {};
@@ -2828,7 +2823,14 @@ const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
         result.push(
           <div
             key={`br-${visibleCount}`}
-            style={{ width: "100%", height: tokenFontSize * 0.6, flexBasis: "100%" }}
+            data-testid="line-break"
+            style={{
+              width: "100%",
+              height: tokenFontSize * 0.6,
+              flexBasis: "100%",
+              flexShrink: 0,
+              flexGrow: 0,
+            }}
           />
         );
       }
@@ -3421,27 +3423,27 @@ const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
                       opacity: isSkipping ? 0.6 : 1,
                       cursor: isSkipping ? "not-allowed" : "pointer",
                     }}
-                    onClick={() => handleFlag("skip")}
-                    disabled={isSubmitting || isSkipping || isTrashing}
-                  >
-                    {isSkipping ? t("annotation.skipSubmitting") : t("annotation.skipText")}
-                  </button>
-                  <button
-                    style={{
-                      ...dangerActionStyle,
-                      ...(highlightAction === "trash" ? { boxShadow: "0 0 0 2px rgba(248,113,113,0.5)", borderColor: "#fb7185" } : {}),
-                      opacity: isTrashing ? 0.6 : 1,
-                      cursor: isTrashing ? "not-allowed" : "pointer",
-                    }}
-                    onClick={() => handleFlag("trash")}
-                    disabled={isSubmitting || isSkipping || isTrashing}
-                  >
-                    {isTrashing ? t("annotation.trashSubmitting") : t("annotation.trashText")}
-                  </button>
-                  <div style={actionDividerStyle} />
-                  <button
-                    style={{
-                      ...primaryActionStyle,
+                  onClick={() => handleFlag("skip")}
+                  disabled={isSubmitting || isSkipping || isTrashing}
+                >
+                  {t("annotation.skipText")}
+                </button>
+                <button
+                  style={{
+                    ...dangerActionStyle,
+                    ...(highlightAction === "trash" ? { boxShadow: "0 0 0 2px rgba(248,113,113,0.5)", borderColor: "#fb7185" } : {}),
+                    opacity: isTrashing ? 0.6 : 1,
+                    cursor: isTrashing ? "not-allowed" : "pointer",
+                  }}
+                  onClick={() => handleFlag("trash")}
+                  disabled={isSubmitting || isSkipping || isTrashing}
+                >
+                  {t("annotation.trashText")}
+                </button>
+                <div style={actionDividerStyle} />
+                <button
+                  style={{
+                    ...primaryActionStyle,
                       ...(highlightAction === "submit" ? { boxShadow: "0 0 0 2px rgba(74,222,128,0.6)", borderColor: "#34d399" } : {}),
                       opacity: isSubmitting || hasUnassignedCorrections ? 0.6 : 1,
                       cursor: isSubmitting || hasUnassignedCorrections ? "not-allowed" : "pointer",
@@ -3454,8 +3456,8 @@ const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
                         : undefined
                     }
                   >
-                    {isSubmitting ? t("common.submitting") : t("common.submit")}
-                  </button>
+                  {t("common.submit")}
+                </button>
                 </div>
               </div>
               <div style={spacingRowStyle}>
