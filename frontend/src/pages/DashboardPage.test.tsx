@@ -5,6 +5,7 @@ import { MemoryRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { DashboardPage } from "./DashboardPage";
+import { SaveStatusProvider } from "../context/SaveStatusContext";
 
 vi.mock("../context/I18nContext", () => ({
   useI18n: () => ({ t: (k: string) => k, locale: "en" })
@@ -119,7 +120,9 @@ const renderPage = () => {
   return render(
     <MemoryRouter>
       <QueryClientProvider client={client}>
-        <DashboardPage />
+        <SaveStatusProvider>
+          <DashboardPage />
+        </SaveStatusProvider>
       </QueryClientProvider>
     </MemoryRouter>
   );

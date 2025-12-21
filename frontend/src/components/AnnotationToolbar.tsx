@@ -30,7 +30,7 @@ export const AnnotationToolbar = ({ onSave, onSubmit, canSubmit, stats, saving, 
           onClick={onSubmit}
           disabled={!canSubmit || submitting}
         >
-          {submitting ? t("common.submitting") : t("common.submit")}
+          {t("common.submit")}
         </button>
       </div>
     </div>

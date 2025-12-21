@@ -1285,9 +1285,53 @@ describe("TokenEditor view toggles", () => {
 
     const corrected = await screen.findByTestId("corrected-panel");
     const chips = within(corrected).getAllByRole("button");
-    const texts = chips.map((c) => c.textContent);
+    const texts = chips.map((c) => c.textContent?.trim()).filter(Boolean) as string[];
     expect(texts).toContain("there");
-    expect(texts.join(" ")).toBe("hello there world");
+    expect(texts.filter((t) => t !== "↺").join(" ")).toBe("hello there world");
+    // Insertions should render as a correction group (placeholder history visible).
+    expect(within(corrected).getAllByText("⬚").length).toBeGreaterThan(0);
+  });
+
+  it("hydrates server moves with placeholder and moved group", async () => {
+    localStorage.clear();
+    await renderEditor("hello brave new world", {
+      getImpl: (url: string) => {
+        if (url.includes("/api/error-types")) return Promise.resolve({ data: [] });
+        if (url.includes("/annotations")) {
+          return Promise.resolve({
+            data: [
+              {
+                id: 30,
+                author_id: "other",
+                start_token: 1,
+                end_token: 1,
+                replacement: null,
+                error_type_id: 1,
+                payload: {
+                  operation: "move",
+                  before_tokens: ["base-1"],
+                  after_tokens: [{ id: "m1", text: "brave", origin: "base" }],
+                  move_from: 1,
+                  move_to: 4,
+                  text_tokens: ["hello", "brave", "new", "world"],
+                },
+              },
+            ],
+          });
+        }
+        return Promise.resolve({ data: {} });
+      },
+    });
+
+    const corrected = await screen.findByTestId("corrected-panel");
+    const chips = within(corrected)
+      .getAllByRole("button")
+      .map((c) => c.textContent?.trim())
+      .filter((t) => t && t !== "↺") as string[];
+    expect(chips).toContain("brave");
+    expect(chips.join(" ")).toBe("hello ⬚ new world brave");
+    // Placeholder should be rendered for the source location.
+    expect(within(corrected).getAllByText("⬚").length).toBeGreaterThan(0);
   });
 
   it("hydrates server edits with literal punctuation spacing", async () => {

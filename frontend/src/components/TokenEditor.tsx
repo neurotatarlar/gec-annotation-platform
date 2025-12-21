@@ -1316,6 +1316,10 @@ export const buildAnnotationsPayloadStandalone = async ({
       after_tokens: afterFragments,
       source: "manual",
     };
+    if (operation === "move") {
+      (payload as any).move_from = card.markerId ? moveMarkerById.get(card.markerId)?.fromStart ?? card.rangeStart : card.rangeStart;
+      (payload as any).move_to = card.markerId ? moveMarkerById.get(card.markerId)?.toStart ?? card.rangeStart : card.rangeStart;
+    }
 
     const draft: AnnotationDraft = {
       start_token: card.rangeStart,
@@ -1715,15 +1719,54 @@ const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
             : Math.max(0, Math.min(working.length - targetStart, Math.max(0, endOriginal - startOriginal + 1)));
         const beforeTokensPayload = Array.isArray(payload.before_tokens) ? payload.before_tokens : [];
         const removeCount = Math.max(removeCountFromSpan, beforeTokensPayload.length);
-        const previous = cloneTokens(working.slice(targetStart, targetStart + removeCount));
-        const afterRaw = Array.isArray(payload.after_tokens) ? payload.after_tokens : [];
-        const afterTexts =
-          afterRaw.length > 0
-            ? afterRaw.map((t: any) => (typeof t?.text === "string" ? t.text : "")).filter(Boolean)
-            : ann?.replacement
+      const previousRaw = cloneTokens(working.slice(targetStart, targetStart + removeCount));
+      const previous =
+        operation === "insert" && previousRaw.length === 0 ? [makeEmptyPlaceholder([])] : previousRaw;
+      const afterRaw = Array.isArray(payload.after_tokens) ? payload.after_tokens : [];
+      const afterTexts =
+        afterRaw.length > 0
+          ? afterRaw.map((t: any) => (typeof t?.text === "string" ? t.text : "")).filter(Boolean)
+          : ann?.replacement
               ? tokenizeToTokens(String(ann.replacement)).map((t) => t.text)
               : [];
         const groupId = createId();
+        const cardType = ann?.error_type_id ?? null;
+
+        if (operation === "move") {
+          const moveId = createId();
+          const moveFrom = typeof (payload as any)?.move_from === "number" ? (payload as any).move_from : startOriginal;
+          const moveTo = typeof (payload as any)?.move_to === "number" ? (payload as any).move_to : startOriginal;
+          const sourceIdx = Math.max(0, Math.min(working.length, moveFrom + offset));
+          const srcSlice = working.slice(sourceIdx, sourceIdx + removeCount);
+          const sourceHistory =
+            srcSlice.length > 0
+              ? cloneTokens(srcSlice)
+              : afterTexts.flatMap((text) => tokenizeToTokens(text));
+          const placeholder = { ...makeEmptyPlaceholder(sourceHistory), groupId, moveId };
+          working.splice(sourceIdx, removeCount, placeholder);
+          offset += 1 - removeCount;
+
+          const moveTokens: Token[] = [];
+          afterTexts.forEach((text) => {
+            tokenizeToTokens(text).forEach((tok) => {
+              const next = {
+                ...tok,
+                id: createId(),
+                groupId,
+                moveId,
+                selected: false,
+                previousTokens: cloneTokens(sourceHistory),
+              };
+              moveTokens.push(next);
+              typeMap[next.id] = cardType;
+            });
+          });
+          const destIdx = Math.max(0, Math.min(working.length, moveTo + offset));
+          working.splice(destIdx, 0, ...moveTokens);
+          offset += moveTokens.length;
+          return;
+        }
+
         const newTokens: Token[] = [];
         if (!afterTexts.length && (operation === "delete" || operation === "insert")) {
           newTokens.push({ ...makeEmptyPlaceholder(previous), groupId });
@@ -1742,7 +1785,6 @@ const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
         }
         const removal = removeCount;
         working.splice(targetStart, removal, ...newTokens);
-        const cardType = ann?.error_type_id ?? null;
         newTokens.forEach((tok) => {
           typeMap[tok.id] = cardType;
         });
@@ -4036,13 +4078,7 @@ const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
                 onClick={confirmFlag}
                 disabled={isSkipping || isTrashing}
               >
-                {pendingAction === "skip"
-                  ? isSkipping
-                    ? t("annotation.skipSubmitting")
-                    : t("annotation.skipConfirm")
-                  : isTrashing
-                    ? t("annotation.trashSubmitting")
-                    : t("annotation.trashConfirm")}
+                {pendingAction === "skip" ? t("annotation.skipConfirm") : t("annotation.trashConfirm")}
               </button>
             </div>
           </div>
