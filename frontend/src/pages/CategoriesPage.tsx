@@ -98,7 +98,7 @@ export const CategoriesPage = () => {
       if ((err as any)?.response?.status === 404) {
         setEmptyNotice(category);
       } else {
-        alert(detail ?? t("categories.noTexts"));
+        alert(detail ?? t("common.error"));
       }
     }
   };

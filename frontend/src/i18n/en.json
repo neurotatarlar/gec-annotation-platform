@@ -45,7 +45,6 @@
     "editTitle": "Edit category",
     "emptyBody": "Please add more texts to this category by pasting them manually or uploading a file via the import tools.",
     "emptyTitle": "No texts left in “{{name}}”",
-    "noTexts": "No texts left in this category",
     "noTextsAvailableNow": "No texts available right now. They may be locked by other annotators.",
     "statRemaining": "Remaining",
     "statLocked": "Locked",

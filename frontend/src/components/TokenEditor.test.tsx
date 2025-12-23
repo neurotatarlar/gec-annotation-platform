@@ -31,6 +31,16 @@ vi.mock("../context/I18nContext", () => ({
   }),
 }));
 
+const navigateMock = vi.hoisted(() => vi.fn());
+
+vi.mock("react-router-dom", async () => {
+  const actual = await vi.importActual<typeof import("react-router-dom")>("react-router-dom");
+  return {
+    ...actual,
+    useNavigate: () => navigateMock,
+  };
+});
+
 const mockGet = vi.fn();
 const mockPost = vi.fn();
 
@@ -65,6 +75,10 @@ beforeAll(() => {
 afterAll(() => {
   (console.warn as any).mockRestore?.();
   (console.error as any).mockRestore?.();
+});
+
+beforeEach(() => {
+  navigateMock.mockReset();
 });
 
 const renderEditor = (initialText: string, opts?: { getImpl?: (url: string) => Promise<any> }) => {
@@ -267,6 +281,15 @@ describe("tokenEditorReducer core flows", () => {
     expect(buildTextFromTokensWithBreaks(tokens, breaks)).toBe("hello world\nnext");
   });
 
+  it("buildTextFromTokensWithBreaks preserves blank lines", () => {
+    const tokens = [
+      { id: "1", text: "hello", kind: "word", selected: false },
+      { id: "2", text: "world", kind: "word", selected: false },
+    ] as any;
+    const breaks = [1, 1]; // two newlines after first visible token
+    expect(buildTextFromTokensWithBreaks(tokens, breaks)).toBe("hello\n\nworld");
+  });
+
   it("renders first/last tokens flush to container", async () => {
     localStorage.clear();
     await renderEditor("hello world");
@@ -316,6 +339,30 @@ describe("tokenEditorReducer core flows", () => {
         .filter((label) => label && ["foo", "bar", "baz", "qux", "BR"].includes(label));
       expect(labels).toEqual(["foo", "bar", "BR", "baz", "qux"]);
     });
+  });
+
+  it("renders consecutive line breaks as empty lines", async () => {
+    localStorage.clear();
+    await renderEditor("foo\n\nbar");
+    const panel = await screen.findByTestId("corrected-panel");
+    const breaks = await screen.findAllByTestId("line-break");
+    expect(breaks.length).toBeGreaterThanOrEqual(2);
+    await waitFor(() => {
+      const labels = Array.from(panel.querySelectorAll('[role="button"], [data-testid="line-break"]'))
+        .map((node) => (node.getAttribute("data-testid") === "line-break" ? "BR" : node.textContent?.trim()))
+        .filter((label) => label && ["foo", "bar", "BR"].includes(label));
+      expect(labels).toEqual(["foo", "BR", "BR", "bar"]);
+    });
+  });
+
+  it("avoids space markers at the start of a new line", async () => {
+    localStorage.clear();
+    await renderEditor("bar\nzulu");
+    const panel = await screen.findByTestId("corrected-panel");
+    const lineBreak = panel.querySelector('[data-testid="line-break"]');
+    expect(lineBreak).toBeTruthy();
+    const afterBreak = lineBreak?.nextElementSibling;
+    expect(afterBreak?.querySelector('[data-testid="space-marker"]')).toBeNull();
   });
 
   it("keeps line breaks when hydrating annotations without snapshot spacing", async () => {
@@ -1473,5 +1520,51 @@ describe("TokenEditor view toggles", () => {
     const correctedTab = screen.getByRole("button", { name: "tokenEditor.corrected" });
     await user.click(correctedTab);
     await waitFor(() => expect(screen.getByTestId("text-view-panel")).toHaveTextContent("hello world"));
+  });
+});
+
+describe("navigation when category is empty", () => {
+  it("returns to categories after submission when no texts remain", async () => {
+    mockGet.mockReset();
+    mockPost.mockReset();
+    localStorage.clear();
+    mockGet.mockImplementation((url: string) => {
+      if (url.includes("/api/error-types")) {
+        return Promise.resolve({ data: [] });
+      }
+      if (url.includes("/api/categories/")) {
+        return Promise.resolve({ data: [{ id: 1, remaining_texts: 0 }] });
+      }
+      return Promise.resolve({ data: {} });
+    });
+    mockPost.mockImplementation((url: string) => {
+      if (url.includes("/api/texts/1/annotations")) {
+        return Promise.resolve({ data: [] });
+      }
+      if (url.includes("/api/texts/1/submit")) {
+        return Promise.resolve({ data: {} });
+      }
+      if (url.includes("/api/texts/assignments/next")) {
+        return Promise.reject({ response: { status: 404 } });
+      }
+      return Promise.resolve({ data: {} });
+    });
+
+    await renderEditor("hello world", {
+      getImpl: (url: string) => {
+        if (url.includes("/api/error-types")) {
+          return Promise.resolve({ data: [] });
+        }
+        if (url.includes("/api/categories/")) {
+          return Promise.resolve({ data: [{ id: 1, remaining_texts: 0 }] });
+        }
+        return Promise.resolve({ data: {} });
+      },
+    });
+    const user = userEvent.setup();
+    const submit = await screen.findByRole("button", { name: "common.submit" });
+    await user.click(submit);
+
+    await waitFor(() => expect(navigateMock).toHaveBeenCalledWith("/"));
   });
 });

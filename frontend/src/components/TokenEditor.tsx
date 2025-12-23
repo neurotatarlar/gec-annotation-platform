@@ -940,19 +940,25 @@ export const buildTextFromTokens = (tokens: Token[]) =>
     .replace(/\s+([.,;:?!-])/g, "$1");
 
 export const buildTextFromTokensWithBreaks = (tokens: Token[], breaks: number[]) => {
-  const breakSet = new Set(breaks);
+  const breakCounts = new Map<number, number>();
+  breaks.forEach((idx) => {
+    breakCounts.set(idx, (breakCounts.get(idx) ?? 0) + 1);
+  });
   const parts: string[] = [];
   let visibleIdx = 0;
   tokens.forEach((t) => {
     if (t.kind === "empty") return;
     parts.push(t.text);
     visibleIdx += 1;
-    if (breakSet.has(visibleIdx)) {
-      parts.push("\n");
+    const count = breakCounts.get(visibleIdx) ?? 0;
+    if (count > 0) {
+      for (let i = 0; i < count; i += 1) {
+        parts.push("\n");
+      }
     }
   });
   const joined = parts.join(" ");
-  return joined.replace(/\s+([.,;:?!-])/g, "$1").replace(/\s*\n\s*/g, "\n").trimEnd();
+  return joined.replace(/\s+([.,;:?!-])/g, "$1").replace(/[ \t]*\n[ \t]*/g, "\n").trimEnd();
 };
 
 export const buildEditableTextFromTokens = (tokens: Token[]) => {
@@ -1542,6 +1548,13 @@ const computeLineBreaks = useCallback((text: string) => {
 }, []);
 const [lineBreaks, setLineBreaks] = useState<number[]>(() => computeLineBreaks(initialText));
 const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
+const lineBreakCountMap = useMemo(() => {
+  const map = new Map<number, number>();
+  lineBreaks.forEach((idx) => {
+    map.set(idx, (map.get(idx) ?? 0) + 1);
+  });
+  return map;
+}, [lineBreaks]);
   const autosaveInitializedRef = useRef(false);
   const lastSavedSignatureRef = useRef<string | null>(null);
   const [lastDecision, setLastDecision] = useState<"skip" | "trash" | "submit" | null>(
@@ -1576,6 +1589,19 @@ const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
 
   const tokens = history.present.tokens;
   const originalTokens = history.present.originalTokens;
+  const lineStartIndices = useMemo(() => {
+    if (!lineBreaks.length) return new Set<number>();
+    const starts = new Set<number>();
+    let visibleIndex = 0;
+    tokens.forEach((tok, idx) => {
+      if (tok.kind === "empty") return;
+      if (lineBreakSet.has(visibleIndex)) {
+        starts.add(idx);
+      }
+      visibleIndex += 1;
+    });
+    return starts;
+  }, [tokens, lineBreaks, lineBreakSet]);
   const baseTokenMap = useMemo(() => {
     const map = new Map<string, Token>();
     originalTokens.forEach((tok) => {
@@ -2002,11 +2028,14 @@ const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
           );
           if (current && current.remaining_texts > 0) {
             setActionMessage(t("categories.noTextsAvailableNow") ?? "No texts available right now. Please try again.");
+            return false;
           } else {
-            setActionMessage(t("categories.noTexts") ?? "No texts left in this category.");
+            navigate("/");
+            return true;
           }
         } catch {
-          setActionMessage(t("categories.noTexts") ?? "No texts left in this category.");
+          setActionMessage(t("categories.noTextsAvailableNow") ?? "No texts available right now. Please try again.");
+          return false;
         }
       } else {
         setActionError(formatError(error));
@@ -2551,11 +2580,13 @@ const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
     const renderGap = (idx: number) => {
       const base = Math.max(0, tokenGap);
       const nextTok = tokens[idx];
-      const hasSpace = nextTok?.spaceBefore !== false;
+      const isLineStart = lineStartIndices.has(idx);
+      const hasSpace = !isLineStart && nextTok?.spaceBefore !== false;
       const isPunctAdjacent = nextTok?.kind === "punct";
-      const isEdge = idx === 0 || idx >= tokens.length;
+      const isEdge = idx === 0 || idx >= tokens.length || isLineStart;
       const baseWidth = isEdge ? 0 : hasSpace ? base : Math.max(0, Math.floor(base * (isPunctAdjacent ? 0.2 : 0.25)));
-      const gapWidth = hasSpace && !isEdge ? Math.max(baseWidth, Math.max(4, tokenFontSize * 0.25)) : baseWidth;
+      const minSpaceWidth = Math.max(2, tokenFontSize * 0.16);
+      const gapWidth = hasSpace && !isEdge ? Math.max(baseWidth, minSpaceWidth) : baseWidth;
       const markerChar: string | null =
         !hasSpace || isEdge
           ? null
@@ -2656,7 +2687,8 @@ const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
       const groupPadY = 0;
       const groupPadX = isPurePunctGroup ? 0 : 1;
       const paddingTop = Math.max(groupPadY, tokenFontSize * 0.12);
-      const innerGap = Math.max(Math.max(0, tokenGap), Math.max(4, tokenFontSize * 0.25));
+      const minSpaceWidth = Math.max(2, tokenFontSize * 0.16);
+      const innerGap = Math.max(Math.max(0, tokenGap), minSpaceWidth);
       const verticalGap = Math.max(0, tokenFontSize * 0.02);
       const displayTextForToken = (tok: Token) => {
         if (tok.kind === "empty") return "⬚";
@@ -2763,7 +2795,7 @@ const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
                 const isPunctAdjacent = tok.kind === "punct";
                 const hasSpace = tok.spaceBefore !== false;
                 const baseWidth = hasSpace ? innerGap : Math.max(0, Math.floor(innerGap * (isPunctAdjacent ? 0.2 : 0.25)));
-                const gapWidth = hasSpace ? Math.max(baseWidth, Math.max(4, tokenFontSize * 0.25)) : baseWidth;
+                const gapWidth = hasSpace ? Math.max(baseWidth, minSpaceWidth) : baseWidth;
                 const markerChar: string | null =
                   !hasSpace
                     ? null
@@ -2861,20 +2893,24 @@ const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
         </div>
       );
       result.push(groupNode);
-      if (lineBreakSet.has(visibleCount)) {
-        result.push(
-          <div
-            key={`br-${visibleCount}`}
-            data-testid="line-break"
-            style={{
-              width: "100%",
-              height: tokenFontSize * 0.6,
-              flexBasis: "100%",
-              flexShrink: 0,
-              flexGrow: 0,
-            }}
-          />
-        );
+      const lineBreakHeight = Math.max(4, Math.round(tokenFontSize * 0.2));
+      const breakCount = lineBreakCountMap.get(visibleCount) ?? 0;
+      if (breakCount > 0) {
+        for (let i = 0; i < breakCount; i += 1) {
+          result.push(
+            <div
+              key={`br-${visibleCount}-${i}`}
+              data-testid="line-break"
+              style={{
+                width: "100%",
+                height: lineBreakHeight,
+                flexBasis: "100%",
+                flexShrink: 0,
+                flexGrow: 0,
+              }}
+            />
+          );
+        }
       }
       result.push(renderGap(group.end + 1));
     });
@@ -3136,10 +3172,7 @@ const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
       await api.post(`/api/texts/${textId}/submit`);
       setActionMessage(t("common.submit"));
       setLastDecision("submit");
-      const moved = await requestNextText();
-      if (!moved) {
-        navigate("/");
-      }
+      await requestNextText();
     } catch (error: any) {
       setActionError(formatError(error));
     } finally {

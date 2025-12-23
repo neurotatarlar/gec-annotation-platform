@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, renderHook } from "@testing-library/react";
 import React, { useEffect } from "react";
 import { describe, expect, it } from "vitest";
 
@@ -23,9 +23,8 @@ describe("SaveStatusContext", () => {
   });
 
   it("throws when used outside provider", () => {
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const renderWithoutProvider = () => render(<Consumer />);
-    expect(renderWithoutProvider).toThrow();
-    errorSpy.mockRestore();
+    expect(() => renderHook(() => useSaveStatus())).toThrowError(
+      "useSaveStatus must be used within SaveStatusProvider"
+    );
   });
 });
