@@ -55,6 +55,7 @@ export interface TokenFragmentPayload {
   text: string;
   origin: "base" | "inserted";
   source_id?: string | null;
+  space_before?: boolean;
 }
 
 export interface AnnotationDetailPayload {

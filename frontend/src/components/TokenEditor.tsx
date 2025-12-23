@@ -540,6 +540,7 @@ const reducer = (state: EditorHistoryState, action: Action): EditorHistoryState 
           }
         }
       }
+      const leadingSpace = start === 0 ? false : tokens[start]?.spaceBefore !== false;
       const removed = tokens.slice(start, end + 1);
       // If user deletes only inserted tokens, treat it as reverting that insertion (no placeholder).
       const allInserted = removed.every((t) => t.origin === "inserted");
@@ -573,6 +574,7 @@ const reducer = (state: EditorHistoryState, action: Action): EditorHistoryState 
         previousTokens.push(makeEmptyPlaceholder([]));
       }
       const placeholder = makeEmptyPlaceholder(previousTokens);
+      placeholder.spaceBefore = leadingSpace;
       tokens.splice(start, removed.length, placeholder);
       const next: EditorPresentState = { ...state.present, tokens, moveMarkers: deriveMoveMarkers(tokens) };
       return pushPresent(state, next);
@@ -581,6 +583,7 @@ const reducer = (state: EditorHistoryState, action: Action): EditorHistoryState 
       if (!action.range) return state;
       const [start] = action.range;
       const tokens = cloneTokens(state.present.tokens);
+      const leadingSpace = start === 0 ? false : tokens[start]?.spaceBefore !== false;
       const inserted: Token = {
         id: createId(),
         text: "",
@@ -589,6 +592,7 @@ const reducer = (state: EditorHistoryState, action: Action): EditorHistoryState 
         // Show a placeholder history so the annotator sees the implicit ⬚.
         previousTokens: [makeEmptyPlaceholder([])],
         origin: "inserted",
+        spaceBefore: leadingSpace,
       };
       tokens.splice(start, 0, inserted);
       const next: EditorPresentState = { ...state.present, tokens, moveMarkers: deriveMoveMarkers(tokens) };
@@ -599,6 +603,8 @@ const reducer = (state: EditorHistoryState, action: Action): EditorHistoryState 
       if (!action.range) return state;
       const tokens = cloneTokens(state.present.tokens);
       const [, end] = action.range;
+      const nextToken = tokens[end + 1];
+      const leadingSpace = end === tokens.length - 1 ? true : nextToken?.spaceBefore !== false;
       const inserted: Token = {
         id: createId(),
         text: "",
@@ -606,6 +612,7 @@ const reducer = (state: EditorHistoryState, action: Action): EditorHistoryState 
         selected: false,
         previousTokens: [makeEmptyPlaceholder([])],
         origin: "inserted",
+        spaceBefore: leadingSpace,
       };
       tokens.splice(end + 1, 0, inserted);
       const next: EditorPresentState = { ...state.present, tokens, moveMarkers: deriveMoveMarkers(tokens) };
@@ -622,6 +629,7 @@ const reducer = (state: EditorHistoryState, action: Action): EditorHistoryState 
         while (end + 1 < tokens.length && tokens[end + 1]?.groupId === gid) end += 1;
       }
       const oldSlice = tokens.slice(start, end + 1);
+      const leadingSpace = start === 0 ? false : oldSlice[0]?.spaceBefore !== false;
       const oldSliceAllInserted = oldSlice.every((tok) => tok.origin === "inserted");
       const flattenedOld: Token[] = [];
       oldSlice.forEach((tok) => {
@@ -680,6 +688,9 @@ const reducer = (state: EditorHistoryState, action: Action): EditorHistoryState 
         : [{ ...makeEmptyPlaceholder([]), moveId: moveIdReuse }];
       if (oldSliceAllInserted) {
         replacement = replacement.map((tok) => ({ ...tok, origin: "inserted" }));
+      }
+      if (replacement.length) {
+        replacement[0].spaceBefore = leadingSpace;
       }
       if (newTokensRaw.length) {
         const anchorIndex = Math.floor((replacement.length - 1) / 2);
@@ -840,7 +851,8 @@ const reducer = (state: EditorHistoryState, action: Action): EditorHistoryState 
 
       // Placeholder at old position with earliest history of the block.
       const previousTokens = buildOriginalHistoryForBlock(originalBlock);
-      const placeholder = { ...makeEmptyPlaceholder(previousTokens), moveId };
+      const sourceLeadingSpace = fromIndex === 0 ? false : originalBlock[0]?.spaceBefore !== false;
+      const placeholder = { ...makeEmptyPlaceholder(previousTokens), moveId, spaceBefore: sourceLeadingSpace };
 
       // Compute insertion index relative to array AFTER removal.
       const insertionIndexAfterRemoval = toIndex > fromIndex ? toIndex - count : toIndex;
@@ -850,6 +862,10 @@ const reducer = (state: EditorHistoryState, action: Action): EditorHistoryState 
       const insertionIndexWithPlaceholder =
         insertionIndexAfterRemoval >= fromIndex ? insertionIndexAfterRemoval + 1 : insertionIndexAfterRemoval;
       const safeInsert = Math.max(0, Math.min(insertionIndexWithPlaceholder, tokens.length));
+      const destLeadingSpace = safeInsert === 0 ? false : tokens[safeInsert]?.spaceBefore !== false;
+      if (block.length) {
+        block[0].spaceBefore = destLeadingSpace;
+      }
       tokens.splice(safeInsert, 0, ...block);
 
       // Placeholder final index shifts right if block inserted before it (leftward move).
@@ -1739,12 +1755,16 @@ const lineBreakCountMap = useMemo(() => {
         const startOriginal = typeof ann?.start_token === "number" ? ann.start_token : 0;
         const endOriginal = typeof ann?.end_token === "number" ? ann.end_token : startOriginal;
         const targetStart = Math.max(0, Math.min(working.length, startOriginal + offset));
+        const leadingSpace = targetStart === 0 ? false : working[targetStart]?.spaceBefore !== false;
+        const beforeTokensPayload = Array.isArray(payload.before_tokens) ? payload.before_tokens : [];
         const removeCountFromSpan =
           operation === "insert"
             ? 0
             : Math.max(0, Math.min(working.length - targetStart, Math.max(0, endOriginal - startOriginal + 1)));
-        const beforeTokensPayload = Array.isArray(payload.before_tokens) ? payload.before_tokens : [];
-        const removeCount = Math.max(removeCountFromSpan, beforeTokensPayload.length);
+        const beforeCount = beforeTokensPayload.length
+          ? Math.min(working.length - targetStart, beforeTokensPayload.length)
+          : 0;
+        const removeCount = beforeCount > 0 ? beforeCount : removeCountFromSpan;
       const previousRaw = cloneTokens(working.slice(targetStart, targetStart + removeCount));
       const previous =
         operation === "insert" && previousRaw.length === 0 ? [makeEmptyPlaceholder([])] : previousRaw;
@@ -1763,12 +1783,13 @@ const lineBreakCountMap = useMemo(() => {
           const moveFrom = typeof (payload as any)?.move_from === "number" ? (payload as any).move_from : startOriginal;
           const moveTo = typeof (payload as any)?.move_to === "number" ? (payload as any).move_to : startOriginal;
           const sourceIdx = Math.max(0, Math.min(working.length, moveFrom + offset));
+          const sourceLeadingSpace = sourceIdx === 0 ? false : working[sourceIdx]?.spaceBefore !== false;
           const srcSlice = working.slice(sourceIdx, sourceIdx + removeCount);
           const sourceHistory =
             srcSlice.length > 0
               ? cloneTokens(srcSlice)
               : afterTexts.flatMap((text) => tokenizeToTokens(text));
-          const placeholder = { ...makeEmptyPlaceholder(sourceHistory), groupId, moveId };
+          const placeholder = { ...makeEmptyPlaceholder(sourceHistory), groupId, moveId, spaceBefore: sourceLeadingSpace };
           working.splice(sourceIdx, removeCount, placeholder);
           offset += 1 - removeCount;
 
@@ -1788,6 +1809,9 @@ const lineBreakCountMap = useMemo(() => {
             });
           });
           const destIdx = Math.max(0, Math.min(working.length, moveTo + offset));
+          if (moveTokens.length) {
+            moveTokens[0].spaceBefore = destIdx === 0 ? false : working[destIdx]?.spaceBefore !== false;
+          }
           working.splice(destIdx, 0, ...moveTokens);
           offset += moveTokens.length;
           return;
@@ -1795,7 +1819,7 @@ const lineBreakCountMap = useMemo(() => {
 
         const newTokens: Token[] = [];
         if (!afterTexts.length && (operation === "delete" || operation === "insert")) {
-          newTokens.push({ ...makeEmptyPlaceholder(previous), groupId });
+          newTokens.push({ ...makeEmptyPlaceholder(previous), groupId, spaceBefore: leadingSpace });
         } else {
           afterTexts.forEach((text) => {
             tokenizeToTokens(text).forEach((tok) => {
@@ -1808,6 +1832,9 @@ const lineBreakCountMap = useMemo(() => {
               });
             });
           });
+        }
+        if (newTokens.length) {
+          newTokens[0].spaceBefore = leadingSpace;
         }
         const removal = removeCount;
         working.splice(targetStart, removal, ...newTokens);
@@ -2089,7 +2116,6 @@ const lineBreakCountMap = useMemo(() => {
     try {
       const reason = flagReason.trim();
       await api.post(`/api/texts/${textId}/${flagType}`, { reason: reason || undefined });
-      setActionMessage(flagType === "skip" ? t("annotation.skipText") : t("annotation.trashText"));
       setLastDecision(flagType);
       await requestNextText();
       succeeded = true;
@@ -3170,7 +3196,6 @@ const lineBreakCountMap = useMemo(() => {
     try {
       await saveAnnotations();
       await api.post(`/api/texts/${textId}/submit`);
-      setActionMessage(t("common.submit"));
       setLastDecision("submit");
       await requestNextText();
     } catch (error: any) {
@@ -3494,7 +3519,7 @@ const lineBreakCountMap = useMemo(() => {
                   <button
                     style={{
                       ...secondaryActionStyle,
-                      ...(highlightAction === "skip" ? { boxShadow: "0 0 0 2px rgba(139,92,246,0.5)", borderColor: "#a78bfa" } : {}),
+                      ...((highlightAction ?? lastDecision) === "skip" ? { boxShadow: "0 0 0 2px rgba(139,92,246,0.5)", borderColor: "#a78bfa" } : {}),
                       opacity: isSkipping ? 0.6 : 1,
                       cursor: isSkipping ? "not-allowed" : "pointer",
                     }}
@@ -3506,7 +3531,7 @@ const lineBreakCountMap = useMemo(() => {
                 <button
                   style={{
                     ...dangerActionStyle,
-                    ...(highlightAction === "trash" ? { boxShadow: "0 0 0 2px rgba(248,113,113,0.5)", borderColor: "#fb7185" } : {}),
+                    ...((highlightAction ?? lastDecision) === "trash" ? { boxShadow: "0 0 0 2px rgba(248,113,113,0.5)", borderColor: "#fb7185" } : {}),
                     opacity: isTrashing ? 0.6 : 1,
                     cursor: isTrashing ? "not-allowed" : "pointer",
                   }}
@@ -3519,7 +3544,7 @@ const lineBreakCountMap = useMemo(() => {
                 <button
                   style={{
                     ...primaryActionStyle,
-                      ...(highlightAction === "submit" ? { boxShadow: "0 0 0 2px rgba(74,222,128,0.6)", borderColor: "#34d399" } : {}),
+                      ...((highlightAction ?? lastDecision) === "submit" ? { boxShadow: "0 0 0 2px rgba(74,222,128,0.6)", borderColor: "#34d399" } : {}),
                       opacity: isSubmitting || hasUnassignedCorrections ? 0.6 : 1,
                       cursor: isSubmitting || hasUnassignedCorrections ? "not-allowed" : "pointer",
                     }}

@@ -238,6 +238,47 @@ describe("tokenEditorReducer core flows", () => {
     expect(reverted.present.moveMarkers.length).toBe(0);
   });
 
+  it("deletes a multi-token range into a single placeholder with history", () => {
+    const state1 = initState("alpha beta gamma");
+    const state2 = tokenEditorReducer(state1, { type: "DELETE_SELECTED_TOKENS", range: [0, 1] });
+    const tokens = state2.present.tokens;
+    expect(tokens.length).toBe(2);
+    expect(tokens[0].kind).toBe("empty");
+    expect(tokens[0].previousTokens?.map((t) => t.text)).toEqual(["alpha", "beta"]);
+    expect(tokens[1].text).toBe("gamma");
+  });
+
+  it("edits a multi-token range into a multi-token replacement and preserves history", () => {
+    const state1 = initState("alpha beta gamma");
+    const state2 = tokenEditorReducer(state1, {
+      type: "EDIT_SELECTED_RANGE_AS_TEXT",
+      range: [0, 1],
+      newText: "one two three",
+    });
+    const tokens = state2.present.tokens;
+    expect(tokens.slice(0, 3).map((t) => t.text)).toEqual(["one", "two", "three"]);
+    expect(tokens[3].text).toBe("gamma");
+    const anchor = tokens[1];
+    expect(anchor.previousTokens?.map((t) => t.text)).toEqual(["alpha", "beta"]);
+    expect(tokens[0].groupId).toBe(tokens[1].groupId);
+    expect(tokens[1].groupId).toBe(tokens[2].groupId);
+  });
+
+  it("moves a multi-token block and keeps the placeholder history", () => {
+    const state1 = initState("one two three four");
+    const moved = tokenEditorReducer(state1, {
+      type: "MOVE_SELECTED_BY_DRAG",
+      fromIndex: 1,
+      toIndex: 4,
+      count: 2,
+    });
+    const tokens = moved.present.tokens;
+    expect(tokens.map((t) => (t.kind === "empty" ? "⬚" : t.text))).toEqual(["one", "⬚", "four", "two", "three"]);
+    expect(tokens[1].previousTokens?.map((t) => t.text)).toEqual(["two", "three"]);
+    const movedGroup = tokens.slice(3, 5);
+    expect(movedGroup.every((t) => t.groupId === movedGroup[0].groupId)).toBe(true);
+  });
+
   it("clears selection after editing a correction back to the original text", async () => {
     const base = initState("hello world");
     const edited = tokenEditorReducer(base, {
@@ -421,6 +462,20 @@ describe("tokenEditorReducer core flows", () => {
       expect(markers.length).toBeGreaterThanOrEqual(1);
       expect(markers.some((el) => el.textContent === "·")).toBe(true);
     });
+  });
+
+  it("renders a space marker before a corrected group when spacing exists", async () => {
+    localStorage.clear();
+    const edited = tokenEditorReducer(initState("hello world"), {
+      type: "EDIT_SELECTED_RANGE_AS_TEXT",
+      range: [1, 1],
+      newText: "big world",
+    });
+    localStorage.setItem("tokenEditorPrefs:state:1", JSON.stringify(edited.present));
+    await renderEditor("hello world");
+    const panel = await screen.findByTestId("corrected-panel");
+    const markers = panel.querySelectorAll("[data-testid='space-marker']");
+    expect(markers.length).toBe(2);
   });
 
   it("keeps space markers on the same vertical baseline", async () => {
@@ -1301,6 +1356,42 @@ describe("TokenEditor view toggles", () => {
     expect(within(corrected).queryByRole("button", { name: "beta" })).not.toBeInTheDocument();
   });
 
+  it("hydrates single-token deletions from server annotations", async () => {
+    localStorage.clear();
+    await renderEditor("alpha beta", {
+      getImpl: (url: string) => {
+        if (url.includes("/api/error-types")) return Promise.resolve({ data: [] });
+        if (url.includes("/annotations")) {
+          return Promise.resolve({
+            data: [
+              {
+                id: 11,
+                author_id: "user-1",
+                start_token: 0,
+                end_token: 0,
+                replacement: null,
+                error_type_id: 1,
+                payload: {
+                  operation: "delete",
+                  before_tokens: ["alpha"],
+                  after_tokens: [],
+                  text_tokens: ["alpha", "beta"],
+                },
+              },
+            ],
+          });
+        }
+        return Promise.resolve({ data: {} });
+      },
+    });
+    const corrected = await screen.findByTestId("corrected-panel");
+    const chips = within(corrected)
+      .getAllByRole("button")
+      .map((c) => c.textContent?.trim())
+      .filter((t) => t && t !== "↺") as string[];
+    expect(chips.join(" ")).toBe("⬚ beta");
+  });
+
   it("hydrates server insertions from another annotator", async () => {
     localStorage.clear();
     await renderEditor("hello world", {
@@ -1336,6 +1427,47 @@ describe("TokenEditor view toggles", () => {
     expect(texts).toContain("there");
     expect(texts.filter((t) => t !== "↺").join(" ")).toBe("hello there world");
     // Insertions should render as a correction group (placeholder history visible).
+    expect(within(corrected).getAllByText("⬚").length).toBeGreaterThan(0);
+  });
+
+  it("hydrates multi-token insertions from another annotator", async () => {
+    localStorage.clear();
+    await renderEditor("hello world", {
+      getImpl: (url: string) => {
+        if (url.includes("/api/error-types")) return Promise.resolve({ data: [] });
+        if (url.includes("/annotations")) {
+          return Promise.resolve({
+            data: [
+              {
+                id: 22,
+                author_id: "other",
+                start_token: 1,
+                end_token: 1,
+                replacement: "bright sunny",
+                error_type_id: 1,
+                payload: {
+                  operation: "insert",
+                  before_tokens: [],
+                  after_tokens: [
+                    { id: "t2", text: "bright", origin: "base" },
+                    { id: "t3", text: "sunny", origin: "base" },
+                  ],
+                  text_tokens: ["hello", "world"],
+                },
+              },
+            ],
+          });
+        }
+        return Promise.resolve({ data: {} });
+      },
+    });
+
+    const corrected = await screen.findByTestId("corrected-panel");
+    const chips = within(corrected)
+      .getAllByRole("button")
+      .map((c) => c.textContent?.trim())
+      .filter((t) => t && t !== "↺") as string[];
+    expect(chips.join(" ")).toBe("hello bright sunny world");
     expect(within(corrected).getAllByText("⬚").length).toBeGreaterThan(0);
   });
 
@@ -1381,6 +1513,49 @@ describe("TokenEditor view toggles", () => {
     expect(within(corrected).getAllByText("⬚").length).toBeGreaterThan(0);
   });
 
+  it("hydrates multi-token moves with placeholder and moved group", async () => {
+    localStorage.clear();
+    await renderEditor("one two three four five", {
+      getImpl: (url: string) => {
+        if (url.includes("/api/error-types")) return Promise.resolve({ data: [] });
+        if (url.includes("/annotations")) {
+          return Promise.resolve({
+            data: [
+              {
+                id: 40,
+                author_id: "other",
+                start_token: 1,
+                end_token: 2,
+                replacement: null,
+                error_type_id: 1,
+                payload: {
+                  operation: "move",
+                  before_tokens: ["two", "three"],
+                  after_tokens: [
+                    { id: "m2", text: "two", origin: "base" },
+                    { id: "m3", text: "three", origin: "base" },
+                  ],
+                  move_from: 1,
+                  move_to: 5,
+                  text_tokens: ["one", "two", "three", "four", "five"],
+                },
+              },
+            ],
+          });
+        }
+        return Promise.resolve({ data: {} });
+      },
+    });
+
+    const corrected = await screen.findByTestId("corrected-panel");
+    const chips = within(corrected)
+      .getAllByRole("button")
+      .map((c) => c.textContent?.trim())
+      .filter((t) => t && t !== "↺") as string[];
+    expect(chips.join(" ")).toBe("one ⬚ four five two three");
+    expect(within(corrected).getAllByText("⬚").length).toBeGreaterThan(0);
+  });
+
   it("hydrates server edits with literal punctuation spacing", async () => {
     localStorage.clear();
     await renderEditor("foo bar", {
@@ -1418,6 +1593,86 @@ describe("TokenEditor view toggles", () => {
         .map((el) => el.textContent);
       expect(tokens.slice(0, 3)).toEqual(["foo", ",", "bar"]);
     });
+  });
+
+  it("hydrates multi-token edits from another annotator", async () => {
+    localStorage.clear();
+    await renderEditor("alpha beta gamma", {
+      getImpl: (url: string) => {
+        if (url.includes("/api/error-types")) return Promise.resolve({ data: [] });
+        if (url.includes("/annotations")) {
+          return Promise.resolve({
+            data: [
+              {
+                id: 23,
+                author_id: "other",
+                start_token: 0,
+                end_token: 1,
+                replacement: "one two three",
+                error_type_id: 1,
+                payload: {
+                  operation: "replace",
+                  before_tokens: ["alpha", "beta"],
+                  after_tokens: [{ id: "r1", text: "one two three", origin: "base" }],
+                  text_tokens: ["alpha", "beta", "gamma"],
+                },
+              },
+            ],
+          });
+        }
+        return Promise.resolve({ data: {} });
+      },
+    });
+
+    const corrected = await screen.findByTestId("corrected-panel");
+    const chips = within(corrected)
+      .getAllByRole("button")
+      .map((c) => c.textContent?.trim())
+      .filter((t) => t && t !== "↺") as string[];
+    expect(chips.join(" ")).toBe("one two three gamma");
+    expect(within(corrected).getByText("alpha")).toBeInTheDocument();
+    expect(within(corrected).getByText("beta")).toBeInTheDocument();
+  });
+
+  it("hydrates split edits without pulling the next token into history", async () => {
+    localStorage.clear();
+    await renderEditor("foobar zulu", {
+      getImpl: (url: string) => {
+        if (url.includes("/api/error-types")) return Promise.resolve({ data: [] });
+        if (url.includes("/annotations")) {
+          return Promise.resolve({
+            data: [
+              {
+                id: 24,
+                author_id: "other",
+                start_token: 0,
+                end_token: 1,
+                replacement: "foo bar",
+                error_type_id: 1,
+                payload: {
+                  operation: "replace",
+                  before_tokens: ["foobar"],
+                  after_tokens: [
+                    { id: "r1", text: "foo", origin: "base" },
+                    { id: "r2", text: "bar", origin: "base" },
+                  ],
+                  text_tokens: ["foobar", "zulu"],
+                },
+              },
+            ],
+          });
+        }
+        return Promise.resolve({ data: {} });
+      },
+    });
+
+    const corrected = await screen.findByTestId("corrected-panel");
+    const buttons = within(corrected)
+      .getAllByRole("button")
+      .map((c) => c.textContent?.trim())
+      .filter((t) => t && t !== "↺") as string[];
+    expect(buttons.join(" ")).toBe("foo bar zulu");
+    expect(within(corrected).getByText("foobar")).toBeInTheDocument();
   });
 
   it("hydrates move-like preannotations (insert + delete) from another annotator", async () => {

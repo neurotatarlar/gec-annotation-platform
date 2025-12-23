@@ -1,6 +1,6 @@
-import { render, screen, renderHook } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import React, { useEffect } from "react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { SaveStatusProvider, useSaveStatus } from "./SaveStatusContext";
 
@@ -23,8 +23,26 @@ describe("SaveStatusContext", () => {
   });
 
   it("throws when used outside provider", () => {
-    expect(() => renderHook(() => useSaveStatus())).toThrowError(
-      "useSaveStatus must be used within SaveStatusProvider"
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const onError = vi.fn();
+    class ErrorBoundary extends React.Component<{ onError: (err: Error) => void }, { hasError: boolean }> {
+      state = { hasError: false };
+      static getDerivedStateFromError() {
+        return { hasError: true };
+      }
+      componentDidCatch(err: Error) {
+        this.props.onError(err);
+      }
+      render() {
+        return this.state.hasError ? <span data-testid="boundary-error">error</span> : this.props.children;
+      }
+    }
+    render(
+      <ErrorBoundary onError={onError}>
+        <Consumer />
+      </ErrorBoundary>
     );
+    expect(onError).toHaveBeenCalledWith(expect.objectContaining({ message: "useSaveStatus must be used within SaveStatusProvider" }));
+    errorSpy.mockRestore();
   });
 });
