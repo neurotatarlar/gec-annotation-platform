@@ -884,9 +884,12 @@ export const TokenEditor: React.FC<{
         target &&
         (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || (target as HTMLInputElement).isContentEditable);
       const ctrlOrMeta = event.ctrlKey || event.metaKey;
-      const key = event.key.toLowerCase();
-      const isUndoKey = ctrlOrMeta && key === "z" && !event.shiftKey;
-      const isRedoKey = ctrlOrMeta && (key === "y" || (event.shiftKey && key === "z"));
+      const key = event.key?.toLowerCase();
+      const code = event.code?.toLowerCase();
+      const isKeyZ = key === "z" || code === "keyz";
+      const isKeyY = key === "y" || code === "keyy";
+      const isUndoKey = ctrlOrMeta && isKeyZ && !event.shiftKey;
+      const isRedoKey = ctrlOrMeta && (isKeyY || (event.shiftKey && isKeyZ));
       if (isUndoKey || isRedoKey) {
         event.preventDefault();
         if (isUndoKey) {
@@ -1855,43 +1858,43 @@ export const TokenEditor: React.FC<{
                   <button
                     style={{
                       ...secondaryActionStyle,
+                      opacity: !hasCorrections || isSubmitting ? 0.6 : 1,
+                      cursor: !hasCorrections || isSubmitting ? "not-allowed" : "pointer",
+                    }}
+                    onClick={() => {
+                      if (!hasCorrections) return;
+                      openClearConfirm();
+                    }}
+                    disabled={!hasCorrections || isSubmitting || isSkipping || isTrashing}
+                  >
+                    {t("tokenEditor.clearAll")}
+                  </button>
+                  <button
+                    style={{
+                      ...secondaryActionStyle,
                       ...((highlightAction ?? lastDecision) === "skip" ? { boxShadow: "0 0 0 2px rgba(139,92,246,0.5)", borderColor: "#a78bfa" } : {}),
                       opacity: isSkipping ? 0.6 : 1,
                       cursor: isSkipping ? "not-allowed" : "pointer",
                     }}
-                  onClick={() => handleFlag("skip")}
-                  disabled={isSubmitting || isSkipping || isTrashing}
-                >
-                  {t("annotation.skipText")}
-                </button>
-                <button
-                  style={{
-                    ...dangerActionStyle,
-                    ...((highlightAction ?? lastDecision) === "trash" ? { boxShadow: "0 0 0 2px rgba(248,113,113,0.5)", borderColor: "#fb7185" } : {}),
-                    opacity: isTrashing ? 0.6 : 1,
-                    cursor: isTrashing ? "not-allowed" : "pointer",
-                  }}
-                  onClick={() => handleFlag("trash")}
-                  disabled={isSubmitting || isSkipping || isTrashing}
-                >
-                  {t("annotation.trashText")}
-                </button>
-                <button
-                  style={{
-                    ...secondaryActionStyle,
-                    opacity: !hasCorrections || isSubmitting ? 0.6 : 1,
-                    cursor: !hasCorrections || isSubmitting ? "not-allowed" : "pointer",
-                  }}
-                  onClick={() => {
-                    if (!hasCorrections) return;
-                    openClearConfirm();
-                  }}
-                  disabled={!hasCorrections || isSubmitting || isSkipping || isTrashing}
-                >
-                  {t("tokenEditor.clearAll")}
-                </button>
-                <div style={actionDividerStyle} />
-                <button
+                    onClick={() => handleFlag("skip")}
+                    disabled={isSubmitting || isSkipping || isTrashing}
+                  >
+                    {t("annotation.skipText")}
+                  </button>
+                  <button
+                    style={{
+                      ...dangerActionStyle,
+                      ...((highlightAction ?? lastDecision) === "trash" ? { boxShadow: "0 0 0 2px rgba(248,113,113,0.5)", borderColor: "#fb7185" } : {}),
+                      opacity: isTrashing ? 0.6 : 1,
+                      cursor: isTrashing ? "not-allowed" : "pointer",
+                    }}
+                    onClick={() => handleFlag("trash")}
+                    disabled={isSubmitting || isSkipping || isTrashing}
+                  >
+                    {t("annotation.trashText")}
+                  </button>
+                  <div style={actionDividerStyle} />
+                  <button
                   style={{
                     ...primaryActionStyle,
                       ...((highlightAction ?? lastDecision) === "submit" ? { boxShadow: "0 0 0 2px rgba(74,222,128,0.6)", borderColor: "#34d399" } : {}),

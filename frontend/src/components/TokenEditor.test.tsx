@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen, waitFor, act, within, cleanup } from "@testing-library/react";
+import { render, screen, waitFor, act, within, cleanup, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
@@ -277,6 +277,8 @@ describe("tokenEditorReducer core flows", () => {
     expect(tokens[1].previousTokens?.map((t) => t.text)).toEqual(["two", "three"]);
     const movedGroup = tokens.slice(3, 5);
     expect(movedGroup.every((t) => t.groupId === movedGroup[0].groupId)).toBe(true);
+    const destAnchor = movedGroup.find((t) => t.previousTokens?.length);
+    expect(destAnchor?.previousTokens?.[0]?.kind).toBe("empty");
   });
 
   it("clears selection after editing a correction back to the original text", async () => {
@@ -776,6 +778,28 @@ describe("insertion splitting", () => {
     expect(selectionRange).toEqual({ start: 0, end: 0 });
   });
 
+  it("supports undo/redo hotkeys by keyboard code for non-Latin layouts", async () => {
+    mockGet.mockReset();
+    mockPost.mockReset();
+    localStorage.clear();
+    await renderEditor("hello world");
+    const user = userEvent.setup();
+    const hello = await screen.findByRole("button", { name: "hello" });
+    await user.dblClick(hello);
+    const input = await screen.findByPlaceholderText("tokenEditor.editPlaceholder");
+    await user.clear(input);
+    await user.type(input, "hi");
+    await user.keyboard("{Enter}");
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "hi" })).toBeTruthy());
+
+    fireEvent.keyDown(window, { key: "я", code: "KeyZ", ctrlKey: true });
+    await waitFor(() => expect(screen.getByRole("button", { name: "hello" })).toBeTruthy());
+
+    fireEvent.keyDown(window, { key: "я", code: "KeyZ", ctrlKey: true, shiftKey: true });
+    await waitFor(() => expect(screen.getByRole("button", { name: "hi" })).toBeTruthy());
+  });
+
   it("clears old selection after revert and selects new edit", async () => {
     mockGet.mockReset();
     mockPost.mockReset();
@@ -1140,6 +1164,25 @@ describe("revert clears selection", () => {
     await waitFor(() => {
       expect(placeholder).toHaveAttribute("aria-pressed", "true");
       expect(moved).toHaveAttribute("aria-pressed", "true");
+    });
+  });
+
+  it("draws a move connector on hover", async () => {
+    const moved = tokenEditorReducer(initState("one two three"), {
+      type: "MOVE_SELECTED_BY_DRAG",
+      fromIndex: 1,
+      toIndex: 3,
+      count: 1,
+    });
+    localStorage.setItem("tokenEditorPrefs:state:1", JSON.stringify(moved.present));
+    await renderEditor("one two three");
+    const corrected = await screen.findByTestId("corrected-panel");
+    const moveGroup = corrected.querySelector("[data-move-id][data-move-role]");
+    expect(moveGroup).toBeTruthy();
+    fireEvent.mouseEnter(moveGroup as Element);
+    await waitFor(() => {
+      const line = corrected.querySelector("line[marker-end]");
+      expect(line).toBeTruthy();
     });
   });
 
