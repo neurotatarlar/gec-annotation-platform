@@ -104,12 +104,13 @@ export const useTokenDrag = ({
       const end = fromIndex + count - 1;
       // Ignore drops inside the same block (no movement).
       if (targetIndex >= start && targetIndex <= end + 1) return;
-      dispatch({ type: "MOVE_SELECTED_BY_DRAG", fromIndex, toIndex: targetIndex, count });
+      const clampedTarget = Math.max(0, Math.min(tokens.length, targetIndex));
+      dispatch({ type: "MOVE_SELECTED_BY_DRAG", fromIndex, toIndex: clampedTarget, count });
       // After moving, clear selection so the moved tokens don't show a background.
       setSelection({ start: null, end: null });
       endEdit();
     },
-    [dispatch, endDrag, endEdit, setDropTarget, setSelection]
+    [dispatch, endDrag, endEdit, setDropTarget, setSelection, tokens.length]
   );
 
   const handleDragEnd = useCallback(() => {
