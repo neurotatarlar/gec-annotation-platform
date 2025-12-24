@@ -1526,8 +1526,11 @@ export const TokenEditor: React.FC<{
         style={{
           position: "absolute",
           inset: 0,
+          width: "100%",
+          height: "100%",
           pointerEvents: "none",
-          zIndex: 0,
+          zIndex: 2,
+          overflow: "visible",
         }}
       >
         <line
@@ -1535,8 +1538,8 @@ export const TokenEditor: React.FC<{
           y1={y1}
           x2={x2}
           y2={y2}
-          stroke="rgba(94,234,212,0.7)"
-          strokeWidth={1.25}
+          stroke="rgba(94,234,212,0.85)"
+          strokeWidth={1.5}
           strokeDasharray="2 4"
           strokeLinecap="round"
         />
