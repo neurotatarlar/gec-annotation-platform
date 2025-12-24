@@ -1,921 +1,58 @@
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 
 import { useAuthedApi } from "../api/client";
 import { useI18n } from "../context/I18nContext";
-import { AnnotationDetailPayload, AnnotationDraft, ErrorType, TokenFragmentPayload } from "../types";
+import { ErrorType, TokenFragmentPayload } from "../types";
 import {
   colorWithAlpha,
   getErrorTypeLabel,
   getErrorTypeSuperLabel,
 } from "../utils/errorTypes";
+import {
+  EditorPresentState,
+  HotkeySpec,
+  MoveMarker,
+  Token,
+  buildAnnotationsPayloadStandalone,
+  buildEditableTextFromTokens,
+  buildHotkeyMap,
+  buildTextFromTokensWithBreaks,
+  cloneTokens,
+  createId,
+  deriveOperationsFromTokens,
+  deriveMoveMarkers,
+  findGroupRangeForTokens,
+  makeEmptyPlaceholder,
+  normalizeHotkeySpec,
+  rangeToArray,
+  shouldSkipSave,
+  tokenizeEditedText,
+  tokenizeToTokens,
+  tokenEditorReducer,
+} from "./TokenEditorModel";
+
+export * from "./TokenEditorModel";
 
 // ---------------------------
-// Types and data structures
+// Component
 // ---------------------------
-// TokenKind includes <EMPTY> technical placeholder.
-export type TokenKind = "word" | "punct" | "empty" | "special";
+type SelectionRange = { start: number | null; end: number | null };
 
-// Token represents a single chip in the editor.
-export type Token = {
+export type SaveStatus = { state: "idle" | "saving" | "saved" | "error"; unsaved: boolean };
+
+const PREFS_KEY = "tokenEditorPrefs";
+const DEFAULT_TOKEN_GAP = 2;
+const DEFAULT_TOKEN_FONT_SIZE = 24;
+type SpaceMarker = "dot" | "box" | "none";
+
+type CorrectionCardLite = {
   id: string;
-  text: string;
-  kind: TokenKind;
-  selected: boolean;
-  previousTokens?: Token[];
-  groupId?: string;
-  origin?: "inserted";
-  moveId?: string;
+  rangeStart: number;
+  rangeEnd: number;
+  markerId: string | null;
 };
 
-// MoveMarker helps visualize a drag move (old position -> new position).
-type MoveMarker = {
-  id: string;
-  fromStart: number;
-  fromEnd: number;
-  toStart: number;
-  toEnd: number;
-};
-
-// Present (undoable) state: originalTokens are read-only, tokens are editable.
-export type EditorPresentState = {
-  originalTokens: Token[];
-  tokens: Token[];
-  moveMarkers: MoveMarker[];
-};
-
-// History state for undo/redo.
-export type EditorHistoryState = {
-  past: EditorPresentState[];
-  present: EditorPresentState;
-  future: EditorPresentState[];
-};
-
-// Reducer actions. Most UI-specific data (like selection range) is provided in payload.
-type Action =
-  | { type: "INIT_FROM_TEXT"; text: string }
-  | { type: "INIT_FROM_STATE"; state: EditorPresentState }
-  | { type: "DELETE_SELECTED_TOKENS"; range: [number, number] }
-  | { type: "INSERT_TOKEN_BEFORE_SELECTED"; range: [number, number] | null }
-  | { type: "INSERT_TOKEN_AFTER_SELECTED"; range: [number, number] | null }
-  | { type: "EDIT_SELECTED_RANGE_AS_TEXT"; range: [number, number]; newText: string }
-  | { type: "MERGE_RANGE"; range: [number, number] }
-  | { type: "MERGE_WITH_NEXT"; index: number }
-  | { type: "MOVE_SELECTED_BY_DRAG"; fromIndex: number; toIndex: number; count: number }
-  | { type: "CANCEL_INSERT_PLACEHOLDER"; range: [number, number] }
-  | { type: "CLEAR_ALL" }
-  | { type: "REVERT_CORRECTION"; rangeStart: number; rangeEnd: number; markerId: string | null }
-  | { type: "UNDO" }
-  | { type: "REDO" };
-
-// ---------------------------
-// Utilities
-// ---------------------------
-// Treat any non-letter/number/non-space as punctuation/symbol.
-const punctuation = /[^\p{L}\p{N}\s]/u;
-let idCounter = 0;
-const createId = () => `token-${idCounter++}`;
-
-type HotkeySpec = {
-  key: string;
-  code?: string;
-  ctrl: boolean;
-  alt: boolean;
-  shift: boolean;
-  meta: boolean;
-};
-
-const normalizeHotkeySpec = (spec: HotkeySpec, useCode = false) => {
-  const parts = [];
-  if (spec.ctrl) parts.push("ctrl");
-  if (spec.alt) parts.push("alt");
-  if (spec.shift) parts.push("shift");
-  if (spec.meta) parts.push("meta");
-  parts.push(useCode && spec.code ? `code:${spec.code}` : spec.key);
-  return parts.join("+");
-};
-
-export const guessCodeFromKey = (key: string): string | null => {
-  if (!key || key.length !== 1) return null;
-  if (/[a-z]/i.test(key)) return `Key${key.toUpperCase()}`;
-  if (/[0-9]/.test(key)) return `Digit${key}`;
-  return null;
-};
-
-export const parseHotkey = (raw: string | null | undefined): HotkeySpec | null => {
-  if (!raw) return null;
-  const parts = raw
-    .split("+")
-    .map((p) => p.trim().toLowerCase())
-    .filter(Boolean);
-  if (!parts.length) return null;
-  let ctrl = false;
-  let alt = false;
-  let shift = false;
-  let meta = false;
-  let key: string | null = null;
-  parts.forEach((part) => {
-    if (part === "ctrl" || part === "control") ctrl = true;
-    else if (part === "alt" || part === "option") alt = true;
-    else if (part === "shift") shift = true;
-    else if (part === "meta" || part === "cmd" || part === "command") meta = true;
-    else if (part.length === 1) {
-      if (key) {
-        // Multiple non-modifier keys are not supported; treat as invalid.
-        key = null;
-      } else {
-        key = part;
-      }
-    }
-  });
-  if (!key) return null;
-  return { key, code: guessCodeFromKey(key), ctrl, alt, shift, meta };
-};
-
-// Tokenizer: splits into words vs punctuation, skipping spaces.
-export const tokenizeToTokens = (text: string): Token[] => {
-  const tokens: Token[] = [];
-  if (!text) return tokens;
-
-  const specialMatchers: Array<{ regex: RegExp }> = [
-    // Phone numbers starting with +
-    { regex: /\+\d[\d()\- ]*\d/y },
-    // Emails
-    { regex: /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/y },
-    // URLs (http/https/www)
-    { regex: /(https?:\/\/[^\s,;:!]+|www\.[^\s,;:!]+)/y },
-  ];
-  const baseRegex = /(\p{L}|\p{N})+|[^\p{L}\p{N}\s]/uy;
-
-  let idx = 0;
-  while (idx < text.length) {
-    let hadSpace = false;
-    while (idx < text.length && /\s/.test(text[idx])) {
-      hadSpace = true;
-      idx += 1;
-    }
-    if (idx >= text.length) break;
-
-    let matched = false;
-    for (const m of specialMatchers) {
-      m.regex.lastIndex = idx;
-      const res = m.regex.exec(text);
-      if (res && res.index === idx) {
-        const raw = res[0];
-        const value = raw.replace(/[.,;:!?]+$/, "");
-        const advanceBy = value.length || raw.length;
-        tokens.push({
-          id: createId(),
-          text: value,
-          kind: "special",
-          selected: false,
-          origin: undefined,
-        });
-        idx += advanceBy;
-        matched = true;
-        break;
-      }
-    }
-    if (matched) continue;
-
-    baseRegex.lastIndex = idx;
-    const baseMatch = baseRegex.exec(text);
-    if (baseMatch && baseMatch.index === idx) {
-      const value = baseMatch[0];
-      const isWord = !punctuation.test(value);
-      tokens.push({
-        id: createId(),
-        text: value,
-        kind: isWord ? "word" : "punct",
-        selected: false,
-        spaceBefore: hadSpace,
-        origin: undefined,
-      });
-      idx += value.length;
-      continue;
-    }
-
-    // If nothing matched, advance to avoid infinite loop.
-    idx += 1;
-  }
-
-  return tokens;
-};
-
-// When editing an existing correction, respect the literal text the annotator typed,
-// splitting only on explicit whitespace they inserted (punctuation stays inline).
-const tokenizeEditedText = (text: string): Token[] => {
-  const tokens: Token[] = [];
-  if (!text) return tokens;
-  const parts = text.split(/(\s+)/);
-  let spaceBefore = false;
-  parts.forEach((part) => {
-    if (!part) return;
-    if (/^\s+$/.test(part)) {
-      spaceBefore = true;
-      return;
-    }
-    const isWord = /[\p{L}\p{N}]/u.test(part);
-    tokens.push({
-      id: createId(),
-      text: part,
-      kind: isWord ? "word" : "punct",
-      selected: false,
-      spaceBefore,
-      origin: undefined,
-    });
-    spaceBefore = false;
-  });
-  return tokens;
-};
-
-export const buildHotkeyMap = (errorTypes: ErrorType[]) => {
-  const map: Record<string, number> = {};
-  errorTypes
-    .filter((et) => et.is_active)
-    .forEach((et) => {
-      const spec = parseHotkey(et.default_hotkey);
-      if (!spec) return;
-      const norm = normalizeHotkeySpec(spec);
-      map[norm] = et.id;
-      const code = spec.code;
-      if (code) {
-        const codeNorm = normalizeHotkeySpec({ ...spec, code }, true);
-        map[codeNorm] = et.id;
-      }
-    });
-  return map;
-};
-
-const cloneTokens = (items: Token[]) =>
-  items.map((t) => ({
-    ...t,
-    previousTokens: t.previousTokens?.map((p) => ({ ...p })),
-    origin: t.origin,
-    moveId: t.moveId,
-  }));
-
-const makeEmptyPlaceholder = (previousTokens: Token[]): Token => ({
-  id: createId(),
-  text: "⬚",
-  kind: "empty",
-  selected: false,
-  previousTokens,
-  origin: undefined,
-});
-
-// Unwind correction chains to the earliest known state (walk previousTokens until none).
-const unwindToOriginal = (tokens: Token[]): Token[] => {
-  const result: Token[] = [];
-  tokens.forEach((tok) => {
-    if (tok.previousTokens && tok.previousTokens.length) {
-      result.push(...unwindToOriginal(tok.previousTokens));
-    } else {
-      result.push({ ...tok, previousTokens: undefined, selected: false });
-    }
-  });
-  return result;
-};
-
-// Remove ⬚ tokens that carry no history (pure placeholders).
-const dropRedundantEmpties = (tokens: Token[]): Token[] =>
-  tokens.filter((tok) => !(tok.kind === "empty" && (!tok.previousTokens || tok.previousTokens.length === 0)));
-
-// Remove duplicate earliest tokens (by text+kind) to prevent double restore.
-const dedupeTokens = (tokens: Token[]): Token[] => {
-  const seen = new Set<string>();
-  const result: Token[] = [];
-  tokens.forEach((tok) => {
-    const key = `${tok.text}|${tok.kind}`;
-    if (seen.has(key)) return;
-    seen.add(key);
-    result.push(tok);
-  });
-  return result;
-};
-
-const rangeToArray = (range: [number, number]) => {
-  const [start, end] = range;
-  const arr: number[] = [];
-  for (let i = start; i <= end; i += 1) arr.push(i);
-  return arr;
-};
-
-const findGroupRangeForTokens = (tokens: Token[], idx: number): [number, number] => {
-  if (!tokens.length || idx < 0 || idx >= tokens.length) return [idx, idx];
-  const tok = tokens[idx];
-  if (!tok?.groupId) return [idx, idx];
-  let l = idx;
-  let r = idx;
-  while (l - 1 >= 0 && tokens[l - 1]?.groupId === tok.groupId) l -= 1;
-  while (r + 1 < tokens.length && tokens[r + 1]?.groupId === tok.groupId) r += 1;
-  return [l, r];
-};
-
-// Detect the placeholder token we create for insertions (text empty + previous empty marker).
-const isInsertPlaceholder = (tokens: Token[]) =>
-  tokens.length === 1 &&
-  tokens[0].text === "" &&
-  tokens[0].previousTokens?.length &&
-  tokens[0].previousTokens.every((p) => p.kind === "empty");
-
-// Build a merged token from a slice, omitting ⬚ tokens from text and history.
-const buildMergedToken = (slice: Token[]): Token | null => {
-  const nonEmpty = slice.filter((tok) => tok.kind !== "empty");
-  if (!nonEmpty.length) return null;
-  const mergedText = nonEmpty.map((tok) => tok.text).join("").trim(); // collapse whitespace for a single merged token
-  const history: Token[] = [];
-  slice.forEach((tok) => {
-    if (tok.kind !== "empty") {
-      history.push({ ...tok, selected: false });
-    }
-    if (tok.previousTokens) {
-      const nested = cloneTokens(tok.previousTokens).filter((p) => p.kind !== "empty");
-      history.push(...nested);
-    }
-  });
-  return {
-    id: createId(),
-    text: mergedText,
-    kind: nonEmpty[0].kind,
-    selected: false,
-    previousTokens: history,
-    groupId: createId(),
-  };
-};
-
-// Compare sequences by visible content (text + kind) ignoring ids and previousTokens.
-const sameTokenSequence = (existing: Token[], nextRaw: Token[]) => {
-  if (existing.length !== nextRaw.length) return false;
-  for (let i = 0; i < existing.length; i += 1) {
-    if (existing[i].text !== nextRaw[i].text || existing[i].kind !== nextRaw[i].kind) {
-      return false;
-    }
-  }
-  return true;
-};
-
-// Push a new present into history (standard undo/redo pattern).
-const pushPresent = (state: EditorHistoryState, nextPresent: EditorPresentState): EditorHistoryState => ({
-  past: [...state.past, state.present],
-  present: nextPresent,
-  future: [],
-});
-
-export const createInitialHistoryState = (): EditorHistoryState => ({
-  past: [],
-  present: { originalTokens: [], tokens: [], moveMarkers: [] },
-  future: [],
-});
-
-// Build earliest-known originals for a block: if any token in the block has history, use the union of all histories;
-// otherwise fall back to unwinding the block itself.
-const buildOriginalHistoryForBlock = (block: Token[]): Token[] => {
-  const hasHistory = block.some((t) => t.previousTokens && t.previousTokens.length);
-  const source: Token[] = [];
-  if (hasHistory) {
-    block.forEach((tok) => {
-      if (tok.previousTokens && tok.previousTokens.length) {
-        source.push(...cloneTokens(tok.previousTokens));
-      }
-    });
-  } else {
-    source.push(...cloneTokens(block));
-  }
-  return dedupeTokens(unwindToOriginal(source))
-    .filter((t) => t.kind !== "empty")
-    .map((t) => ({ ...t, previousTokens: undefined, selected: false, groupId: undefined, moveId: undefined }));
-};
-
-// Derive move markers from tokens (so moves stay atomic even after other edits).
-const deriveMoveMarkers = (tokens: Token[]): MoveMarker[] => {
-  const map = new Map<
-    string,
-    {
-      from?: number;
-      toStart?: number;
-      toEnd?: number;
-    }
-  >();
-  tokens.forEach((tok, idx) => {
-    if (!tok.moveId) return;
-    const entry = map.get(tok.moveId) ?? {};
-    if (tok.kind === "empty" && tok.previousTokens && tok.previousTokens.length) {
-      entry.from = idx;
-    } else {
-      entry.toStart = entry.toStart === undefined ? idx : Math.min(entry.toStart, idx);
-      entry.toEnd = entry.toEnd === undefined ? idx : Math.max(entry.toEnd, idx);
-    }
-    map.set(tok.moveId, entry);
-  });
-  return Array.from(map.entries())
-    .map(([id, v]) => {
-      if (v.from === undefined) return null;
-      const toStart = v.toStart ?? v.from;
-      const toEnd = v.toEnd ?? v.from;
-      return {
-        id,
-        fromStart: v.from,
-        fromEnd: v.from,
-        toStart,
-        toEnd,
-      };
-    })
-    .filter(Boolean) as MoveMarker[];
-};
-
-// ---------------------------
-// Reducer
-// ---------------------------
-const reducer = (state: EditorHistoryState, action: Action): EditorHistoryState => {
-  switch (action.type) {
-    case "INIT_FROM_TEXT": {
-      const original = tokenizeToTokens(action.text);
-      const present: EditorPresentState = {
-        originalTokens: cloneTokens(original),
-        tokens: cloneTokens(original),
-        moveMarkers: deriveMoveMarkers(original),
-      };
-      return { past: [], present, future: [] };
-    }
-    case "INIT_FROM_STATE": {
-      const present: EditorPresentState = {
-        originalTokens: cloneTokens(action.state.originalTokens),
-        tokens: cloneTokens(action.state.tokens),
-        moveMarkers: [...action.state.moveMarkers],
-      };
-      return { past: [], present, future: [] };
-    }
-    case "DELETE_SELECTED_TOKENS": {
-      let [start, end] = action.range;
-      if (start < 0 || end < start || start >= state.present.tokens.length) return state;
-      const tokens = cloneTokens(state.present.tokens);
-      const markersNow = deriveMoveMarkers(tokens);
-      // If selection intersects a move marker (either placeholder or destination), revert the whole move atomically.
-      const hitMarker = markersNow.find(
-        (m) =>
-          (start <= m.fromEnd && end >= m.fromStart) ||
-          (start <= m.toEnd && end >= m.toStart)
-      );
-      if (hitMarker) {
-        const placeholderIndex = hitMarker.fromStart;
-        const placeholder = tokens[placeholderIndex];
-        tokens.splice(placeholderIndex, 1);
-        const blockStart = placeholderIndex < hitMarker.toStart ? hitMarker.toStart - 1 : hitMarker.toStart;
-        const blockLen = hitMarker.toEnd - hitMarker.toStart + 1;
-        tokens.splice(blockStart, blockLen);
-        const restore =
-          placeholder?.previousTokens?.length
-            ? buildOriginalHistoryForBlock(placeholder.previousTokens)
-            : [makeEmptyPlaceholder([])];
-        tokens.splice(placeholderIndex, 0, ...restore);
-        const next: EditorPresentState = {
-          ...state.present,
-          tokens: dropRedundantEmpties(tokens),
-          moveMarkers: state.present.moveMarkers.filter((m) => m.id !== hitMarker.id),
-        };
-        return pushPresent(state, next);
-      }
-      // Expand selection to include the whole inserted group if selection intersects it.
-      let expanded = true;
-      while (expanded) {
-        expanded = false;
-        for (let i = start; i <= end; i += 1) {
-          const tok = tokens[i];
-          if (tok?.origin === "inserted") {
-            const gid = tok.groupId ?? null;
-            let l = i;
-            let r = i;
-            while (
-              l - 1 >= 0 &&
-              tokens[l - 1].origin === "inserted" &&
-              (tokens[l - 1].groupId ?? null) === gid
-            ) {
-              l -= 1;
-            }
-            while (
-              r + 1 < tokens.length &&
-              tokens[r + 1].origin === "inserted" &&
-              (tokens[r + 1].groupId ?? null) === gid
-            ) {
-              r += 1;
-            }
-            if (l < start || r > end) {
-              start = Math.min(start, l);
-              end = Math.max(end, r);
-              expanded = true;
-              break;
-            }
-          }
-        }
-      }
-      // Expand selection to include entire correction group (e.g., split result) sharing the same groupId that carries history.
-      expanded = true;
-      while (expanded) {
-        expanded = false;
-        for (let i = start; i <= end; i += 1) {
-          const tok = tokens[i];
-          if (tok?.groupId) {
-            const gid = tok.groupId;
-            let l = i;
-            let r = i;
-            while (
-              l - 1 >= 0 &&
-              tokens[l - 1].groupId === gid
-            ) {
-              l -= 1;
-            }
-            while (
-              r + 1 < tokens.length &&
-              tokens[r + 1].groupId === gid
-            ) {
-              r += 1;
-            }
-            if (l < start || r > end) {
-              start = Math.min(start, l);
-              end = Math.max(end, r);
-              expanded = true;
-              break;
-            }
-          }
-        }
-      }
-      const leadingSpace = start === 0 ? false : tokens[start]?.spaceBefore !== false;
-      const removed = tokens.slice(start, end + 1);
-      // If user deletes only inserted tokens, treat it as reverting that insertion (no placeholder).
-      const allInserted = removed.every((t) => t.origin === "inserted");
-      if (allInserted) {
-        tokens.splice(start, removed.length);
-        const next: EditorPresentState = { ...state.present, tokens, moveMarkers: deriveMoveMarkers(tokens) };
-        return pushPresent(state, next);
-      }
-      // If selection contains a correction cluster (e.g., split) with history, restore the original tokens instead of adding ⬚.
-      const anchorWithHistory = removed.find((t) => t.previousTokens && t.previousTokens.length);
-      if (anchorWithHistory) {
-        const restore = dedupeTokens(unwindToOriginal(cloneTokens(anchorWithHistory.previousTokens!))).map((tok) => ({
-          ...tok,
-          previousTokens: undefined,
-          selected: false,
-          origin: tok.origin,
-        }));
-        tokens.splice(start, removed.length, ...restore);
-        const cleanedTokens = dropRedundantEmpties(tokens);
-        const next: EditorPresentState = { ...state.present, tokens: cleanedTokens, moveMarkers: deriveMoveMarkers(cleanedTokens) };
-        return pushPresent(state, next);
-      }
-      // If a single empty with no history, just remove it.
-      if (removed.length === 1 && removed[0].kind === "empty" && !removed[0].previousTokens?.length) {
-        tokens.splice(start, removed.length);
-        const next: EditorPresentState = { ...state.present, tokens, moveMarkers: deriveMoveMarkers(tokens) };
-        return pushPresent(state, next);
-      }
-      const previousTokens = dedupeTokens(removed.flatMap((t) => unwindToOriginal([t])).map((tok) => ({ ...tok, selected: false })));
-      if (!previousTokens.length) {
-        previousTokens.push(makeEmptyPlaceholder([]));
-      }
-      const placeholder = makeEmptyPlaceholder(previousTokens);
-      placeholder.spaceBefore = leadingSpace;
-      tokens.splice(start, removed.length, placeholder);
-      const next: EditorPresentState = { ...state.present, tokens, moveMarkers: deriveMoveMarkers(tokens) };
-      return pushPresent(state, next);
-    }
-    case "INSERT_TOKEN_BEFORE_SELECTED": {
-      if (!action.range) return state;
-      const [start] = action.range;
-      const tokens = cloneTokens(state.present.tokens);
-      const leadingSpace = start === 0 ? false : tokens[start]?.spaceBefore !== false;
-      const inserted: Token = {
-        id: createId(),
-        text: "",
-        kind: "word",
-        selected: false,
-        // Show a placeholder history so the annotator sees the implicit ⬚.
-        previousTokens: [makeEmptyPlaceholder([])],
-        origin: "inserted",
-        spaceBefore: leadingSpace,
-      };
-      tokens.splice(start, 0, inserted);
-      const next: EditorPresentState = { ...state.present, tokens, moveMarkers: deriveMoveMarkers(tokens) };
-      // Do NOT push to history yet; this is a transient insertion until user confirms.
-      return { ...state, present: next, future: [] };
-    }
-    case "INSERT_TOKEN_AFTER_SELECTED": {
-      if (!action.range) return state;
-      const tokens = cloneTokens(state.present.tokens);
-      const [, end] = action.range;
-      const nextToken = tokens[end + 1];
-      const leadingSpace = end === tokens.length - 1 ? true : nextToken?.spaceBefore !== false;
-      const inserted: Token = {
-        id: createId(),
-        text: "",
-        kind: "word",
-        selected: false,
-        previousTokens: [makeEmptyPlaceholder([])],
-        origin: "inserted",
-        spaceBefore: leadingSpace,
-      };
-      tokens.splice(end + 1, 0, inserted);
-      const next: EditorPresentState = { ...state.present, tokens, moveMarkers: deriveMoveMarkers(tokens) };
-      // Do NOT push to history yet; this is a transient insertion until user confirms.
-      return { ...state, present: next, future: [] };
-    }
-    case "EDIT_SELECTED_RANGE_AS_TEXT": {
-      let [start, end] = action.range;
-      const tokens = cloneTokens(state.present.tokens);
-      // Always expand the edit to the full correction group so re-edits stay in-place.
-      const gid = tokens[start]?.groupId;
-      if (gid) {
-        while (start - 1 >= 0 && tokens[start - 1]?.groupId === gid) start -= 1;
-        while (end + 1 < tokens.length && tokens[end + 1]?.groupId === gid) end += 1;
-      }
-      const oldSlice = tokens.slice(start, end + 1);
-      const leadingSpace = start === 0 ? false : oldSlice[0]?.spaceBefore !== false;
-      const oldSliceAllInserted = oldSlice.every((tok) => tok.origin === "inserted");
-      const flattenedOld: Token[] = [];
-      oldSlice.forEach((tok) => {
-        flattenedOld.push({ ...tok, selected: false });
-        if (tok.previousTokens) {
-          flattenedOld.push(...cloneTokens(tok.previousTokens));
-        }
-      });
-      const newTokensRaw = tokenizeEditedText(action.newText);
-      // If this was a newly inserted placeholder and user left it empty, revert to previous present.
-      const newlyInsertedEmpty = newTokensRaw.length === 0 && isInsertPlaceholder(oldSlice);
-      if (newlyInsertedEmpty && state.past.length) {
-        const prior = state.past[state.past.length - 1];
-        return { past: state.past.slice(0, -1), present: prior, future: state.future };
-      }
-      // If user didn't change the content (text/kind sequence is identical), do nothing.
-      if (newTokensRaw.length && sameTokenSequence(oldSlice, newTokensRaw)) {
-        return state;
-      }
-      const moveIdReuse =
-        oldSlice.length > 0 && oldSlice.every((tok) => tok.moveId === oldSlice[0].moveId)
-          ? oldSlice[0].moveId
-          : undefined;
-      const existingGroupId =
-        oldSlice.length > 0 && oldSlice.every((tok) => tok.groupId === oldSlice[0].groupId) ? oldSlice[0].groupId : null;
-      const anchorExistingHistory =
-        oldSlice.find((tok) => tok.previousTokens && tok.previousTokens.length) ??
-        (existingGroupId ? tokens.find((t) => t.groupId === existingGroupId && t.previousTokens && t.previousTokens.length) : undefined);
-      const reuseHistory = Boolean(existingGroupId && anchorExistingHistory?.previousTokens?.length);
-      const baseHistoryRaw = reuseHistory ? cloneTokens(anchorExistingHistory!.previousTokens!) : flattenedOld;
-      const baseHistory = dedupeTokens(unwindToOriginal(baseHistoryRaw));
-      const baseVisible = baseHistory.filter((t) => t.kind !== "empty");
-
-      // If the new text matches the original visible tokens exactly, treat this as a full revert.
-      if (newTokensRaw.length && sameTokenSequence(baseVisible, newTokensRaw)) {
-        const restored = baseVisible.map((tok) => ({
-          ...tok,
-          selected: false,
-          previousTokens: undefined,
-          groupId: undefined,
-          moveId: undefined,
-        }));
-        tokens.splice(start, oldSlice.length, ...restored);
-        const cleaned = dropRedundantEmpties(tokens);
-        const next: EditorPresentState = {
-          ...state.present,
-          tokens: cleaned,
-          moveMarkers: deriveMoveMarkers(cleaned),
-        };
-        return pushPresent(state, next);
-      }
-
-      const groupId = reuseHistory && existingGroupId ? existingGroupId : createId();
-      let replacement: Token[] = newTokensRaw.length
-        ? cloneTokens(newTokensRaw).map((tok) => ({ ...tok, groupId, moveId: moveIdReuse }))
-        : [{ ...makeEmptyPlaceholder([]), moveId: moveIdReuse }];
-      if (oldSliceAllInserted) {
-        replacement = replacement.map((tok) => ({ ...tok, origin: "inserted" }));
-      }
-      if (replacement.length) {
-        replacement[0].spaceBefore = leadingSpace;
-      }
-      if (newTokensRaw.length) {
-        const anchorIndex = Math.floor((replacement.length - 1) / 2);
-        replacement = replacement.map((tok, idx) =>
-          idx === anchorIndex ? { ...tok, previousTokens: baseHistory } : tok
-        );
-      } else {
-        replacement[0].previousTokens = baseHistory;
-      }
-      tokens.splice(start, oldSlice.length, ...replacement);
-      const next: EditorPresentState = { ...state.present, tokens, moveMarkers: deriveMoveMarkers(tokens) };
-      if (oldSliceAllInserted) {
-        // Do not record the transient empty insertion; push the pre-insert snapshot instead.
-        const preInsertTokens = cloneTokens(state.present.tokens);
-        preInsertTokens.splice(start, oldSlice.length); // remove the placeholder slice
-        const pastEntry: EditorPresentState = {
-          ...state.present,
-          tokens: preInsertTokens,
-          moveMarkers: deriveMoveMarkers(preInsertTokens),
-        };
-        return {
-          past: [...state.past, pastEntry],
-          present: next,
-          future: [],
-        };
-      }
-      return pushPresent(state, next);
-    }
-    case "MERGE_RANGE": {
-      const [start, end] = action.range;
-      if (start < 0 || end < start || end >= state.present.tokens.length) return state;
-      const tokens = cloneTokens(state.present.tokens);
-      const slice = tokens.slice(start, end + 1);
-      if (slice.length <= 1) return state;
-      const merged = buildMergedToken(slice);
-      if (!merged) return state;
-      // Preserve insertion origin if everything in the slice was originally inserted.
-      if (slice.every((tok) => tok.origin === "inserted")) {
-        merged.origin = "inserted";
-      }
-      tokens.splice(start, slice.length, merged);
-      const nextState: EditorPresentState = { ...state.present, tokens, moveMarkers: deriveMoveMarkers(tokens) };
-      return pushPresent(state, nextState);
-    }
-    case "CLEAR_ALL": {
-      const original = state.present.originalTokens;
-      const present: EditorPresentState = {
-        originalTokens: cloneTokens(original),
-        tokens: cloneTokens(original),
-        moveMarkers: deriveMoveMarkers(original),
-      };
-      return pushPresent(state, present);
-    }
-    case "REVERT_CORRECTION": {
-      const { rangeStart, rangeEnd, markerId } = action;
-      const tokens = cloneTokens(state.present.tokens);
-      // Revert move correction.
-      if (markerId) {
-        const markersNow = deriveMoveMarkers(tokens);
-        const marker = markersNow.find((m) => m.id === markerId);
-        if (!marker) return state;
-        let placeholderIndex = marker.fromStart;
-        const blockStart = marker.toStart;
-        const blockLen = marker.toEnd - marker.toStart + 1;
-        // Remove moved block first to normalize indices.
-        const removed = tokens.splice(blockStart, blockLen);
-        if (blockStart < placeholderIndex) {
-          placeholderIndex -= blockLen;
-        }
-        const placeholder = tokens[placeholderIndex];
-        // remove placeholder
-        tokens.splice(placeholderIndex, 1);
-        const restore =
-          placeholder?.previousTokens?.length
-            ? buildOriginalHistoryForBlock(placeholder.previousTokens)
-            : [makeEmptyPlaceholder([])];
-        tokens.splice(placeholderIndex, 0, ...restore);
-        const cleanedTokens = dropRedundantEmpties(tokens);
-        const next: EditorPresentState = {
-          ...state.present,
-          tokens: cleanedTokens,
-          moveMarkers: deriveMoveMarkers(cleanedTokens).filter((m) => m.id !== markerId),
-        };
-        return pushPresent(state, next);
-      }
-
-      // Revert standard correction by replacing range with previousTokens found in the anchor.
-      const anchorIdx = tokens.findIndex(
-        (tok, idx) =>
-          idx >= rangeStart && idx <= rangeEnd && tok.previousTokens && tok.previousTokens.length
-      );
-      if (anchorIdx === -1) return state;
-      const replacementRaw = tokens[anchorIdx].previousTokens?.length
-        ? cloneTokens(tokens[anchorIdx].previousTokens!)
-        : [makeEmptyPlaceholder([])];
-      const replacement = dedupeTokens(unwindToOriginal(replacementRaw)).map((tok) => ({
-        ...tok,
-        previousTokens: undefined,
-        selected: false,
-      }));
-      const rangeLen = rangeEnd - rangeStart + 1;
-      // If the replacement is just a single empty placeholder with no history, drop the correction entirely.
-      const isJustEmpty =
-        replacement.length === 1 &&
-        replacement[0].kind === "empty" &&
-        (!replacement[0].previousTokens || replacement[0].previousTokens.length === 0);
-      if (isJustEmpty) {
-        tokens.splice(rangeStart, rangeLen);
-      } else {
-        tokens.splice(rangeStart, rangeLen, ...replacement);
-      }
-      const cleaned = dropRedundantEmpties(tokens);
-      const next: EditorPresentState = { ...state.present, tokens: cleaned, moveMarkers: deriveMoveMarkers(cleaned) };
-      return pushPresent(state, next);
-    }
-    case "MERGE_WITH_NEXT": {
-      const tokens = cloneTokens(state.present.tokens);
-      if (action.index < 0 || action.index >= tokens.length - 1) return state;
-      const current = tokens[action.index];
-      const nextToken = tokens[action.index + 1];
-
-      const merged = buildMergedToken([current, nextToken]);
-      if (!merged) return state;
-      tokens.splice(action.index, 2, merged);
-      const nextState: EditorPresentState = { ...state.present, tokens, moveMarkers: deriveMoveMarkers(tokens) };
-      return pushPresent(state, nextState);
-    }
-    case "CANCEL_INSERT_PLACEHOLDER": {
-      const [start, end] = action.range;
-      const tokens = cloneTokens(state.present.tokens);
-      const slice = tokens.slice(start, end + 1);
-      const allEmptyInserted = slice.every(
-        (t) => t.origin === "inserted" && t.text === "" && (!t.previousTokens || t.previousTokens.length === 0 || isInsertPlaceholder([t]))
-      );
-      if (!allEmptyInserted) return state;
-      tokens.splice(start, slice.length);
-      const next: EditorPresentState = { ...state.present, tokens, moveMarkers: deriveMoveMarkers(tokens) };
-      // Transient cleanup; do not push to history.
-      return { ...state, present: next, future: [] };
-    }
-    case "MOVE_SELECTED_BY_DRAG": {
-      const { fromIndex, toIndex, count } = action; // toIndex is an insertion index (between tokens), 0..length
-      if (count <= 0) return state;
-      const tokens = cloneTokens(state.present.tokens);
-      if (fromIndex < 0 || fromIndex + count > tokens.length) return state;
-
-      let block = tokens.splice(fromIndex, count);
-      const originalBlock = cloneTokens(block);
-      // Prepare moved block metadata
-      const newGroupId = createId();
-      const moveId = createId();
-      const mid = Math.floor((block.length - 1) / 2);
-      block = block.map((tok, idx) =>
-        idx === mid
-          ? { ...tok, groupId: newGroupId, previousTokens: [makeEmptyPlaceholder([])], origin: tok.origin, moveId }
-          : { ...tok, groupId: newGroupId, origin: tok.origin, moveId }
-      );
-
-      // Placeholder at old position with earliest history of the block.
-      const previousTokens = buildOriginalHistoryForBlock(originalBlock);
-      const sourceLeadingSpace = fromIndex === 0 ? false : originalBlock[0]?.spaceBefore !== false;
-      const placeholder = { ...makeEmptyPlaceholder(previousTokens), moveId, spaceBefore: sourceLeadingSpace };
-
-      // Compute insertion index relative to array AFTER removal.
-      const insertionIndexAfterRemoval = toIndex > fromIndex ? toIndex - count : toIndex;
-      // Insert placeholder at the original position.
-      tokens.splice(fromIndex, 0, placeholder);
-      // Compute insertion index after placeholder insertion.
-      const insertionIndexWithPlaceholder =
-        insertionIndexAfterRemoval >= fromIndex ? insertionIndexAfterRemoval + 1 : insertionIndexAfterRemoval;
-      const safeInsert = Math.max(0, Math.min(insertionIndexWithPlaceholder, tokens.length));
-      const destLeadingSpace = safeInsert === 0 ? false : tokens[safeInsert]?.spaceBefore !== false;
-      if (block.length) {
-        block[0].spaceBefore = destLeadingSpace;
-      }
-      tokens.splice(safeInsert, 0, ...block);
-
-      // Placeholder final index shifts right if block inserted before it (leftward move).
-      const placeholderIndex = safeInsert <= fromIndex ? fromIndex + block.length : fromIndex;
-      const toStart = safeInsert;
-      const marker: MoveMarker = {
-        id: moveId,
-        fromStart: placeholderIndex,
-        fromEnd: placeholderIndex,
-        toStart,
-        toEnd: toStart + count - 1,
-      };
-      tokens.forEach((tok) => {
-        if (tok.moveId === moveId && tok.kind !== "empty") {
-          tok.groupId = newGroupId;
-        }
-      });
-      const next: EditorPresentState = { ...state.present, tokens, moveMarkers: deriveMoveMarkers(tokens) };
-      return pushPresent(state, next);
-    }
-    case "UNDO": {
-      if (!state.past.length) return state;
-      const previous = state.past[state.past.length - 1];
-      const past = state.past.slice(0, -1);
-      return {
-        past,
-        present: previous,
-        future: [state.present, ...state.future],
-      };
-    }
-    case "REDO": {
-      if (!state.future.length) return state;
-      const next = state.future[0];
-      const future = state.future.slice(1);
-      return {
-        past: [...state.past, state.present],
-        present: next,
-        future,
-      };
-    }
-    default:
-      return state;
-  }
-};
-
-export const tokenEditorReducer = reducer;
-
-// ---------------------------
-// Token chip rendering helpers
-// ---------------------------
 const chipBase: React.CSSProperties = {
   padding: "0px",
   display: "inline-flex",
@@ -947,510 +84,17 @@ const chipStyles: Record<string, React.CSSProperties> = {
   },
 };
 
-// Concatenate token texts for editing field and plain-text preview, skipping empty placeholders.
-export const buildTextFromTokens = (tokens: Token[]) =>
-  tokens
-    .filter((t) => t.kind !== "empty")
-    .map((t) => t.text)
-    .join(" ")
-    .replace(/\s+([.,;:?!-])/g, "$1");
-
-export const buildTextFromTokensWithBreaks = (tokens: Token[], breaks: number[]) => {
-  const breakCounts = new Map<number, number>();
-  breaks.forEach((idx) => {
-    breakCounts.set(idx, (breakCounts.get(idx) ?? 0) + 1);
-  });
-  const parts: string[] = [];
-  let visibleIdx = 0;
-  tokens.forEach((t) => {
-    if (t.kind === "empty") return;
-    parts.push(t.text);
-    visibleIdx += 1;
-    const count = breakCounts.get(visibleIdx) ?? 0;
-    if (count > 0) {
-      for (let i = 0; i < count; i += 1) {
-        parts.push("\n");
-      }
-    }
-  });
-  const joined = parts.join(" ");
-  return joined.replace(/\s+([.,;:?!-])/g, "$1").replace(/[ \t]*\n[ \t]*/g, "\n").trimEnd();
-};
-
-export const buildEditableTextFromTokens = (tokens: Token[]) => {
-  const visible = tokens.filter((t) => t.kind !== "empty");
-  if (!visible.length) return "";
-  return visible
-    .map((t, idx) => {
-      const needsSpace = idx === 0 ? false : t.spaceBefore !== false;
-      const prefix = needsSpace ? " " : "";
-      return `${prefix}${t.text}`;
-    })
-    .join("");
-};
-
-type DiffOp = { type: "equal" | "delete" | "insert"; values: string[] };
-
-const diffTokenSequences = (a: string[], b: string[]): DiffOp[] => {
-  const dp: number[][] = Array.from({ length: a.length + 1 }, () => new Array(b.length + 1).fill(0));
-  for (let i = a.length - 1; i >= 0; i -= 1) {
-    for (let j = b.length - 1; j >= 0; j -= 1) {
-      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
-    }
-  }
-  const ops: DiffOp[] = [];
-  const push = (type: DiffOp["type"], values: string[]) => {
-    if (!values.length) return;
-    const last = ops[ops.length - 1];
-    if (last && last.type === type) {
-      last.values.push(...values);
-    } else {
-      ops.push({ type, values: [...values] });
-    }
-  };
-  let i = 0;
-  let j = 0;
-  while (i < a.length && j < b.length) {
-    if (a[i] === b[j]) {
-      push("equal", [a[i]]);
-      i += 1;
-      j += 1;
-    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
-      push("delete", [a[i]]);
-      i += 1;
-    } else {
-      push("insert", [b[j]]);
-      j += 1;
-    }
-  }
-  while (i < a.length) {
-    push("delete", [a[i]]);
-    i += 1;
-  }
-  while (j < b.length) {
-    push("insert", [b[j]]);
-    j += 1;
-  }
-  return ops;
-};
-
-const pickTypeLabel = (labels: Array<string | null | undefined>) => {
-  const counts = new Map<string, number>();
-  labels.forEach((label) => {
-    if (!label) return;
-    counts.set(label, (counts.get(label) ?? 0) + 1);
-  });
-  let best: string | null = null;
-  let bestCount = -1;
-  counts.forEach((count, label) => {
-    if (count > bestCount) {
-      best = label;
-      bestCount = count;
-    }
-  });
-  return best;
-};
-
-export const buildM2Preview = ({
-  originalTokens,
-  tokens,
-  correctionCards = [],
-  correctionTypeMap = {},
-  correctionByIndex,
-  resolveTypeLabel,
-}: {
-  originalTokens: Token[];
-  tokens: Token[];
-  correctionCards?: Array<{ id: string; rangeStart: number; rangeEnd: number; original: string; updated: string }>;
-  correctionTypeMap?: Record<string, number | null | undefined>;
-  correctionByIndex?: Map<number, string>;
-  resolveTypeLabel?: (typeId: number) => string | null;
-}) => {
-  const visibleOriginal = originalTokens.filter((t) => t.kind !== "empty").map((t) => t.text);
-  const visibleCorrected: string[] = [];
-  const typeLabelsForVisible: Array<string | null> = [];
-  const tokenIndexToVisible: number[] = [];
-  let visibleCounter = 0;
-
-  const resolveType = (typeId: number | null | undefined): string | null => {
-    if (typeId === null || typeId === undefined) return null;
-    return resolveTypeLabel?.(typeId) ?? String(typeId);
-  };
-
-  tokens.forEach((tok, idx) => {
-    tokenIndexToVisible[idx] = visibleCounter;
-    if (tok.kind === "empty") return;
-    visibleCorrected.push(tok.text);
-    const cardId = correctionByIndex?.get(idx);
-    const typeId = cardId ? correctionTypeMap[cardId] : null;
-    typeLabelsForVisible.push(resolveType(typeId));
-    visibleCounter += 1;
-  });
-
-  const placeholderTypeByInsertion = new Map<number, string | null>();
-  tokens.forEach((tok, idx) => {
-    if (tok.kind !== "empty") return;
-    const insertionIdx = tokenIndexToVisible[idx] ?? 0;
-    const cardId = correctionByIndex?.get(idx);
-    const typeId = cardId ? correctionTypeMap[cardId] : null;
-    if (!placeholderTypeByInsertion.has(insertionIdx)) {
-      placeholderTypeByInsertion.set(insertionIdx, resolveType(typeId));
-    }
-  });
-
-  const cardByInsertion = new Map<number, string>();
-  correctionCards.forEach((card) => {
-    const insertionIdx = tokenIndexToVisible[card.rangeStart] ?? 0;
-    if (!cardByInsertion.has(insertionIdx)) {
-      cardByInsertion.set(insertionIdx, card.id);
-    }
-  });
-
-  const ops = diffTokenSequences(visibleOriginal, visibleCorrected);
-  const edits: Array<{ start: number; end: number; startCorr: number; endCorr: number; replacementTokens: string[]; type: string }> = [];
-  let origIdx = 0;
-  let corrIdx = 0;
-  for (let k = 0; k < ops.length; k += 1) {
-    const op = ops[k];
-    if (op.type === "equal") {
-      origIdx += op.values.length;
-      corrIdx += op.values.length;
-      continue;
-    }
-    const startOrig = origIdx;
-    const startCorr = corrIdx;
-    while (k < ops.length && ops[k].type !== "equal") {
-      const current = ops[k];
-      if (current.type === "delete") {
-        origIdx += current.values.length;
-      } else if (current.type === "insert") {
-        corrIdx += current.values.length;
-      }
-      k += 1;
-    }
-    k -= 1; // offset for the for-loop increment
-    const endOrig = origIdx;
-    const endCorr = corrIdx;
-    const replacementTokens = visibleCorrected.slice(startCorr, endCorr);
-    const typeFromReplacement = pickTypeLabel(typeLabelsForVisible.slice(startCorr, endCorr));
-    let typeLabel =
-      typeFromReplacement ??
-      placeholderTypeByInsertion.get(startCorr) ??
-      (() => {
-        const cardId = cardByInsertion.get(startCorr);
-        if (!cardId) return null;
-        const typeId = correctionTypeMap[cardId];
-        return resolveType(typeId);
-      })() ??
-      "OTHER";
-    edits.push({
-      start: startOrig,
-      end: endOrig,
-      startCorr,
-      endCorr,
-      replacementTokens,
-      type: typeLabel ?? "OTHER",
-    });
-  }
-
-  const lines = [`S ${visibleOriginal.join(" ")}`];
-  if (!edits.length) {
-    lines.push("A -1 -1|||noop|||-NONE-|||REQUIRED|||-NONE-|||0");
-    return lines.join("\n");
-  }
-
-  edits.forEach((edit) => {
-    const replacement = edit.replacementTokens.length ? edit.replacementTokens.join(" ") : "-NONE-";
-    lines.push(`A ${edit.start} ${edit.end}|||${edit.type}|||${replacement}|||REQUIRED|||-NONE-|||0`);
-  });
-  return lines.join("\n");
-};
-
-const toHex = (buffer: ArrayBuffer) =>
-  Array.from(new Uint8Array(buffer))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-
-export const computeSha256 = async (text: string): Promise<string | null> => {
-  const subtle = globalThis.crypto?.subtle;
-  if (subtle) {
-    try {
-      const data = new TextEncoder().encode(text);
-      const digest = await subtle.digest("SHA-256", data);
-      return toHex(digest);
-    } catch {
-      // fall through to node crypto
-    }
-  }
-  try {
-    // @ts-ignore - optional in browser
-    const crypto = await import("crypto");
-    const hash = crypto.createHash("sha256");
-    hash.update(text);
-    return hash.digest("hex");
-  } catch {
-    return null;
-  }
-};
-
-export const computeTokensSha256 = async (tokens: string[]): Promise<string | null> => {
-  const joined = tokens.join("\u241f");
-  return computeSha256(joined);
-};
-
-export const annotationsSignature = (annotations: AnnotationDraft[]) => JSON.stringify(annotations);
-
-export const shouldSkipSave = (
-  lastSignature: string | null,
-  annotations: AnnotationDraft[]
-): { skip: boolean; nextSignature: string } => {
-  const signature = annotationsSignature(annotations);
-  if (signature === lastSignature) {
-    return { skip: true, nextSignature: signature };
-  }
-  if (!annotations.length && lastSignature === null) {
-    return { skip: true, nextSignature: signature };
-  }
-  return { skip: false, nextSignature: signature };
-};
-
-type BuildPayloadInput = {
-  initialText: string;
-  tokens: Token[];
-  originalTokens: Token[];
-  correctionCards: CorrectionCardLite[];
-  correctionTypeMap: Record<string, number | null>;
-  moveMarkers: MoveMarker[];
-  annotationIdMap?: Map<string, number>;
-  includeDeletedIds?: boolean;
-};
-
-export const buildAnnotationsPayloadStandalone = async ({
-  initialText,
-  tokens,
-  originalTokens,
-  correctionCards,
-  correctionTypeMap,
-  moveMarkers,
-  annotationIdMap,
-  includeDeletedIds = false,
-}: BuildPayloadInput): Promise<AnnotationDraft[]> => {
-  const textHash = await computeSha256(initialText);
-  const textTokensSnapshot = originalTokens.filter((t) => t.kind !== "empty").map((t) => t.text);
-  const textTokensHash = await computeTokensSha256(textTokensSnapshot);
-  const moveMarkerById = new Map<string, MoveMarker>();
-  moveMarkers.forEach((m) => moveMarkerById.set(m.id, m));
-  const originalIndexById = new Map<string, number>();
-  const originalTokenById = new Map<string, Token>();
-  originalTokens.forEach((tok, idx) => {
-    if (tok.kind === "empty") return;
-    originalIndexById.set(tok.id, idx);
-    originalTokenById.set(tok.id, tok);
-  });
-
-  const seenKeys = new Set<string>();
-  const payloads: AnnotationDraft[] = [];
-  const normalizeBeforeIds = (items: Token[]) => {
-    const seen = new Set<string>();
-    const ids: string[] = [];
-    items.forEach((tok) => {
-      if (tok.kind === "empty") return;
-      if (!originalIndexById.has(tok.id)) return;
-      if (seen.has(tok.id)) return;
-      seen.add(tok.id);
-      ids.push(tok.id);
-    });
-    return ids;
-  };
-
-  const textForIds = (ids: string[]) =>
-    ids
-      .map((id) => originalTokenById.get(id)?.text ?? "")
-      .filter(Boolean)
-      .join(" ")
-      .trim();
-
-  const getOriginalSpanForToken = (tok: Token): { min: number; max: number } | null => {
-    const indices: number[] = [];
-    const direct = originalIndexById.get(tok.id);
-    if (direct !== undefined) {
-      indices.push(direct);
-    }
-    if (tok.previousTokens?.length) {
-      const originals = unwindToOriginal(cloneTokens(tok.previousTokens));
-      originals.forEach((prev) => {
-        const idx = originalIndexById.get(prev.id);
-        if (idx !== undefined) indices.push(idx);
-      });
-    }
-    if (!indices.length) return null;
-    return { min: Math.min(...indices), max: Math.max(...indices) };
-  };
-
-  const findInsertionIndex = (rangeStart: number, rangeEnd: number) => {
-    for (let i = rangeStart - 1; i >= 0; i -= 1) {
-      const span = getOriginalSpanForToken(tokens[i]);
-      if (span) return span.max + 1;
-    }
-    for (let i = rangeEnd + 1; i < tokens.length; i += 1) {
-      const span = getOriginalSpanForToken(tokens[i]);
-      if (span) return span.min;
-    }
-    return 0;
-  };
-
-  const fragmentFromToken = (tok: Token): TokenFragmentPayload => {
-    const fragment: TokenFragmentPayload = {
-      id: tok.id,
-      text: tok.text,
-      origin: tok.origin === "inserted" ? "inserted" : "base",
-      source_id:
-        tok.origin === "inserted"
-          ? tok.previousTokens?.find((p) => p.kind !== "empty")?.id ?? null
-          : tok.id,
-    };
-    if (typeof tok.spaceBefore === "boolean") {
-      fragment.space_before = tok.spaceBefore;
-    }
-    return fragment;
-  };
-
-  correctionCards.forEach((card) => {
-    const typeId = correctionTypeMap[card.id];
-    if (!typeId) return;
-    const key = `${card.rangeStart}-${card.rangeEnd}-${card.markerId ?? "nomove"}`;
-    if (seenKeys.has(key)) return;
-    seenKeys.add(key);
-
-    let beforeIds: string[] = [];
-    let afterFragments: TokenFragmentPayload[] = [];
-    let operation: AnnotationDetailPayload["operation"] = "replace";
-
-    if (card.markerId) {
-      const marker = moveMarkerById.get(card.markerId);
-      if (!marker) return;
-      const placeholder = tokens[marker.fromStart];
-      const historyTokens = placeholder?.previousTokens
-        ? unwindToOriginal(cloneTokens(placeholder.previousTokens))
-        : [];
-      beforeIds = normalizeBeforeIds(historyTokens);
-      afterFragments = tokens
-        .slice(marker.toStart, marker.toEnd + 1)
-        .filter((tok) => tok.kind !== "empty")
-        .map(fragmentFromToken);
-      operation = "move";
-    } else {
-      const historyTokens: Token[] = [];
-      for (let idx = card.rangeStart; idx <= card.rangeEnd; idx += 1) {
-        const tok = tokens[idx];
-        if (tok?.previousTokens?.length) {
-          historyTokens.push(...unwindToOriginal(cloneTokens(tok.previousTokens)));
-        }
-      }
-      if (!historyTokens.length) {
-        historyTokens.push(
-          ...originalTokens.slice(card.rangeStart, card.rangeEnd + 1).filter((tok) => tok.kind !== "empty")
-        );
-      }
-      beforeIds = normalizeBeforeIds(historyTokens);
-      afterFragments = tokens
-        .slice(card.rangeStart, card.rangeEnd + 1)
-        .filter((tok) => tok.kind !== "empty")
-        .map(fragmentFromToken);
-      const beforeText = textForIds(beforeIds);
-      const afterText = afterFragments.map((f) => f.text).join(" ").trim();
-      if (!afterFragments.length || afterText === "") {
-        operation = "delete";
-      } else if (!beforeIds.length) {
-        operation = "insert";
-      } else if (beforeText === afterText) {
-        operation = "noop";
-      } else {
-        operation = "replace";
-      }
-    }
-
-    const replacement = afterFragments.length === 0 ? null : afterFragments.map((f) => f.text).join(" ").trim() || null;
-    const beforeIndices = beforeIds
-      .map((id) => originalIndexById.get(id))
-      .filter((idx): idx is number => idx !== undefined);
-    const insertionIndex = findInsertionIndex(card.rangeStart, card.rangeEnd);
-    const spanStart = beforeIndices.length ? Math.min(...beforeIndices) : insertionIndex;
-    const spanEnd = beforeIndices.length ? Math.max(...beforeIndices) : insertionIndex;
-
-    const payload: AnnotationDetailPayload = {
-      text_sha256: textHash,
-      text_tokens: textTokensSnapshot,
-      text_tokens_sha256: textTokensHash ?? undefined,
-      operation,
-      before_tokens: beforeIds,
-      after_tokens: afterFragments,
-      source: "manual",
-    };
-    if (operation === "move") {
-      const marker = card.markerId ? moveMarkerById.get(card.markerId) : null;
-      const moveFrom = beforeIndices.length ? Math.min(...beforeIndices) : spanStart;
-      const moveTo = marker ? findInsertionIndex(marker.toStart, marker.toEnd) : insertionIndex;
-      (payload as any).move_from = moveFrom;
-      (payload as any).move_to = moveTo;
-    }
-
-    const draft: AnnotationDraft = {
-      start_token: spanStart,
-      end_token: spanEnd,
-      replacement,
-      error_type_id: typeId,
-      payload,
-    };
-    const spanKey = `${spanStart}-${spanEnd}`;
-    const existingId = annotationIdMap?.get(spanKey);
-    if (existingId !== undefined) {
-      draft.id = existingId;
-    }
-    payloads.push(draft);
-  });
-
-  if (includeDeletedIds && annotationIdMap) {
-    const spanKeys = new Set(payloads.map((p) => `${p.start_token}-${p.end_token}`));
-    const deletedIds = Array.from(annotationIdMap.entries())
-      .filter(([span]) => !spanKeys.has(span))
-      .map(([, id]) => id);
-    (payloads as any).deleted_ids = deletedIds;
-  }
-
-  return payloads;
-};
-// ---------------------------
-// Component
-// ---------------------------
-type SelectionRange = { start: number | null; end: number | null };
-
-export type SaveStatus = { state: "idle" | "saving" | "saved" | "error"; unsaved: boolean };
-
-const PREFS_KEY = "tokenEditorPrefs";
-const DEFAULT_TOKEN_GAP = 2;
-const DEFAULT_TOKEN_FONT_SIZE = 24;
-type SpaceMarker = "dot" | "box" | "none";
-
-type CorrectionCardLite = {
-  id: string;
-  rangeStart: number;
-  rangeEnd: number;
-  markerId: string | null;
-};
-
 const normalizeSpaceMarker = (value: unknown): SpaceMarker => {
   return value === "dot" || value === "box" || value === "none" ? value : "box";
 };
 
 const loadPrefs = (): {
-  sidebarOpen?: boolean;
   tokenGap?: number;
   tokenFontSize?: number;
   spaceMarker?: SpaceMarker;
   lastDecision?: "skip" | "trash" | "submit" | null;
   lastTextId?: number;
-  viewTab?: "original" | "corrected" | "m2" | "debug";
+  viewTab?: "original" | "corrected";
   textPanelOpen?: boolean;
 } => {
   try {
@@ -1537,13 +181,13 @@ export const TokenEditor: React.FC<{
   onSaveStatusChange,
 }) => {
   const { t, locale } = useI18n();
-  const api = useAuthedApi();
+  const { get, post } = useAuthedApi();
   const navigate = useNavigate();
   const location = useLocation();
 
-  const [history, dispatch] = useReducer(reducer, {
+  const [history, dispatch] = useReducer(tokenEditorReducer, {
     past: [],
-    present: { originalTokens: [], tokens: [], moveMarkers: [] },
+    present: { originalTokens: [], tokens: [], moveMarkers: [], operations: [] },
     future: [],
   });
 
@@ -1582,47 +226,45 @@ export const TokenEditor: React.FC<{
     },
     [tokenFontSize]
   );
-  const groupRefs = useRef<Record<number, HTMLDivElement | null>>({});
-const tokenRowRef = useRef<HTMLDivElement | null>(null);
-const [isSidebarOpen, setIsSidebarOpen] = useState(prefs.sidebarOpen ?? true);
-const [isSubmitting, setIsSubmitting] = useState(false);
+  const tokenRowRef = useRef<HTMLDivElement | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSkipping, setIsSkipping] = useState(false);
   const [isTrashing, setIsTrashing] = useState(false);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-const [isAutosaving, setIsAutosaving] = useState(false);
-const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
-const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
-const initialViewTab = useMemo<"original" | "corrected" | "m2" | "debug">(() => {
-  if (prefs.viewTab === "original" || prefs.viewTab === "corrected" || prefs.viewTab === "m2" || prefs.viewTab === "debug") {
-    return prefs.viewTab;
-  }
-  return "corrected";
-}, [prefs.viewTab]);
-const [viewTab, setViewTab] = useState<"original" | "corrected" | "m2" | "debug">(initialViewTab);
-const [isTextPanelOpen, setIsTextPanelOpen] = useState<boolean>(prefs.textPanelOpen ?? true);
-const computeLineBreaks = useCallback((text: string) => {
-  const breaks: number[] = [];
-  const lines = text.split(/\n/);
-  let count = 0;
-  lines.forEach((line, idx) => {
-    const lineTokens = tokenizeToTokens(line);
-    count += lineTokens.filter((t) => t.kind !== "empty").length;
-    if (idx < lines.length - 1) {
-      breaks.push(count);
+  const [isAutosaving, setIsAutosaving] = useState(false);
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const initialViewTab = useMemo<"original" | "corrected">(() => {
+    if (prefs.viewTab === "original" || prefs.viewTab === "corrected") {
+      return prefs.viewTab;
     }
-  });
-  return breaks;
-}, []);
-const [lineBreaks, setLineBreaks] = useState<number[]>(() => computeLineBreaks(initialText));
-const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
-const lineBreakCountMap = useMemo(() => {
-  const map = new Map<number, number>();
-  lineBreaks.forEach((idx) => {
-    map.set(idx, (map.get(idx) ?? 0) + 1);
-  });
-  return map;
-}, [lineBreaks]);
+    return "corrected";
+  }, [prefs.viewTab]);
+  const [viewTab, setViewTab] = useState<"original" | "corrected">(initialViewTab);
+  const [isTextPanelOpen, setIsTextPanelOpen] = useState<boolean>(prefs.textPanelOpen ?? true);
+  const computeLineBreaks = useCallback((text: string) => {
+    const breaks: number[] = [];
+    const lines = text.split(/\n/);
+    let count = 0;
+    lines.forEach((line, idx) => {
+      const lineTokens = tokenizeToTokens(line);
+      count += lineTokens.filter((t) => t.kind !== "empty").length;
+      if (idx < lines.length - 1) {
+        breaks.push(count);
+      }
+    });
+    return breaks;
+  }, []);
+  const [lineBreaks, setLineBreaks] = useState<number[]>(() => computeLineBreaks(initialText));
+  const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
+  const lineBreakCountMap = useMemo(() => {
+    const map = new Map<number, number>();
+    lineBreaks.forEach((idx) => {
+      map.set(idx, (map.get(idx) ?? 0) + 1);
+    });
+    return map;
+  }, [lineBreaks]);
   const autosaveInitializedRef = useRef(false);
   const lastSavedSignatureRef = useRef<string | null>(null);
   const [lastDecision, setLastDecision] = useState<"skip" | "trash" | "submit" | null>(
@@ -1631,10 +273,7 @@ const lineBreakCountMap = useMemo(() => {
   const [pendingAction, setPendingAction] = useState<"skip" | "trash" | null>(null);
   const [flagReason, setFlagReason] = useState("");
   const [flagError, setFlagError] = useState<string | null>(null);
-  const [isHoveringMove, setIsHoveringMove] = useState(false);
-  const [hoveredMoveId, setHoveredMoveId] = useState<string | null>(null);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
-  const [hoveredCorrectionRange, setHoveredCorrectionRange] = useState<[number, number] | null>(null);
   const [errorTypes, setErrorTypes] = useState<ErrorType[]>([]);
   const [isLoadingErrorTypes, setIsLoadingErrorTypes] = useState(false);
   const [errorTypesError, setErrorTypesError] = useState<string | null>(null);
@@ -1645,6 +284,7 @@ const lineBreakCountMap = useMemo(() => {
   const skipAutoSelectRef = useRef(false);
   const [serverAnnotationVersion, setServerAnnotationVersion] = useState(0);
   const annotationIdMap = useRef<Map<string, number>>(new Map());
+  const pendingLocalStateRef = useRef<EditorPresentState | null>(null);
   const hydratedFromServerRef = useRef(false);
   const prevCorrectionCountRef = useRef(0);
   const handleRevert = (rangeStart: number, rangeEnd: number, markerId: string | null = null) => {
@@ -1780,8 +420,10 @@ const lineBreakCountMap = useMemo(() => {
   useEffect(() => {
     const saved = loadEditorState(textId);
     if (saved) {
+      pendingLocalStateRef.current = saved;
       dispatch({ type: "INIT_FROM_STATE", state: saved });
     } else {
+      pendingLocalStateRef.current = null;
       dispatch({ type: "INIT_FROM_TEXT", text: initialText });
     }
     const typeState = loadCorrectionTypes(textId);
@@ -1895,9 +537,7 @@ const lineBreakCountMap = useMemo(() => {
             selected: false,
             previousTokens: cloneTokens(sourceHistory),
           }));
-          moveTokens.forEach((tok) => {
-            typeMap[tok.id] = cardType;
-          });
+          typeMap[moveId] = cardType;
           const destIdx = Math.max(0, Math.min(working.length, moveTo + offset));
           if (moveTokens.length) {
             moveTokens[0].spaceBefore = destIdx === 0 ? false : working[destIdx]?.spaceBefore !== false;
@@ -1927,9 +567,7 @@ const lineBreakCountMap = useMemo(() => {
         }
         const removal = removeCount;
         working.splice(targetStart, removal, ...newTokens);
-        newTokens.forEach((tok) => {
-          typeMap[tok.id] = cardType;
-        });
+        typeMap[groupId] = cardType;
         if (
           currentUserId &&
           ann?.author_id === currentUserId &&
@@ -1942,10 +580,12 @@ const lineBreakCountMap = useMemo(() => {
         }
         offset += newTokens.length - removal;
       });
+      const operations = deriveOperationsFromTokens(baseTokens, working);
       const present: EditorPresentState = {
         originalTokens: cloneTokens(baseTokens),
         tokens: working,
         moveMarkers: deriveMoveMarkers(working),
+        operations,
       };
       return { present, typeMap, spanMap };
     },
@@ -1956,7 +596,7 @@ const lineBreakCountMap = useMemo(() => {
     let cancelled = false;
     const loadExistingAnnotations = async () => {
       try {
-        const res = await api.get(`/api/texts/${textId}/annotations`, { params: { all_authors: true } });
+        const res = await get(`/api/texts/${textId}/annotations`, { params: { all_authors: true } });
         if (cancelled) return;
         const items = Array.isArray(res.data) ? res.data : [];
         const maxVersion = items.reduce((acc: number, ann: any) => Math.max(acc, ann?.version ?? 0), 0);
@@ -1995,7 +635,7 @@ const lineBreakCountMap = useMemo(() => {
     return () => {
       cancelled = true;
     };
-  }, [api, textId, hydrateFromServerAnnotations, currentUserId]);
+  }, [get, textId, hydrateFromServerAnnotations, currentUserId]);
 
   useEffect(() => {
     try {
@@ -2007,12 +647,6 @@ const lineBreakCountMap = useMemo(() => {
 
   // Update selection highlight by toggling selected flag (not stored in history).
   const selectedSet = useMemo(() => new Set(selectedIndices), [selectedIndices]);
-  const hoveredSet = useMemo(() => {
-    if (!hoveredCorrectionRange) return new Set<number>();
-    const [s, e] = hoveredCorrectionRange;
-    return new Set(rangeToArray([s, e]));
-  }, [hoveredCorrectionRange]);
-
   const activeErrorTypes = useMemo(
     () => errorTypes.filter((type) => type.is_active),
     [errorTypes]
@@ -2050,7 +684,7 @@ const lineBreakCountMap = useMemo(() => {
         const [rangeStart, rangeEnd] = findGroupRangeForTokens(tokens, idx);
         for (let i = rangeStart; i <= rangeEnd; i += 1) visited.add(i);
         return {
-          id: tok.id,
+          id: tok.groupId ?? tok.id,
           title: `Item (${rangeStart + 1}-${rangeEnd + 1})`,
           original: tok.previousTokens.map((p) => p.text).join(" "),
           updated: tokens.slice(rangeStart, rangeEnd + 1).map((t) => t.text).join(" "),
@@ -2129,7 +763,7 @@ const lineBreakCountMap = useMemo(() => {
 
   const requestNextText = useCallback(async () => {
     try {
-      const response = await api.post("/api/texts/assignments/next", null, {
+      const response = await post("/api/texts/assignments/next", null, {
         params: { category_id: categoryId },
       });
       const nextId = response.data?.text?.id;
@@ -2142,7 +776,7 @@ const lineBreakCountMap = useMemo(() => {
       const status = error?.response?.status;
       if (status === 404) {
         try {
-          const categories = await api.get("/api/categories/");
+          const categories = await get("/api/categories/");
           const current = (categories.data as Array<{ id: number; remaining_texts: number }>).find(
             (c) => c.id === categoryId,
           );
@@ -2162,7 +796,7 @@ const lineBreakCountMap = useMemo(() => {
       }
     }
     return false;
-  }, [api, categoryId, navigate, t, textId]);
+  }, [get, post, categoryId, navigate, t, textId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2170,7 +804,7 @@ const lineBreakCountMap = useMemo(() => {
       setIsLoadingErrorTypes(true);
       setErrorTypesError(null);
       try {
-        const response = await api.get("/api/error-types/");
+        const response = await get("/api/error-types/");
         if (!cancelled) {
           setErrorTypes(response.data as ErrorType[]);
         }
@@ -2188,7 +822,7 @@ const lineBreakCountMap = useMemo(() => {
     return () => {
       cancelled = true;
     };
-  }, [api, formatError]);
+  }, [get, formatError]);
 
   const handleFlag = useCallback((flagType: "skip" | "trash") => {
     setActionError(null);
@@ -2208,7 +842,7 @@ const lineBreakCountMap = useMemo(() => {
     let succeeded = false;
     try {
       const reason = flagReason.trim();
-      await api.post(`/api/texts/${textId}/${flagType}`, { reason: reason || undefined });
+      await post(`/api/texts/${textId}/${flagType}`, { reason: reason || undefined });
       setLastDecision(flagType);
       await requestNextText();
       succeeded = true;
@@ -2221,7 +855,7 @@ const lineBreakCountMap = useMemo(() => {
         setFlagReason("");
       }
     }
-  }, [api, flagReason, navigate, pendingAction, requestNextText, t, textId]);
+  }, [post, flagReason, navigate, pendingAction, requestNextText, t, textId]);
 
   const cancelFlag = useCallback(() => {
     setPendingAction(null);
@@ -2688,9 +1322,6 @@ const lineBreakCountMap = useMemo(() => {
     }
 
     const activeMarker = history.present.moveMarkers[0] ?? null;
-    const hoveredMarker = hoveredMoveId
-      ? history.present.moveMarkers.find((m) => m.id === hoveredMoveId) ?? null
-      : null;
     const destSet =
       activeMarker && activeMarker.toStart >= 0 && activeMarker.toEnd >= activeMarker.toStart
         ? new Set(rangeToArray([activeMarker.toStart, activeMarker.toEnd]))
@@ -2796,12 +1427,7 @@ const lineBreakCountMap = useMemo(() => {
             (group.start >= m.fromStart && group.start <= m.fromEnd) ||
             (group.start >= m.toStart && group.start <= m.toEnd)
         ) ?? null;
-      const isHoveredGroup =
-        (hoveredCorrectionRange &&
-          !(group.end < hoveredCorrectionRange[0] || group.start > hoveredCorrectionRange[1])) ||
-        (hoveredMarker &&
-          ((group.start >= hoveredMarker.fromStart && group.start <= hoveredMarker.fromEnd) ||
-            (group.start >= hoveredMarker.toStart && group.start <= hoveredMarker.toEnd)));
+      const isHoveredGroup = false;
 
       const groupPadY = 0;
       const groupPadX = isPurePunctGroup ? 0 : 1;
@@ -2855,9 +1481,6 @@ const lineBreakCountMap = useMemo(() => {
             minWidth,
             position: "relative",
           }}
-          ref={(el) => {
-            groupRefs.current[group.start] = el;
-          }}
         >
           {/* Source marker intentionally removed */}
           <div
@@ -2871,26 +1494,14 @@ const lineBreakCountMap = useMemo(() => {
             }}
             onDragOver={(e) => {
               e.preventDefault();
-              if (matchingMarker) {
-                setHoveredMoveId(matchingMarker.id);
-                setIsHoveringMove(true);
-              }
+              setDropTargetIndex(group.start);
             }}
             onDrop={(e) => {
               e.preventDefault();
               handleDrop(dropTargetIndex ?? group.start);
-              setIsHoveringMove(false);
-              setHoveredMoveId(null);
               setDropTargetIndex(null);
             }}
-            onMouseEnter={() => {
-              if (matchingMarker) {
-                setHoveredMoveId(matchingMarker.id);
-                setIsHoveringMove(true);
-              }
-            }}
             onMouseLeave={() => {
-              setIsHoveringMove(false);
               setDropTargetIndex(null);
             }}
           >
@@ -3144,13 +1755,6 @@ const lineBreakCountMap = useMemo(() => {
     prevCorrectionCountRef.current = correctionCards.length;
   }, [correctionCards.length]);
 
-  const clearSelectionAfterTypePick = useCallback((cardId: string, typeId: number | null) => {
-    updateCorrectionType(cardId, typeId);
-    if (typeId !== null) {
-      setSelection({ start: null, end: null });
-    }
-  }, []);
-
   useEffect(() => {
     if (!hasLoadedTypeState) return;
     persistCorrectionTypes(textId, { activeErrorTypeId, assignments: correctionTypeMap });
@@ -3198,7 +1802,7 @@ const lineBreakCountMap = useMemo(() => {
     if (deletedIds.length) {
       payload.deleted_ids = deletedIds;
     }
-    const response = await api.post(`/api/texts/${textId}/annotations`, payload);
+    const response = await post(`/api/texts/${textId}/annotations`, payload);
     lastSavedSignatureRef.current = nextSignature;
     const items = Array.isArray(response.data) ? response.data : [];
     annotationIdMap.current = new Map<string, number>();
@@ -3213,7 +1817,7 @@ const lineBreakCountMap = useMemo(() => {
       serverAnnotationVersion
     );
     setServerAnnotationVersion(maxVersion || serverAnnotationVersion + 1);
-  }, [api, buildAnnotationsPayload, correctionCards, serverAnnotationVersion, textId]);
+  }, [post, buildAnnotationsPayload, correctionCards, serverAnnotationVersion, textId]);
 
   // Autosave on token changes (debounced).
   useEffect(() => {
@@ -3265,7 +1869,6 @@ const lineBreakCountMap = useMemo(() => {
     window.localStorage.setItem(
       PREFS_KEY,
       JSON.stringify({
-        sidebarOpen: isSidebarOpen,
         tokenGap,
         tokenFontSize,
         spaceMarker,
@@ -3275,7 +1878,7 @@ const lineBreakCountMap = useMemo(() => {
         textPanelOpen: isTextPanelOpen,
       }),
     );
-  }, [isSidebarOpen, tokenGap, tokenFontSize, spaceMarker, lastDecision, textId, viewTab, isTextPanelOpen]);
+  }, [tokenGap, tokenFontSize, spaceMarker, lastDecision, textId, viewTab, isTextPanelOpen]);
 
   const handleSubmit = async () => {
     const unassigned = correctionCards.filter((card) => !correctionTypeMap[card.id]);
@@ -3288,7 +1891,7 @@ const lineBreakCountMap = useMemo(() => {
     setIsSubmitting(true);
     try {
       await saveAnnotations();
-      await api.post(`/api/texts/${textId}/submit`);
+      await post(`/api/texts/${textId}/submit`);
       setLastDecision("submit");
       await requestNextText();
     } catch (error: any) {
@@ -3297,99 +1900,7 @@ const lineBreakCountMap = useMemo(() => {
       setIsSubmitting(false);
     }
   };
-
-  // Move markers visualization: arrows from old position to new position (using DOM refs for accuracy).
-  const renderMoveOverlay = () => {
-    if (!isHoveringMove || !tokenRowRef.current || !hoveredMoveId) return null;
-    const containerRect = tokenRowRef.current.getBoundingClientRect();
-
-    const rectForRange = (start: number, end: number) => {
-      const groupEl = groupRefs.current[start];
-      if (groupEl) {
-        const r = groupEl.getBoundingClientRect();
-        return {
-          left: r.left - containerRect.left,
-          top: r.top - containerRect.top,
-          width: r.width,
-          height: r.height,
-        };
-      }
-      const range = getRangeRect(start, end);
-      if (!range) return null;
-      return {
-        left: range.left,
-        top: range.top,
-        width: range.width,
-        height: range.height,
-      };
-    };
-
-    const arrows = history.present.moveMarkers
-      .filter((marker) => marker.id === hoveredMoveId)
-      .map((marker) => {
-        const fromRect = rectForRange(marker.fromStart, marker.fromEnd);
-        const toRect = rectForRange(marker.toStart, marker.toEnd);
-        if (!fromRect || !toRect) return null;
-
-        const x1 = fromRect.left + fromRect.width / 2;
-        const y1 = fromRect.top + fromRect.height / 2;
-        const x2 = toRect.left + toRect.width / 2;
-        const y2 = toRect.top + toRect.height / 2;
-        const dx = x2 - x1;
-        const dy = y2 - y1;
-        const length = Math.max(1, Math.hypot(dx, dy));
-        const ux = dx / length;
-        const uy = dy / length;
-        const offset = 12;
-        const startX = x1 + ux * offset;
-        const startY = y1 + uy * offset;
-        const endX = x2 - ux * offset;
-        const endY = y2 - uy * offset;
-        const angle = (Math.atan2(endY - startY, endX - startX) * 180) / Math.PI;
-        const visibleLength = Math.max(1, Math.hypot(endX - startX, endY - startY));
-
-        return (
-          <div
-            key={marker.id}
-            style={{
-              position: "absolute",
-              left: startX,
-              top: startY,
-              width: visibleLength,
-              height: 2.5,
-              transform: `rotate(${angle}deg)`,
-              transformOrigin: "0 50%",
-              pointerEvents: "none",
-              zIndex: 2,
-            }}
-          >
-            <div
-              style={{
-                position: "absolute",
-                inset: 0,
-                background: "transparent",
-                borderTop: "2px dashed #ef4444",
-              }}
-            />
-            <div
-              style={{
-                position: "absolute",
-                right: -8,
-                top: -4,
-                width: 0,
-                height: 0,
-                borderTop: "6px solid transparent",
-                borderBottom: "6px solid transparent",
-                borderLeft: "8px solid #ef4444",
-              }}
-            />
-          </div>
-        );
-      })
-      .filter(Boolean);
-
-    return <>{arrows}</>;
-  };
+  const hasCorrections = correctionCards.length > 0;
 
   const hasSelectionTokens = hasSelection;
 
@@ -3408,28 +1919,6 @@ const lineBreakCountMap = useMemo(() => {
     errorTypes.forEach((et) => map.set(et.id, et));
     return map;
   }, [errorTypes]);
-
-  const resolveTypeLabel = useCallback(
-    (typeId: number) => {
-      const et = errorTypeById.get(typeId);
-      if (!et) return null;
-      return getErrorTypeLabel(et, locale);
-    },
-    [errorTypeById, locale]
-  );
-
-  const m2Preview = useMemo(
-    () =>
-      buildM2Preview({
-        originalTokens,
-        tokens,
-        correctionCards,
-        correctionTypeMap,
-        correctionByIndex,
-        resolveTypeLabel,
-      }),
-    [originalTokens, tokens, correctionCards, correctionTypeMap, correctionByIndex, resolveTypeLabel]
-  );
 
   const applyTypeToSelection = useCallback(
     (typeId: number | null) => {
@@ -3498,50 +1987,6 @@ const lineBreakCountMap = useMemo(() => {
     () => correctionCards.some((card) => !correctionTypeMap[card.id]),
     [correctionCards, correctionTypeMap]
   );
-
-  const debugData = useMemo(
-    () => ({
-      textId,
-      viewTab,
-      isTextPanelOpen,
-      tokenGap,
-      tokenFontSize,
-      lineBreaks,
-      activeErrorTypeId,
-      correctionTypeMap,
-      corrections: correctionCards.map((c) => ({
-        id: c.id,
-        range: [c.rangeStart, c.rangeEnd],
-        original: c.original,
-        updated: c.updated,
-        error_type_id: correctionTypeMap[c.id] ?? null,
-      })),
-      tokens: history.present.tokens.map((t) => ({
-        id: t.id,
-        text: t.text,
-        kind: t.kind,
-        groupId: t.groupId,
-        moveId: t.moveId,
-        selected: t.selected,
-        origin: t.origin,
-        previous: t.previousTokens?.map((p) => p.text),
-      })),
-    }),
-    [
-      textId,
-      viewTab,
-      isTextPanelOpen,
-      tokenGap,
-      tokenFontSize,
-      lineBreaks,
-      activeErrorTypeId,
-      correctionTypeMap,
-      correctionCards,
-      history.present.tokens,
-    ]
-  );
-
-  const debugText = useMemo(() => JSON.stringify(debugData), [debugData]);
 
   const updateCorrectionType = (cardId: string, typeId: number | null) => {
     setCorrectionTypeMap((prev) => ({ ...prev, [cardId]: typeId }));
@@ -3632,6 +2077,20 @@ const lineBreakCountMap = useMemo(() => {
                   disabled={isSubmitting || isSkipping || isTrashing}
                 >
                   {t("annotation.trashText")}
+                </button>
+                <button
+                  style={{
+                    ...secondaryActionStyle,
+                    opacity: !hasCorrections || isSubmitting ? 0.6 : 1,
+                    cursor: !hasCorrections || isSubmitting ? "not-allowed" : "pointer",
+                  }}
+                  onClick={() => {
+                    if (!hasCorrections) return;
+                    setShowClearConfirm(true);
+                  }}
+                  disabled={!hasCorrections || isSubmitting || isSkipping || isTrashing}
+                >
+                  {t("tokenEditor.clearAll")}
                 </button>
                 <div style={actionDividerStyle} />
                 <button
@@ -3798,43 +2257,6 @@ const lineBreakCountMap = useMemo(() => {
               >
                 {t("tokenEditor.corrected") ?? "Corrected"}
               </button>
-              <button
-                style={{
-                  ...miniNeutralButton,
-                  background: isTextPanelOpen && viewTab === "m2" ? "rgba(59,130,246,0.3)" : miniNeutralButton.background,
-                  borderColor: isTextPanelOpen && viewTab === "m2" ? "rgba(59,130,246,0.6)" : "rgba(148,163,184,0.6)",
-                }}
-                onClick={() => {
-                  if (viewTab === "m2") {
-                    setIsTextPanelOpen((v) => !v);
-                  } else {
-                    setViewTab("m2");
-                    setIsTextPanelOpen(true);
-                  }
-                }}
-                aria-pressed={isTextPanelOpen && viewTab === "m2"}
-              >
-                {t("tokenEditor.m2") ?? "M2"}
-              </button>
-              <button
-                style={{
-                  ...miniNeutralButton,
-                  background:
-                    isTextPanelOpen && viewTab === "debug" ? "rgba(59,130,246,0.3)" : miniNeutralButton.background,
-                  borderColor: isTextPanelOpen && viewTab === "debug" ? "rgba(59,130,246,0.6)" : "rgba(148,163,184,0.6)",
-                }}
-                onClick={() => {
-                  if (viewTab === "debug") {
-                    setIsTextPanelOpen((v) => !v);
-                  } else {
-                    setViewTab("debug");
-                    setIsTextPanelOpen(true);
-                  }
-                }}
-                aria-pressed={isTextPanelOpen && viewTab === "debug"}
-              >
-                {t("tokenEditor.debugPanel") ?? "Debug"}
-              </button>
             </div>
             <button
               style={miniNeutralButton}
@@ -3847,48 +2269,18 @@ const lineBreakCountMap = useMemo(() => {
           </div>
           {isTextPanelOpen && (
             <div style={{ padding: "10px 12px" }} data-testid="text-view-panel">
-              {viewTab === "m2" ? (
-                <pre
-                  style={{
-                    margin: 0,
-                    color: "#e2e8f0",
-                    fontSize: 13,
-                    wordBreak: "break-word",
-                    whiteSpace: "pre-wrap",
-                    fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-                  }}
-                >
-                  {m2Preview}
-                </pre>
-              ) : viewTab === "debug" ? (
-                <pre
-                  style={{
-                    margin: 0,
-                    color: "#e2e8f0",
-                    fontSize: 12,
-                    wordBreak: "break-word",
-                    whiteSpace: "pre-wrap",
-                    fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-                    maxHeight: 360,
-                    overflow: "auto",
-                  }}
-                >
-                  {debugText}
-                </pre>
-              ) : (
-                <span
-                  style={{
-                    color: "#e2e8f0",
-                    fontSize: 14,
-                    wordBreak: "break-word",
-                    whiteSpace: "pre-wrap",
-                  }}
-                >
-                  {viewTab === "original"
-                    ? buildTextFromTokensWithBreaks(originalTokens, lineBreaks)
-                    : buildTextFromTokensWithBreaks(tokens, lineBreaks)}
-                </span>
-              )}
+              <span
+                style={{
+                  color: "#e2e8f0",
+                  fontSize: 14,
+                  wordBreak: "break-word",
+                  whiteSpace: "pre-wrap",
+                }}
+              >
+                {viewTab === "original"
+                  ? buildTextFromTokensWithBreaks(originalTokens, lineBreaks)
+                  : buildTextFromTokensWithBreaks(tokens, lineBreaks)}
+              </span>
             </div>
           )}
         </div>
@@ -3907,7 +2299,6 @@ const lineBreakCountMap = useMemo(() => {
           }}
           ref={tokenRowRef}
         >
-          {renderMoveOverlay()}
           {renderTokenGroups(tokens)}
           {/* Trailing drop zone */}
           <div
@@ -4021,141 +2412,6 @@ const lineBreakCountMap = useMemo(() => {
           </div>
         </div>
 
-        {/* Corrections sidebar */}
-        <div
-          style={{
-            ...sidebarStyle,
-            width: isSidebarOpen ? 340 : 64,
-            padding: isSidebarOpen ? 12 : 8,
-            gap: 12,
-            display: "flex",
-            flexDirection: "column",
-            alignSelf: "stretch",
-            transition: "width 150ms ease, padding 150ms ease",
-          }}
-        >
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: isSidebarOpen ? "space-between" : "center",
-              gap: 8,
-            }}
-          >
-            {isSidebarOpen && (
-              <div>
-                <div style={{ color: "#e2e8f0", fontWeight: 700 }}>{t("tokenEditor.corrections")}</div>
-                <div style={{ color: "#94a3b8", fontSize: 12 }}>
-                  {correctionCards.length} {t("tokenEditor.items")}
-                </div>
-              </div>
-            )}
-            <button
-              style={sidebarToggleButtonStyle}
-              onClick={() => {
-                setIsSidebarOpen((open) => !open);
-                setHoveredCorrectionRange(null);
-                setHoveredMoveId(null);
-                setIsHoveringMove(false);
-              }}
-              title={isSidebarOpen ? t("tokenEditor.collapse") ?? "Collapse" : t("tokenEditor.expand") ?? "Expand"}
-            >
-              {isSidebarOpen ? "→" : "←"}
-            </button>
-          </div>
-          {isSidebarOpen ? (
-            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-              <div style={{ display: "flex", justifyContent: "flex-end" }}>
-                <button
-                  style={{
-                    ...miniOutlineButton,
-                    opacity: correctionCards.length === 0 ? 0.5 : 1,
-                    cursor: correctionCards.length === 0 ? "not-allowed" : "pointer",
-                  }}
-                  disabled={correctionCards.length === 0}
-                  onClick={() => setShowClearConfirm(true)}
-                >
-                  {t("tokenEditor.clearAll")}
-                </button>
-              </div>
-              {correctionCards.length === 0 && (
-                <div style={{ color: "#94a3b8", fontSize: 12 }}>{t("tokenEditor.noCorrections")}</div>
-              )}
-              {correctionCards.map((card) => (
-                <div
-                  key={card.id}
-                  style={correctionCardStyle}
-                  onMouseEnter={() => {
-                    setHoveredCorrectionRange([card.rangeStart, card.rangeEnd]);
-                    if (card.markerId) {
-                      setHoveredMoveId(card.markerId);
-                      setIsHoveringMove(true);
-                    }
-                  }}
-                  onMouseLeave={() => {
-                    setHoveredCorrectionRange(null);
-                    setHoveredMoveId(null);
-                    setIsHoveringMove(false);
-                  }}
-                >
-                  <div style={{ display: "flex", justifyContent: "space-between", color: "#e2e8f0", fontWeight: 600 }}>
-                    <span>{card.title}</span>
-                    <span>{card.range}</span>
-                  </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6 }}>
-                    <span style={{ color: "#94a3b8", fontSize: 12 }}>Type</span>
-                    <select
-                      style={{
-                        padding: "6px 8px",
-                        borderRadius: 10,
-                        border: "1px solid rgba(148,163,184,0.4)",
-                        background: "rgba(15,23,42,0.8)",
-                        color: "#e2e8f0",
-                        fontSize: 12,
-                      }}
-                      value={correctionTypeMap[card.id] ?? ""}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        updateCorrectionType(card.id, val ? Number(val) : null);
-                      }}
-                    >
-                      <option value="">{t("tokenEditor.selectType") ?? "Select type"}</option>
-                      {errorTypes.map((et) => (
-                        <option key={et.id} value={et.id}>
-                          {getErrorTypeLabel(et, locale)}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div style={{ color: "#94a3b8", fontSize: 12, marginTop: 4 }}>
-                    {t("tokenEditor.originalLabel")} {card.original}
-                  </div>
-                  <div style={{ color: "#c7d2fe", fontSize: 12, marginTop: 2 }}>
-                    {t("tokenEditor.newLabel")} {card.updated || t("tokenEditor.empty")}
-                  </div>
-                  <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                    <button
-                      style={miniOutlineButton}
-                      onClick={() => {
-                        handleRevert(card.rangeStart, card.rangeEnd, card.markerId);
-                        setSelection({ start: null, end: null });
-                        setHoveredCorrectionRange(null);
-                        setHoveredMoveId(null);
-                        setIsHoveringMove(false);
-                      }}
-                    >
-                      {t("tokenEditor.removeAction")}
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div style={{ color: "#cbd5e1", fontSize: 12, textAlign: "center" }}>
-              {t("tokenEditor.corrections")} ({correctionCards.length})
-            </div>
-          )}
-        </div>
       </div>
 
       {showClearConfirm && (
@@ -4368,14 +2624,6 @@ const categoryColors = [
   "rgba(153,27,27,0.35)",
 ];
 
-const sidebarStyle: React.CSSProperties = {
-  background: "rgba(15,23,42,0.9)",
-  border: "1px solid rgba(51,65,85,0.6)",
-  borderRadius: 14,
-  padding: 12,
-  minHeight: 200,
-};
-
 const miniOutlineButton: React.CSSProperties = {
   padding: "6px 10px",
   borderRadius: 10,
@@ -4419,21 +2667,6 @@ const dangerActionStyle: React.CSSProperties = {
   border: "1px solid rgba(248,113,113,0.6)",
   background: "rgba(248,113,113,0.15)",
   color: "#fecdd3",
-};
-
-const correctionCardStyle: React.CSSProperties = {
-  borderRadius: 12,
-  border: "1px solid rgba(51,65,85,0.6)",
-  padding: 10,
-  background: "rgba(15,23,42,0.7)",
-  cursor: "pointer",
-};
-
-const sidebarToggleButtonStyle: React.CSSProperties = {
-  ...miniOutlineButton,
-  minWidth: 32,
-  borderColor: "rgba(148,163,184,0.5)",
-  color: "#e2e8f0",
 };
 
 const modalOverlayStyle: React.CSSProperties = {

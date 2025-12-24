@@ -866,36 +866,6 @@ describe("revert clears selection", () => {
     });
   });
 
-  it("deselects tokens after reverting from the corrections list", async () => {
-    mockGet.mockReset();
-    mockPost.mockReset();
-    localStorage.clear();
-    seedEditedStateWithType();
-    await renderEditor("hello world", {
-      getImpl: (url) => {
-        if (url.includes("/api/error-types")) {
-          return Promise.resolve({
-            data: [{ id: 1, en_name: "Type A", tt_name: "Type A", default_color: "#94a3b8", is_active: true }],
-          });
-        }
-        return Promise.resolve({ data: {} });
-      },
-    });
-    const user = userEvent.setup();
-
-    const corrected = await screen.findByRole("button", { name: "hi" });
-    await user.click(corrected);
-    expect(corrected).toHaveAttribute("aria-pressed", "true");
-
-    const revertButtons = await screen.findAllByText("tokenEditor.removeAction");
-    await user.click(revertButtons[0]);
-
-    await waitFor(() => {
-      const tokens = screen.getAllByRole("button").filter((el) => ["hello", "world"].includes(el.textContent ?? ""));
-      expect(tokens.every((el) => el.getAttribute("aria-pressed") === "false")).toBe(true);
-    });
-  });
-
   it("deselects tokens after clearing all corrections", async () => {
     mockGet.mockReset();
     mockPost.mockReset();
@@ -926,6 +896,45 @@ describe("revert clears selection", () => {
       const tokens = screen.getAllByRole("button").filter((el) => ["hello", "world"].includes(el.textContent ?? ""));
       expect(tokens.every((el) => el.getAttribute("aria-pressed") === "false")).toBe(true);
     });
+  });
+
+  it("disables clear all when there are no corrections", async () => {
+    mockGet.mockReset();
+    mockPost.mockReset();
+    localStorage.clear();
+    await renderEditor("hello world");
+    const clearAll = await screen.findByText("tokenEditor.clearAll");
+    expect(clearAll).toBeDisabled();
+  });
+
+  it("restores the cleared corrections on undo", async () => {
+    mockGet.mockReset();
+    mockPost.mockReset();
+    localStorage.clear();
+    seedEditedStateWithType();
+    await renderEditor("hello world", {
+      getImpl: (url) => {
+        if (url.includes("/api/error-types")) {
+          return Promise.resolve({
+            data: [{ id: 1, en_name: "Type A", tt_name: "Type A", default_color: "#94a3b8", is_active: true }],
+          });
+        }
+        return Promise.resolve({ data: {} });
+      },
+    });
+    const user = userEvent.setup();
+    const clearAll = await screen.findByText("tokenEditor.clearAll");
+    await user.click(clearAll);
+    const confirm = await screen.findByText("tokenEditor.clearConfirm");
+    await user.click(confirm);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "hello" })).toBeInTheDocument();
+    });
+
+    await user.keyboard("{Control>}z{/Control}");
+    const restored = await screen.findByRole("button", { name: "hi" });
+    expect(restored).toBeInTheDocument();
   });
 
   it("deselects tokens when reverting from the inline group undo", async () => {
@@ -1876,19 +1885,6 @@ describe("TokenEditor view toggles", () => {
 
     await user.click(screen.getByTestId("text-panel-toggle"));
     await waitFor(() => expect(screen.getByTestId("text-view-panel")).toBeInTheDocument());
-  });
-
-  it("shows debug data inside preview panel via debug tab", async () => {
-    await renderEditor("hello world");
-    const user = userEvent.setup();
-    const debugTab = screen.getByRole("button", { name: "tokenEditor.debugPanel" });
-    await user.click(debugTab);
-    const panel = await screen.findByTestId("text-view-panel");
-    expect(panel.textContent).toContain("\"textId\":1");
-
-    const correctedTab = screen.getByRole("button", { name: "tokenEditor.corrected" });
-    await user.click(correctedTab);
-    await waitFor(() => expect(screen.getByTestId("text-view-panel")).toHaveTextContent("hello world"));
   });
 });
 
