@@ -356,6 +356,26 @@ export const TokenEditor: React.FC<{
     };
   };
 
+  const getMoveGroupRect = useCallback(
+    (moveId: string, role: "source" | "dest") => {
+      const container = tokenRowRef.current;
+      if (!container) return null;
+      const el = container.querySelector<HTMLElement>(`[data-move-id="${moveId}"][data-move-role="${role}"]`);
+      if (!el) return null;
+      const rect = el.getBoundingClientRect();
+      const containerRect = container.getBoundingClientRect();
+      return {
+        left: rect.left - containerRect.left,
+        top: rect.top - containerRect.top,
+        right: rect.right - containerRect.left,
+        bottom: rect.bottom - containerRect.top,
+        width: rect.width,
+        height: rect.height,
+      };
+    },
+    []
+  );
+
   // Recompute move arrows directly in render using current DOM positions.
 
   // Derived helpers
@@ -1281,6 +1301,11 @@ export const TokenEditor: React.FC<{
             (group.start >= m.fromStart && group.start <= m.fromEnd) ||
             (group.start >= m.toStart && group.start <= m.toEnd)
         ) ?? null;
+      const isMarkerSource =
+        matchingMarker && group.start <= matchingMarker.fromEnd && group.end >= matchingMarker.fromStart;
+      const isMarkerDest =
+        matchingMarker && group.start <= matchingMarker.toEnd && group.end >= matchingMarker.toStart;
+      const moveRole = isMarkerSource ? "source" : isMarkerDest ? "dest" : undefined;
       const isHoveredGroup = isHoverMove;
 
       const groupPadY = 0;
@@ -1338,6 +1363,7 @@ export const TokenEditor: React.FC<{
             position: "relative",
           }}
           data-move-id={matchingMarker?.id || undefined}
+          data-move-role={moveRole}
           onMouseEnter={() => {
             if (matchingMarker) handleHoverMove(matchingMarker.id);
           }}
@@ -1513,13 +1539,40 @@ export const TokenEditor: React.FC<{
 
   const moveHoverOverlay = (() => {
     if (!hoveredMoveMarker) return null;
-    const sourceRect = getRangeRect(hoveredMoveMarker.fromStart, hoveredMoveMarker.fromEnd);
-    const destRect = getRangeRect(hoveredMoveMarker.toStart, hoveredMoveMarker.toEnd);
+    const sourceRect =
+      getMoveGroupRect(hoveredMoveMarker.id, "source") ??
+      getRangeRect(hoveredMoveMarker.fromStart, hoveredMoveMarker.fromEnd);
+    const destRect =
+      getMoveGroupRect(hoveredMoveMarker.id, "dest") ??
+      getRangeRect(hoveredMoveMarker.toStart, hoveredMoveMarker.toEnd);
     if (!sourceRect || !destRect) return null;
-    const x1 = sourceRect.left + sourceRect.width / 2;
-    const y1 = sourceRect.top + sourceRect.height / 2;
-    const x2 = destRect.left + destRect.width / 2;
-    const y2 = destRect.top + destRect.height / 2;
+    const sourceCenterX = sourceRect.left + sourceRect.width / 2;
+    const sourceCenterY = sourceRect.top + sourceRect.height / 2;
+    const destCenterX = destRect.left + destRect.width / 2;
+    const destCenterY = destRect.top + destRect.height / 2;
+    const dx = destCenterX - sourceCenterX;
+    const dy = destCenterY - sourceCenterY;
+    const edgePoint = (rect: { left: number; right: number; top: number; bottom: number }, dirX: number, dirY: number) => {
+      const centerX = (rect.left + rect.right) / 2;
+      const centerY = (rect.top + rect.bottom) / 2;
+      if (dirX === 0 && dirY === 0) return { x: centerX, y: centerY };
+      if (dirX === 0) {
+        return { x: centerX, y: centerY + Math.sign(dirY) * (rect.bottom - rect.top) / 2 };
+      }
+      if (dirY === 0) {
+        return { x: centerX + Math.sign(dirX) * (rect.right - rect.left) / 2, y: centerY };
+      }
+      const tx = dirX > 0 ? (rect.right - centerX) / dirX : (rect.left - centerX) / dirX;
+      const ty = dirY > 0 ? (rect.bottom - centerY) / dirY : (rect.top - centerY) / dirY;
+      const t = Math.min(tx, ty);
+      return { x: centerX + dirX * t, y: centerY + dirY * t };
+    };
+    const sourceEdge = edgePoint(sourceRect, dx, dy);
+    const destEdge = edgePoint(destRect, -dx, -dy);
+    const x1 = sourceEdge.x;
+    const y1 = sourceEdge.y;
+    const x2 = destEdge.x;
+    const y2 = destEdge.y;
     return (
       <svg
         aria-hidden="true"
