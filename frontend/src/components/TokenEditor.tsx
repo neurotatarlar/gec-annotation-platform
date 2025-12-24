@@ -1240,6 +1240,13 @@ export const buildAnnotationsPayloadStandalone = async ({
   const textTokensHash = await computeTokensSha256(textTokensSnapshot);
   const moveMarkerById = new Map<string, MoveMarker>();
   moveMarkers.forEach((m) => moveMarkerById.set(m.id, m));
+  const originalIndexById = new Map<string, number>();
+  const originalTokenById = new Map<string, Token>();
+  originalTokens.forEach((tok, idx) => {
+    if (tok.kind === "empty") return;
+    originalIndexById.set(tok.id, idx);
+    originalTokenById.set(tok.id, tok);
+  });
 
   const seenKeys = new Set<string>();
   const payloads: AnnotationDraft[] = [];
@@ -1248,6 +1255,7 @@ export const buildAnnotationsPayloadStandalone = async ({
     const ids: string[] = [];
     items.forEach((tok) => {
       if (tok.kind === "empty") return;
+      if (!originalIndexById.has(tok.id)) return;
       if (seen.has(tok.id)) return;
       seen.add(tok.id);
       ids.push(tok.id);
@@ -1257,20 +1265,55 @@ export const buildAnnotationsPayloadStandalone = async ({
 
   const textForIds = (ids: string[]) =>
     ids
-      .map((id) => originalTokens.find((t) => t.id === id)?.text ?? "")
+      .map((id) => originalTokenById.get(id)?.text ?? "")
       .filter(Boolean)
       .join(" ")
       .trim();
 
-  const fragmentFromToken = (tok: Token): TokenFragmentPayload => ({
-    id: tok.id,
-    text: tok.text,
-    origin: tok.origin === "inserted" ? "inserted" : "base",
-    source_id:
-      tok.origin === "inserted"
-        ? tok.previousTokens?.find((p) => p.kind !== "empty")?.id ?? null
-        : tok.id,
-  });
+  const getOriginalSpanForToken = (tok: Token): { min: number; max: number } | null => {
+    const indices: number[] = [];
+    const direct = originalIndexById.get(tok.id);
+    if (direct !== undefined) {
+      indices.push(direct);
+    }
+    if (tok.previousTokens?.length) {
+      const originals = unwindToOriginal(cloneTokens(tok.previousTokens));
+      originals.forEach((prev) => {
+        const idx = originalIndexById.get(prev.id);
+        if (idx !== undefined) indices.push(idx);
+      });
+    }
+    if (!indices.length) return null;
+    return { min: Math.min(...indices), max: Math.max(...indices) };
+  };
+
+  const findInsertionIndex = (rangeStart: number, rangeEnd: number) => {
+    for (let i = rangeStart - 1; i >= 0; i -= 1) {
+      const span = getOriginalSpanForToken(tokens[i]);
+      if (span) return span.max + 1;
+    }
+    for (let i = rangeEnd + 1; i < tokens.length; i += 1) {
+      const span = getOriginalSpanForToken(tokens[i]);
+      if (span) return span.min;
+    }
+    return 0;
+  };
+
+  const fragmentFromToken = (tok: Token): TokenFragmentPayload => {
+    const fragment: TokenFragmentPayload = {
+      id: tok.id,
+      text: tok.text,
+      origin: tok.origin === "inserted" ? "inserted" : "base",
+      source_id:
+        tok.origin === "inserted"
+          ? tok.previousTokens?.find((p) => p.kind !== "empty")?.id ?? null
+          : tok.id,
+    };
+    if (typeof tok.spaceBefore === "boolean") {
+      fragment.space_before = tok.spaceBefore;
+    }
+    return fragment;
+  };
 
   correctionCards.forEach((card) => {
     const typeId = correctionTypeMap[card.id];
@@ -1328,6 +1371,12 @@ export const buildAnnotationsPayloadStandalone = async ({
     }
 
     const replacement = afterFragments.length === 0 ? null : afterFragments.map((f) => f.text).join(" ").trim() || null;
+    const beforeIndices = beforeIds
+      .map((id) => originalIndexById.get(id))
+      .filter((idx): idx is number => idx !== undefined);
+    const insertionIndex = findInsertionIndex(card.rangeStart, card.rangeEnd);
+    const spanStart = beforeIndices.length ? Math.min(...beforeIndices) : insertionIndex;
+    const spanEnd = beforeIndices.length ? Math.max(...beforeIndices) : insertionIndex;
 
     const payload: AnnotationDetailPayload = {
       text_sha256: textHash,
@@ -1339,18 +1388,21 @@ export const buildAnnotationsPayloadStandalone = async ({
       source: "manual",
     };
     if (operation === "move") {
-      (payload as any).move_from = card.markerId ? moveMarkerById.get(card.markerId)?.fromStart ?? card.rangeStart : card.rangeStart;
-      (payload as any).move_to = card.markerId ? moveMarkerById.get(card.markerId)?.toStart ?? card.rangeStart : card.rangeStart;
+      const marker = card.markerId ? moveMarkerById.get(card.markerId) : null;
+      const moveFrom = beforeIndices.length ? Math.min(...beforeIndices) : spanStart;
+      const moveTo = marker ? findInsertionIndex(marker.toStart, marker.toEnd) : insertionIndex;
+      (payload as any).move_from = moveFrom;
+      (payload as any).move_to = moveTo;
     }
 
     const draft: AnnotationDraft = {
-      start_token: card.rangeStart,
-      end_token: card.rangeEnd,
+      start_token: spanStart,
+      end_token: spanEnd,
       replacement,
       error_type_id: typeId,
       payload,
     };
-    const spanKey = `${card.rangeStart}-${card.rangeEnd}`;
+    const spanKey = `${spanStart}-${spanEnd}`;
     const existingId = annotationIdMap?.get(spanKey);
     if (existingId !== undefined) {
       draft.id = existingId;
@@ -1359,7 +1411,7 @@ export const buildAnnotationsPayloadStandalone = async ({
   });
 
   if (includeDeletedIds && annotationIdMap) {
-    const spanKeys = new Set(correctionCards.map((c) => `${c.rangeStart}-${c.rangeEnd}`));
+    const spanKeys = new Set(payloads.map((p) => `${p.start_token}-${p.end_token}`));
     const deletedIds = Array.from(annotationIdMap.entries())
       .filter(([span]) => !spanKeys.has(span))
       .map(([, id]) => id);
@@ -1637,15 +1689,21 @@ const lineBreakCountMap = useMemo(() => {
     [baseTokenMap]
   );
   const toFragment = useCallback(
-    (tok: Token): TokenFragmentPayload => ({
-      id: tok.id,
-      text: tok.text,
-      origin: tok.origin === "inserted" ? "inserted" : "base",
-      source_id:
-        tok.origin === "inserted"
-          ? tok.previousTokens?.find((p) => p.kind !== "empty")?.id ?? null
-          : tok.id,
-    }),
+    (tok: Token): TokenFragmentPayload => {
+      const fragment: TokenFragmentPayload = {
+        id: tok.id,
+        text: tok.text,
+        origin: tok.origin === "inserted" ? "inserted" : "base",
+        source_id:
+          tok.origin === "inserted"
+            ? tok.previousTokens?.find((p) => p.kind !== "empty")?.id ?? null
+            : tok.id,
+      };
+      if (typeof tok.spaceBefore === "boolean") {
+        fragment.space_before = tok.spaceBefore;
+      }
+      return fragment;
+    },
     []
   );
 
@@ -1769,12 +1827,50 @@ const lineBreakCountMap = useMemo(() => {
       const previous =
         operation === "insert" && previousRaw.length === 0 ? [makeEmptyPlaceholder([])] : previousRaw;
       const afterRaw = Array.isArray(payload.after_tokens) ? payload.after_tokens : [];
-      const afterTexts =
-        afterRaw.length > 0
-          ? afterRaw.map((t: any) => (typeof t?.text === "string" ? t.text : "")).filter(Boolean)
-          : ann?.replacement
-              ? tokenizeToTokens(String(ann.replacement)).map((t) => t.text)
-              : [];
+      const replacementText = ann?.replacement ? String(ann.replacement) : "";
+      const buildTokensFromFragments = (
+        fragments: any[],
+        fallbackText: string,
+        defaultFirstSpace?: boolean
+      ): Token[] => {
+        const built: Token[] = [];
+        const hasFragments = fragments.length > 0;
+        const baseFragments = hasFragments ? fragments : fallbackText ? [{ text: fallbackText }] : [];
+        baseFragments.forEach((frag: any, fragIndex: number) => {
+          const text = typeof frag?.text === "string" ? frag.text : "";
+          if (!text) return;
+          const origin = frag?.origin === "inserted" ? "inserted" : undefined;
+          const explicitSpace =
+            typeof frag?.space_before === "boolean"
+              ? frag.space_before
+              : typeof frag?.spaceBefore === "boolean"
+                ? frag.spaceBefore
+                : undefined;
+          const baseTokens = tokenizeEditedText(text);
+          baseTokens.forEach((tok, idx) => {
+            let spaceBefore = tok.spaceBefore;
+            if (idx === 0) {
+              if (explicitSpace !== undefined) {
+                spaceBefore = explicitSpace;
+              } else if (fragIndex > 0) {
+                spaceBefore = true;
+              } else if (defaultFirstSpace !== undefined) {
+                spaceBefore = defaultFirstSpace;
+              }
+            }
+            if (idx === 0 && fragIndex > 0 && spaceBefore === false && tok.kind !== "punct") {
+              spaceBefore = true;
+            }
+            built.push({
+              ...tok,
+              id: createId(),
+              origin,
+              spaceBefore,
+            });
+          });
+        });
+        return built;
+      };
         const groupId = createId();
         const cardType = ann?.error_type_id ?? null;
 
@@ -1785,28 +1881,22 @@ const lineBreakCountMap = useMemo(() => {
           const sourceIdx = Math.max(0, Math.min(working.length, moveFrom + offset));
           const sourceLeadingSpace = sourceIdx === 0 ? false : working[sourceIdx]?.spaceBefore !== false;
           const srcSlice = working.slice(sourceIdx, sourceIdx + removeCount);
-          const sourceHistory =
-            srcSlice.length > 0
-              ? cloneTokens(srcSlice)
-              : afterTexts.flatMap((text) => tokenizeToTokens(text));
+          const fallbackTokens = buildTokensFromFragments(afterRaw, replacementText);
+          const sourceHistory = srcSlice.length > 0 ? cloneTokens(srcSlice) : cloneTokens(fallbackTokens);
           const placeholder = { ...makeEmptyPlaceholder(sourceHistory), groupId, moveId, spaceBefore: sourceLeadingSpace };
           working.splice(sourceIdx, removeCount, placeholder);
           offset += 1 - removeCount;
 
-          const moveTokens: Token[] = [];
-          afterTexts.forEach((text) => {
-            tokenizeToTokens(text).forEach((tok) => {
-              const next = {
-                ...tok,
-                id: createId(),
-                groupId,
-                moveId,
-                selected: false,
-                previousTokens: cloneTokens(sourceHistory),
-              };
-              moveTokens.push(next);
-              typeMap[next.id] = cardType;
-            });
+          const moveTokens = buildTokensFromFragments(afterRaw, replacementText).map((tok) => ({
+            ...tok,
+            id: createId(),
+            groupId,
+            moveId,
+            selected: false,
+            previousTokens: cloneTokens(sourceHistory),
+          }));
+          moveTokens.forEach((tok) => {
+            typeMap[tok.id] = cardType;
           });
           const destIdx = Math.max(0, Math.min(working.length, moveTo + offset));
           if (moveTokens.length) {
@@ -1818,18 +1908,17 @@ const lineBreakCountMap = useMemo(() => {
         }
 
         const newTokens: Token[] = [];
-        if (!afterTexts.length && (operation === "delete" || operation === "insert")) {
+        const builtTokens = buildTokensFromFragments(afterRaw, replacementText, leadingSpace);
+        if (!builtTokens.length && (operation === "delete" || operation === "insert")) {
           newTokens.push({ ...makeEmptyPlaceholder(previous), groupId, spaceBefore: leadingSpace });
         } else {
-          afterTexts.forEach((text) => {
-            tokenizeToTokens(text).forEach((tok) => {
-              newTokens.push({
-                ...tok,
-                id: createId(),
-                groupId,
-                selected: false,
-                previousTokens: cloneTokens(previous),
-              });
+          builtTokens.forEach((tok) => {
+            newTokens.push({
+              ...tok,
+              id: createId(),
+              groupId,
+              selected: false,
+              previousTokens: cloneTokens(previous),
             });
           });
         }
@@ -1841,11 +1930,15 @@ const lineBreakCountMap = useMemo(() => {
         newTokens.forEach((tok) => {
           typeMap[tok.id] = cardType;
         });
-        if (currentUserId && ann?.author_id === currentUserId && newTokens.length) {
-          const spanKey = `${targetStart}-${targetStart + newTokens.length - 1}`;
-          if (ann?.id != null) {
-            spanMap.set(spanKey, ann.id);
-          }
+        if (
+          currentUserId &&
+          ann?.author_id === currentUserId &&
+          ann?.id != null &&
+          typeof ann.start_token === "number" &&
+          typeof ann.end_token === "number"
+        ) {
+          const spanKey = `${ann.start_token}-${ann.end_token}`;
+          spanMap.set(spanKey, ann.id);
         }
         offset += newTokens.length - removal;
       });
@@ -3084,7 +3177,7 @@ const lineBreakCountMap = useMemo(() => {
 
   const saveAnnotations = useCallback(async () => {
     const annotations = await buildAnnotationsPayload();
-    const spans = new Set(correctionCards.map((c) => `${c.rangeStart}-${c.rangeEnd}`));
+    const spans = new Set(annotations.map((ann) => `${ann.start_token}-${ann.end_token}`));
     const deletedIds =
       annotationIdMap.current
         ? Array.from(annotationIdMap.current.entries())

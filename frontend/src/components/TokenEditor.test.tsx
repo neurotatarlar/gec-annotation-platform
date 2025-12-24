@@ -1636,6 +1636,23 @@ describe("TokenEditor view toggles", () => {
 
   it("hydrates split edits without pulling the next token into history", async () => {
     localStorage.clear();
+    const base = initState("foobar zulu");
+    const edited = tokenEditorReducer(base, {
+      type: "EDIT_SELECTED_RANGE_AS_TEXT",
+      range: [0, 0],
+      newText: "foo bar",
+    });
+    const [annotation] = await buildAnnotationsPayloadStandalone({
+      initialText: "foobar zulu",
+      tokens: edited.present.tokens,
+      originalTokens: edited.present.originalTokens,
+      correctionCards: [{ id: "c1", rangeStart: 0, rangeEnd: 1, markerId: null }],
+      correctionTypeMap: { c1: 1 },
+      moveMarkers: [],
+    });
+    expect(annotation.start_token).toBe(0);
+    expect(annotation.end_token).toBe(0);
+
     await renderEditor("foobar zulu", {
       getImpl: (url: string) => {
         if (url.includes("/api/error-types")) return Promise.resolve({ data: [] });
@@ -1645,19 +1662,11 @@ describe("TokenEditor view toggles", () => {
               {
                 id: 24,
                 author_id: "other",
-                start_token: 0,
-                end_token: 1,
-                replacement: "foo bar",
-                error_type_id: 1,
-                payload: {
-                  operation: "replace",
-                  before_tokens: ["foobar"],
-                  after_tokens: [
-                    { id: "r1", text: "foo", origin: "base" },
-                    { id: "r2", text: "bar", origin: "base" },
-                  ],
-                  text_tokens: ["foobar", "zulu"],
-                },
+                start_token: annotation.start_token,
+                end_token: annotation.end_token,
+                replacement: annotation.replacement,
+                error_type_id: annotation.error_type_id,
+                payload: annotation.payload,
               },
             ],
           });
@@ -1673,6 +1682,111 @@ describe("TokenEditor view toggles", () => {
       .filter((t) => t && t !== "↺") as string[];
     expect(buttons.join(" ")).toBe("foo bar zulu");
     expect(within(corrected).getByText("foobar")).toBeInTheDocument();
+    expect(within(corrected).getAllByRole("button", { name: "zulu" })).toHaveLength(1);
+  });
+
+  it("hydrates multi-token split edits without pulling the next token into history", async () => {
+    localStorage.clear();
+    const base = initState("alpha beta gamma");
+    const edited = tokenEditorReducer(base, {
+      type: "EDIT_SELECTED_RANGE_AS_TEXT",
+      range: [0, 1],
+      newText: "one two three",
+    });
+    const [annotation] = await buildAnnotationsPayloadStandalone({
+      initialText: "alpha beta gamma",
+      tokens: edited.present.tokens,
+      originalTokens: edited.present.originalTokens,
+      correctionCards: [{ id: "c1", rangeStart: 0, rangeEnd: 2, markerId: null }],
+      correctionTypeMap: { c1: 1 },
+      moveMarkers: [],
+    });
+    expect(annotation.start_token).toBe(0);
+    expect(annotation.end_token).toBe(1);
+
+    await renderEditor("alpha beta gamma", {
+      getImpl: (url: string) => {
+        if (url.includes("/api/error-types")) return Promise.resolve({ data: [] });
+        if (url.includes("/annotations")) {
+          return Promise.resolve({
+            data: [
+              {
+                id: 25,
+                author_id: "other",
+                start_token: annotation.start_token,
+                end_token: annotation.end_token,
+                replacement: annotation.replacement,
+                error_type_id: annotation.error_type_id,
+                payload: annotation.payload,
+              },
+            ],
+          });
+        }
+        return Promise.resolve({ data: {} });
+      },
+    });
+
+    const corrected = await screen.findByTestId("corrected-panel");
+    const buttons = within(corrected)
+      .getAllByRole("button")
+      .map((c) => c.textContent?.trim())
+      .filter((t) => t && t !== "↺") as string[];
+    expect(buttons.join(" ")).toBe("one two three gamma");
+    expect(within(corrected).getByText("alpha")).toBeInTheDocument();
+    expect(within(corrected).getByText("beta")).toBeInTheDocument();
+    expect(within(corrected).getAllByRole("button", { name: "gamma" })).toHaveLength(1);
+  });
+
+  it("hydrates multi-token merge edits without pulling the next token into history", async () => {
+    localStorage.clear();
+    const base = initState("foo bar baz");
+    const edited = tokenEditorReducer(base, {
+      type: "EDIT_SELECTED_RANGE_AS_TEXT",
+      range: [0, 1],
+      newText: "foobar",
+    });
+    const [annotation] = await buildAnnotationsPayloadStandalone({
+      initialText: "foo bar baz",
+      tokens: edited.present.tokens,
+      originalTokens: edited.present.originalTokens,
+      correctionCards: [{ id: "c1", rangeStart: 0, rangeEnd: 0, markerId: null }],
+      correctionTypeMap: { c1: 1 },
+      moveMarkers: [],
+    });
+    expect(annotation.start_token).toBe(0);
+    expect(annotation.end_token).toBe(1);
+
+    await renderEditor("foo bar baz", {
+      getImpl: (url: string) => {
+        if (url.includes("/api/error-types")) return Promise.resolve({ data: [] });
+        if (url.includes("/annotations")) {
+          return Promise.resolve({
+            data: [
+              {
+                id: 26,
+                author_id: "other",
+                start_token: annotation.start_token,
+                end_token: annotation.end_token,
+                replacement: annotation.replacement,
+                error_type_id: annotation.error_type_id,
+                payload: annotation.payload,
+              },
+            ],
+          });
+        }
+        return Promise.resolve({ data: {} });
+      },
+    });
+
+    const corrected = await screen.findByTestId("corrected-panel");
+    const buttons = within(corrected)
+      .getAllByRole("button")
+      .map((c) => c.textContent?.trim())
+      .filter((t) => t && t !== "↺") as string[];
+    expect(buttons.join(" ")).toBe("foobar baz");
+    expect(within(corrected).getByText("foo")).toBeInTheDocument();
+    expect(within(corrected).getByText("bar")).toBeInTheDocument();
+    expect(within(corrected).getAllByRole("button", { name: "baz" })).toHaveLength(1);
   });
 
   it("hydrates move-like preannotations (insert + delete) from another annotator", async () => {
