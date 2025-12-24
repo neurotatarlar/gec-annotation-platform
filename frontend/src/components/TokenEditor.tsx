@@ -4,6 +4,9 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { useAuthedApi } from "../api/client";
 import { useI18n } from "../context/I18nContext";
 import { ErrorType, SaveStatus, TokenFragmentPayload } from "../types";
+import { useCorrectionSelection } from "../hooks/useCorrectionSelection";
+import { useCorrectionTypes } from "../hooks/useCorrectionTypes";
+import { useEditorUIState } from "../hooks/useEditorUIState";
 import { useSaveController } from "../hooks/useSaveController";
 import { useTokenDrag } from "../hooks/useTokenDrag";
 import {
@@ -25,7 +28,6 @@ import {
   deriveCorrectionCards,
   deriveOperationsFromTokens,
   deriveMoveMarkers,
-  findGroupRangeForTokens,
   indexMoveMarkersById,
   makeEmptyPlaceholder,
   normalizeHotkeySpec,
@@ -40,127 +42,6 @@ export * from "./TokenEditorModel";
 // ---------------------------
 // Component
 // ---------------------------
-type SelectionRange = { start: number | null; end: number | null };
-
-type EditorMode = "idle" | "selecting" | "editing" | "dragging";
-type EditorOverlay = "none" | "clear" | "flag";
-
-type EditorUIState = {
-  mode: EditorMode;
-  overlay: EditorOverlay;
-  selection: SelectionRange;
-  selectionMoveMarkerId: string | null;
-  editingRange: SelectionRange | null;
-  editText: string;
-  isDragging: boolean;
-  dropTargetIndex: number | null;
-  pendingAction: "skip" | "trash" | null;
-  flagReason: string;
-  flagError: string | null;
-};
-
-type EditorUIAction =
-  | { type: "RESET" }
-  | { type: "SET_SELECTION"; range: SelectionRange; moveMarkerId?: string | null }
-  | { type: "CLEAR_MOVE_MARKER" }
-  | { type: "START_EDIT"; range: SelectionRange; text: string }
-  | { type: "UPDATE_EDIT_TEXT"; value: string }
-  | { type: "END_EDIT" }
-  | { type: "START_DRAG" }
-  | { type: "END_DRAG" }
-  | { type: "SET_DROP_TARGET"; index: number | null }
-  | { type: "OPEN_CLEAR_CONFIRM" }
-  | { type: "CLOSE_CLEAR_CONFIRM" }
-  | { type: "OPEN_FLAG"; action: "skip" | "trash" }
-  | { type: "UPDATE_FLAG_REASON"; value: string }
-  | { type: "SET_FLAG_ERROR"; value: string | null }
-  | { type: "CLOSE_FLAG" };
-
-const EMPTY_SELECTION: SelectionRange = { start: null, end: null };
-
-const baseEditorUIState: EditorUIState = {
-  mode: "idle",
-  overlay: "none",
-  selection: EMPTY_SELECTION,
-  selectionMoveMarkerId: null,
-  editingRange: null,
-  editText: "",
-  isDragging: false,
-  dropTargetIndex: null,
-  pendingAction: null,
-  flagReason: "",
-  flagError: null,
-};
-
-const syncEditorMode = (state: EditorUIState): EditorUIState => {
-  let mode: EditorMode = "idle";
-  if (state.editingRange) {
-    mode = "editing";
-  } else if (state.isDragging) {
-    mode = "dragging";
-  } else if (state.selection.start !== null && state.selection.end !== null) {
-    mode = "selecting";
-  }
-  return state.mode === mode ? state : { ...state, mode };
-};
-
-const editorUIReducer = (state: EditorUIState, action: EditorUIAction): EditorUIState => {
-  switch (action.type) {
-    case "RESET":
-      return baseEditorUIState;
-    case "SET_SELECTION": {
-      const range = action.range;
-      const isEmpty = range.start === null || range.end === null;
-      const next: EditorUIState = {
-        ...state,
-        selection: range,
-        selectionMoveMarkerId: isEmpty ? null : action.moveMarkerId ?? null,
-      };
-      return syncEditorMode(next);
-    }
-    case "CLEAR_MOVE_MARKER":
-      return state.selectionMoveMarkerId ? { ...state, selectionMoveMarkerId: null } : state;
-    case "START_EDIT": {
-      const next: EditorUIState = {
-        ...state,
-        editingRange: action.range,
-        editText: action.text,
-      };
-      return syncEditorMode(next);
-    }
-    case "UPDATE_EDIT_TEXT":
-      return { ...state, editText: action.value };
-    case "END_EDIT": {
-      const next: EditorUIState = {
-        ...state,
-        editingRange: null,
-        editText: "",
-      };
-      return syncEditorMode(next);
-    }
-    case "START_DRAG":
-      return syncEditorMode({ ...state, isDragging: true });
-    case "END_DRAG":
-      return syncEditorMode({ ...state, isDragging: false, dropTargetIndex: null });
-    case "SET_DROP_TARGET":
-      return { ...state, dropTargetIndex: action.index };
-    case "OPEN_CLEAR_CONFIRM":
-      return { ...state, overlay: "clear" };
-    case "CLOSE_CLEAR_CONFIRM":
-      return { ...state, overlay: "none" };
-    case "OPEN_FLAG":
-      return { ...state, overlay: "flag", pendingAction: action.action, flagReason: "", flagError: null };
-    case "UPDATE_FLAG_REASON":
-      return { ...state, flagReason: action.value };
-    case "SET_FLAG_ERROR":
-      return { ...state, flagError: action.value };
-    case "CLOSE_FLAG":
-      return { ...state, overlay: "none", pendingAction: null, flagReason: "", flagError: null };
-    default:
-      return state;
-  }
-};
-
 
 const PREFS_KEY = "tokenEditorPrefs";
 const DEFAULT_TOKEN_GAP = 2;
@@ -227,35 +108,6 @@ const loadPrefs = (): {
   }
 };
 
-const typeKey = (textId: number) => `${PREFS_KEY}:types:${textId}`;
-
-const loadCorrectionTypes = (
-  textId: number
-): { activeErrorTypeId: number | null; assignments: Record<string, number | null> } => {
-  try {
-    const raw = localStorage.getItem(typeKey(textId));
-    if (!raw) return { activeErrorTypeId: null, assignments: {} };
-    const parsed = JSON.parse(raw);
-    return {
-      activeErrorTypeId: typeof parsed?.activeErrorTypeId === "number" ? parsed.activeErrorTypeId : null,
-      assignments: typeof parsed?.assignments === "object" && parsed.assignments ? parsed.assignments : {},
-    };
-  } catch {
-    return { activeErrorTypeId: null, assignments: {} };
-  }
-};
-
-const persistCorrectionTypes = (
-  textId: number,
-  payload: { activeErrorTypeId: number | null; assignments: Record<string, number | null> }
-) => {
-  try {
-    localStorage.setItem(typeKey(textId), JSON.stringify(payload));
-  } catch {
-    // ignore
-  }
-};
-
 // Local token history is no longer persisted in production; in tests we still allow
 // loading/saving from localStorage to keep legacy test fixtures working.
 const loadEditorState = (textId: number): EditorPresentState | null => {
@@ -307,7 +159,24 @@ export const TokenEditor: React.FC<{
   });
 
   // Selection and editing UI state (kept outside history) is driven by a state machine.
-  const [ui, dispatchUI] = useReducer(editorUIReducer, baseEditorUIState);
+  const {
+    ui,
+    setSelection,
+    clearMoveMarkerSelection,
+    startEdit,
+    updateEditText,
+    endEdit,
+    startDrag,
+    endDrag,
+    setDropTarget,
+    openClearConfirm,
+    closeClearConfirm,
+    openFlagConfirm,
+    closeFlagConfirm,
+    updateFlagReason,
+    updateFlagError,
+    resetUI,
+  } = useEditorUIState();
   const selection = ui.selection;
   const selectionMoveMarkerId = ui.selectionMoveMarkerId;
   const editingRange = ui.editingRange;
@@ -317,51 +186,6 @@ export const TokenEditor: React.FC<{
   const flagReason = ui.flagReason;
   const flagError = ui.flagError;
   const showClearConfirm = ui.overlay === "clear";
-  const setSelection = useCallback(
-    (range: SelectionRange, moveMarkerId: string | null = null) => {
-      dispatchUI({ type: "SET_SELECTION", range, moveMarkerId });
-    },
-    []
-  );
-  const clearMoveMarkerSelection = useCallback(() => {
-    dispatchUI({ type: "CLEAR_MOVE_MARKER" });
-  }, []);
-  const startEdit = useCallback((range: SelectionRange, text: string) => {
-    dispatchUI({ type: "START_EDIT", range, text });
-  }, []);
-  const updateEditText = useCallback((value: string) => {
-    dispatchUI({ type: "UPDATE_EDIT_TEXT", value });
-  }, []);
-  const endEdit = useCallback(() => {
-    dispatchUI({ type: "END_EDIT" });
-  }, []);
-  const startDrag = useCallback(() => {
-    dispatchUI({ type: "START_DRAG" });
-  }, []);
-  const endDrag = useCallback(() => {
-    dispatchUI({ type: "END_DRAG" });
-  }, []);
-  const setDropTarget = useCallback((index: number | null) => {
-    dispatchUI({ type: "SET_DROP_TARGET", index });
-  }, []);
-  const openClearConfirm = useCallback(() => {
-    dispatchUI({ type: "OPEN_CLEAR_CONFIRM" });
-  }, []);
-  const closeClearConfirm = useCallback(() => {
-    dispatchUI({ type: "CLOSE_CLEAR_CONFIRM" });
-  }, []);
-  const openFlagConfirm = useCallback((action: "skip" | "trash") => {
-    dispatchUI({ type: "OPEN_FLAG", action });
-  }, []);
-  const closeFlagConfirm = useCallback(() => {
-    dispatchUI({ type: "CLOSE_FLAG" });
-  }, []);
-  const updateFlagReason = useCallback((value: string) => {
-    dispatchUI({ type: "UPDATE_FLAG_REASON", value });
-  }, []);
-  const updateFlagError = useCallback((value: string | null) => {
-    dispatchUI({ type: "SET_FLAG_ERROR", value });
-  }, []);
   const prefs = useMemo(() => loadPrefs(), []);
   const [tokenGap, setTokenGap] = useState(Math.max(0, prefs.tokenGap ?? DEFAULT_TOKEN_GAP));
   const [tokenFontSize, setTokenFontSize] = useState(prefs.tokenFontSize ?? DEFAULT_TOKEN_FONT_SIZE);
@@ -385,6 +209,7 @@ export const TokenEditor: React.FC<{
     [tokenFontSize]
   );
   const tokenRowRef = useRef<HTMLDivElement | null>(null);
+  const [hoveredMoveId, setHoveredMoveId] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSkipping, setIsSkipping] = useState(false);
   const [isTrashing, setIsTrashing] = useState(false);
@@ -427,19 +252,13 @@ export const TokenEditor: React.FC<{
   const [errorTypes, setErrorTypes] = useState<ErrorType[]>([]);
   const [isLoadingErrorTypes, setIsLoadingErrorTypes] = useState(false);
   const [errorTypesError, setErrorTypesError] = useState<string | null>(null);
-  const [activeErrorTypeId, setActiveErrorTypeId] = useState<number | null>(null);
-  const [correctionTypeMap, setCorrectionTypeMap] = useState<Record<string, number | null>>({});
-  const [hasLoadedTypeState, setHasLoadedTypeState] = useState(false);
-  const pendingSelectIndexRef = useRef<number | null>(null);
-  const skipAutoSelectRef = useRef(false);
   const [serverAnnotationVersion, setServerAnnotationVersion] = useState(0);
   const annotationIdMap = useRef<Map<string, number>>(new Map());
   const pendingLocalStateRef = useRef<EditorPresentState | null>(null);
   const hydratedFromServerRef = useRef(false);
-  const prevCorrectionCountRef = useRef(0);
   const handleRevert = (rangeStart: number, rangeEnd: number, markerId: string | null = null) => {
-    skipAutoSelectRef.current = true;
-    pendingSelectIndexRef.current = rangeStart;
+    markSkipAutoSelect();
+    setPendingSelectIndex(rangeStart);
     dispatch({ type: "REVERT_CORRECTION", rangeStart, rangeEnd, markerId });
     setSelection({ start: null, end: null });
     endEdit();
@@ -560,13 +379,10 @@ export const TokenEditor: React.FC<{
 
   // Init from text on mount.
   useEffect(() => {
-    setHasLoadedTypeState(false);
-    setActiveErrorTypeId(null);
-    setCorrectionTypeMap({});
     setServerAnnotationVersion(0);
     hydratedFromServerRef.current = false;
-    dispatchUI({ type: "RESET" });
-  }, [textId]);
+    resetUI();
+  }, [resetUI, textId]);
 
   useEffect(() => {
     const saved = loadEditorState(textId);
@@ -577,10 +393,6 @@ export const TokenEditor: React.FC<{
       pendingLocalStateRef.current = null;
       dispatch({ type: "INIT_FROM_TEXT", text: initialText });
     }
-    const typeState = loadCorrectionTypes(textId);
-    setActiveErrorTypeId(typeState.activeErrorTypeId);
-    setCorrectionTypeMap(typeState.assignments);
-    setHasLoadedTypeState(true);
     lastSavedSignatureRef.current = null;
   }, [initialText, textId]);
 
@@ -744,51 +556,6 @@ export const TokenEditor: React.FC<{
   );
 
   useEffect(() => {
-    let cancelled = false;
-    const loadExistingAnnotations = async () => {
-      try {
-        const res = await get(`/api/texts/${textId}/annotations`, { params: { all_authors: true } });
-        if (cancelled) return;
-        const items = Array.isArray(res.data) ? res.data : [];
-        const maxVersion = items.reduce((acc: number, ann: any) => Math.max(acc, ann?.version ?? 0), 0);
-        setServerAnnotationVersion(maxVersion);
-        const hydrated = hydrateFromServerAnnotations(items);
-        if (hydrated && !hydratedFromServerRef.current) {
-          dispatch({ type: "INIT_FROM_STATE", state: hydrated.present });
-          setCorrectionTypeMap((prev) => (Object.keys(prev).length === 0 ? hydrated.typeMap : prev));
-          annotationIdMap.current = hydrated.spanMap;
-          hydratedFromServerRef.current = true;
-        } else if (!hydratedFromServerRef.current && pendingLocalStateRef.current) {
-          dispatch({ type: "INIT_FROM_STATE", state: pendingLocalStateRef.current });
-          hydratedFromServerRef.current = true;
-        } else {
-          annotationIdMap.current = new Map<string, number>();
-          items.forEach((ann: any) => {
-            if (
-              ann?.id != null &&
-              typeof ann.start_token === "number" &&
-              typeof ann.end_token === "number" &&
-              (!currentUserId || ann.author_id === currentUserId)
-            ) {
-              const key = `${ann.start_token}-${ann.end_token}`;
-              annotationIdMap.current.set(key, ann.id);
-            }
-          });
-        }
-        if (!items.length) {
-          annotationIdMap.current = new Map<string, number>();
-        }
-      } catch {
-        // ignore load errors; optimistic saves will still work
-      }
-    };
-    loadExistingAnnotations();
-    return () => {
-      cancelled = true;
-    };
-  }, [get, textId, hydrateFromServerAnnotations, currentUserId]);
-
-  useEffect(() => {
     try {
       localStorage.setItem("lastAnnotationPath", location.pathname);
     } catch {
@@ -823,6 +590,71 @@ export const TokenEditor: React.FC<{
 
   const correctionByIndex = useMemo(() => deriveCorrectionByIndex(correctionCards), [correctionCards]);
   const moveMarkerById = useMemo(() => indexMoveMarkersById(history.present.moveMarkers), [history.present.moveMarkers]);
+  const hoveredMoveMarker = hoveredMoveId ? moveMarkerById.get(hoveredMoveId) ?? null : null;
+  const handleHoverMove = useCallback((moveId: string | null) => {
+    setHoveredMoveId((prev) => (prev === moveId ? prev : moveId));
+  }, []);
+
+  const {
+    activeErrorTypeId,
+    setActiveErrorTypeId,
+    correctionTypeMap,
+    applyTypeToCorrections,
+    seedCorrectionTypes,
+  } = useCorrectionTypes({ textId, correctionCards });
+
+  const { markSkipAutoSelect, setPendingSelectIndex } = useCorrectionSelection({
+    correctionCards,
+    tokens,
+    moveMarkers: history.present.moveMarkers,
+    moveMarkerById,
+    setSelection,
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadExistingAnnotations = async () => {
+      try {
+        const res = await get(`/api/texts/${textId}/annotations`, { params: { all_authors: true } });
+        if (cancelled) return;
+        const items = Array.isArray(res.data) ? res.data : [];
+        const maxVersion = items.reduce((acc: number, ann: any) => Math.max(acc, ann?.version ?? 0), 0);
+        setServerAnnotationVersion(maxVersion);
+        const hydrated = hydrateFromServerAnnotations(items);
+        if (hydrated && !hydratedFromServerRef.current) {
+          dispatch({ type: "INIT_FROM_STATE", state: hydrated.present });
+          seedCorrectionTypes(hydrated.typeMap);
+          annotationIdMap.current = hydrated.spanMap;
+          hydratedFromServerRef.current = true;
+        } else if (!hydratedFromServerRef.current && pendingLocalStateRef.current) {
+          dispatch({ type: "INIT_FROM_STATE", state: pendingLocalStateRef.current });
+          hydratedFromServerRef.current = true;
+        } else {
+          annotationIdMap.current = new Map<string, number>();
+          items.forEach((ann: any) => {
+            if (
+              ann?.id != null &&
+              typeof ann.start_token === "number" &&
+              typeof ann.end_token === "number" &&
+              (!currentUserId || ann.author_id === currentUserId)
+            ) {
+              const key = `${ann.start_token}-${ann.end_token}`;
+              annotationIdMap.current.set(key, ann.id);
+            }
+          });
+        }
+        if (!items.length) {
+          annotationIdMap.current = new Map<string, number>();
+        }
+      } catch {
+        // ignore load errors; optimistic saves will still work
+      }
+    };
+    loadExistingAnnotations();
+    return () => {
+      cancelled = true;
+    };
+  }, [get, textId, hydrateFromServerAnnotations, currentUserId, seedCorrectionTypes]);
 
   useEffect(() => {
     if (!selectionMoveMarkerId) return;
@@ -969,7 +801,7 @@ export const TokenEditor: React.FC<{
   const commitEdit = () => {
     if (!editingRange) return;
     const { start, end } = editingRange;
-    pendingSelectIndexRef.current = start!;
+    setPendingSelectIndex(start!);
     dispatch({ type: "EDIT_SELECTED_RANGE_AS_TEXT", range: [start!, end!], newText: editText });
     endEdit();
     setSelection({ start, end });
@@ -1010,7 +842,7 @@ export const TokenEditor: React.FC<{
     if (editingRange) {
       cancelEdit();
     }
-    skipAutoSelectRef.current = true;
+    markSkipAutoSelect();
     setSelection({ start: null, end: null });
     dispatch({ type: "UNDO" });
   };
@@ -1019,7 +851,7 @@ export const TokenEditor: React.FC<{
     if (editingRange) {
       cancelEdit();
     }
-    skipAutoSelectRef.current = true;
+    markSkipAutoSelect();
     setSelection({ start: null, end: null });
     dispatch({ type: "REDO" });
   };
@@ -1425,22 +1257,31 @@ export const TokenEditor: React.FC<{
       group.tokens.forEach((tok) => {
         if (tok.kind !== "empty") visibleCount += 1;
       });
-    const isMoveSource =
-      activeMarker &&
-      group.start <= activeMarker.fromEnd &&
-      group.end >= activeMarker.fromStart;
+      const isMoveSource =
+        activeMarker &&
+        group.start <= activeMarker.fromEnd &&
+        group.end >= activeMarker.fromStart;
       const isMoveDest =
         activeMarker &&
         group.start <= activeMarker.toEnd &&
         group.end >= activeMarker.toStart;
-      const showBorder = hasHistory || Boolean(isMoveDest);
+      const isHoverSource =
+        hoveredMoveMarker &&
+        group.start <= hoveredMoveMarker.fromEnd &&
+        group.end >= hoveredMoveMarker.fromStart;
+      const isHoverDest =
+        hoveredMoveMarker &&
+        group.start <= hoveredMoveMarker.toEnd &&
+        group.end >= hoveredMoveMarker.toStart;
+      const isHoverMove = Boolean(isHoverSource || isHoverDest);
+      const showBorder = hasHistory || Boolean(isMoveDest) || isHoverMove;
       const matchingMarker =
         history.present.moveMarkers.find(
           (m) =>
             (group.start >= m.fromStart && group.start <= m.fromEnd) ||
             (group.start >= m.toStart && group.start <= m.toEnd)
         ) ?? null;
-      const isHoveredGroup = false;
+      const isHoveredGroup = isHoverMove;
 
       const groupPadY = 0;
       const groupPadX = isPurePunctGroup ? 0 : 1;
@@ -1481,18 +1322,27 @@ export const TokenEditor: React.FC<{
             gap: verticalGap,
             padding: `${paddingTop}px ${groupPadX}px ${groupPadY}px ${groupPadX}px`,
             borderRadius: 14,
-            border: showBorder ? "1px solid rgba(148,163,184,0.35)" : "1px solid transparent",
-            background: isHoveredGroup
-              ? "rgba(94,234,212,0.05)"
-              : "transparent",
+            border: isHoveredGroup
+              ? "1px solid rgba(94,234,212,0.65)"
+              : showBorder
+                ? "1px solid rgba(148,163,184,0.35)"
+                : "1px solid transparent",
+            background: isHoveredGroup ? "rgba(94,234,212,0.06)" : "transparent",
             boxShadow: isHoveredGroup
-              ? "0 0 0 1px rgba(94,234,212,0.4)"
+              ? "0 0 0 1px rgba(94,234,212,0.35)"
               : showBorder
                 ? "0 0 0 1px rgba(148,163,184,0.25)"
                 : "none",
             flex: "0 0 auto",
             minWidth,
             position: "relative",
+          }}
+          data-move-id={matchingMarker?.id || undefined}
+          onMouseEnter={() => {
+            if (matchingMarker) handleHoverMove(matchingMarker.id);
+          }}
+          onMouseLeave={() => {
+            if (matchingMarker) handleHoverMove(null);
           }}
         >
           {/* Source marker intentionally removed */}
@@ -1661,6 +1511,39 @@ export const TokenEditor: React.FC<{
     return result;
   };
 
+  const moveHoverOverlay = (() => {
+    if (!hoveredMoveMarker) return null;
+    const sourceRect = getRangeRect(hoveredMoveMarker.fromStart, hoveredMoveMarker.fromEnd);
+    const destRect = getRangeRect(hoveredMoveMarker.toStart, hoveredMoveMarker.toEnd);
+    if (!sourceRect || !destRect) return null;
+    const x1 = sourceRect.left + sourceRect.width / 2;
+    const y1 = sourceRect.top + sourceRect.height / 2;
+    const x2 = destRect.left + destRect.width / 2;
+    const y2 = destRect.top + destRect.height / 2;
+    return (
+      <svg
+        aria-hidden="true"
+        style={{
+          position: "absolute",
+          inset: 0,
+          pointerEvents: "none",
+          zIndex: 0,
+        }}
+      >
+        <line
+          x1={x1}
+          y1={y1}
+          x2={x2}
+          y2={y2}
+          stroke="rgba(94,234,212,0.7)"
+          strokeWidth={1.25}
+          strokeDasharray="2 4"
+          strokeLinecap="round"
+        />
+      </svg>
+    );
+  })();
+
   const toolbarButton = (label: string, onClick: () => void, disabled?: boolean, hotkey?: string, icon?: string) => (
     <button
       style={{
@@ -1680,98 +1563,6 @@ export const TokenEditor: React.FC<{
       {label}
     </button>
   );
-
-  useEffect(() => {
-    if (!hasLoadedTypeState) return;
-    const ids = new Set(correctionCards.map((c) => c.id));
-    setCorrectionTypeMap((prev) => {
-      const next: Record<string, number | null> = {};
-      correctionCards.forEach((card) => {
-        next[card.id] = Object.prototype.hasOwnProperty.call(prev, card.id)
-          ? prev[card.id]
-          : activeErrorTypeId;
-      });
-      const unchanged =
-        correctionCards.length === Object.keys(prev).length &&
-        correctionCards.every((c) => prev[c.id] === next[c.id]);
-      return unchanged ? prev : next;
-    });
-  }, [correctionCards, activeErrorTypeId, hasLoadedTypeState]);
-
-  const correctionSignatureRef = useRef<string | null>(null);
-  const moveSignatureRef = useRef<string | null>(null);
-  const prevCorrectionIdsRef = useRef<Set<string>>(new Set());
-  useEffect(() => {
-    const signature = correctionCards.map((c) => `${c.id}:${c.rangeStart}-${c.rangeEnd}`).join("|");
-    const moveSignature = history.present.moveMarkers
-      .map((m) => `${m.id}:${m.fromStart}-${m.fromEnd}:${m.toStart}-${m.toEnd}`)
-      .join("|");
-    const moveChanged = moveSignature !== moveSignatureRef.current;
-    const prevIds = prevCorrectionIdsRef.current;
-    const currentIds = correctionCards.map((c) => c.id);
-    const addedIds = currentIds.filter((id) => !prevIds.has(id));
-    const prevCount = prevCorrectionCountRef.current;
-    const shouldSkipAuto = skipAutoSelectRef.current && correctionCards.length <= prevCount;
-    if (signature !== correctionSignatureRef.current && correctionCards.length) {
-      if (shouldSkipAuto) {
-        setSelection({ start: null, end: null });
-        skipAutoSelectRef.current = false;
-      } else {
-        const desiredIdx = pendingSelectIndexRef.current;
-        if (desiredIdx !== null && tokens.length) {
-          const clamped = Math.max(0, Math.min(tokens.length - 1, desiredIdx));
-          const [start, end] = findGroupRangeForTokens(tokens, clamped);
-          setSelection({ start, end });
-        } else {
-          const addedTargetId = addedIds.length ? addedIds[addedIds.length - 1] : null;
-          const addedTarget = addedTargetId ? correctionCards.find((c) => c.id === addedTargetId) : null;
-          const latestMove = moveChanged
-            ? history.present.moveMarkers[history.present.moveMarkers.length - 1]
-            : null;
-          const target =
-            addedTarget ||
-            (latestMove && correctionCards.find((c) => c.markerId === latestMove.id)) ||
-            [...correctionCards].reverse().find((c) => !c.markerId) ||
-            correctionCards[correctionCards.length - 1];
-          if (target) {
-            if (target.markerId) {
-              const marker = moveMarkerById.get(target.markerId);
-              if (marker) {
-                const start = Math.min(marker.fromStart, marker.toStart);
-                const end = Math.max(marker.fromEnd, marker.toEnd);
-                setSelection({ start, end }, target.markerId);
-              }
-            } else {
-              const [start, end] = findGroupRangeForTokens(tokens, target.rangeStart);
-              setSelection({ start, end });
-            }
-          }
-        }
-      }
-    }
-    correctionSignatureRef.current = signature;
-    moveSignatureRef.current = moveSignature;
-    if (!shouldSkipAuto) {
-      skipAutoSelectRef.current = false;
-    }
-    prevCorrectionIdsRef.current = new Set(currentIds);
-    pendingSelectIndexRef.current = null;
-  }, [correctionCards, history.present.moveMarkers, moveMarkerById, tokens]);
-
-  useEffect(() => {
-    if (correctionCards.length < prevCorrectionCountRef.current) {
-      setSelection({ start: null, end: null });
-    }
-  }, [correctionCards.length, setSelection]);
-
-  useEffect(() => {
-    prevCorrectionCountRef.current = correctionCards.length;
-  }, [correctionCards.length]);
-
-  useEffect(() => {
-    if (!hasLoadedTypeState) return;
-    persistCorrectionTypes(textId, { activeErrorTypeId, assignments: correctionTypeMap });
-  }, [textId, activeErrorTypeId, correctionTypeMap, hasLoadedTypeState]);
 
   const buildAnnotationsPayload = useCallback(
     () =>
@@ -1872,15 +1663,17 @@ export const TokenEditor: React.FC<{
         if (cardId) affectedIds.add(cardId);
       });
       if (!affectedIds.size) return;
-      setCorrectionTypeMap((prev) => {
-        const next = { ...prev };
-        affectedIds.forEach((id) => {
-          next[id] = typeId;
-        });
-        return next;
-      });
+      applyTypeToCorrections(affectedIds, typeId);
     },
-    [correctionByIndex, selectedIndices]
+    [applyTypeToCorrections, correctionByIndex, selectedIndices]
+  );
+
+  const handleTypePick = useCallback(
+    (typeId: number) => {
+      setActiveErrorTypeId((prev) => (prev === typeId ? null : typeId));
+      applyTypeToSelection(typeId);
+    },
+    [applyTypeToSelection, setActiveErrorTypeId]
   );
 
   const hotkeyMap = useMemo(() => buildHotkeyMap(errorTypes), [errorTypes]);
@@ -1918,21 +1711,16 @@ export const TokenEditor: React.FC<{
       const typeId = (keySpec && hotkeyMap[keySpec]) || (codeSpec && hotkeyMap[codeSpec]);
       if (!typeId) return;
       event.preventDefault();
-      setActiveErrorTypeId((prev) => (prev === typeId ? null : typeId));
-      applyTypeToSelection(typeId);
+      handleTypePick(typeId);
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [hotkeyMap, applyTypeToSelection, eventToHotkeyStrings]);
+  }, [hotkeyMap, eventToHotkeyStrings, handleTypePick]);
 
   const hasUnassignedCorrections = useMemo(
     () => correctionCards.some((card) => !correctionTypeMap[card.id]),
     [correctionCards, correctionTypeMap]
   );
-
-  const updateCorrectionType = (cardId: string, typeId: number | null) => {
-    setCorrectionTypeMap((prev) => ({ ...prev, [cardId]: typeId }));
-  };
 
   return (
     <div style={pageStyle}>
@@ -2225,131 +2013,27 @@ export const TokenEditor: React.FC<{
           )}
         </div>
 
-        <div
-          data-testid="corrected-panel"
-          style={{ ...tokenRowStyleBase, gap: Math.max(0, tokenGap) }}
-          onDragOver={(e) => {
-            e.preventDefault();
-          }}
-          onDrop={(e) => {
-            e.preventDefault();
-            if (dropTargetIndex !== null) {
-              handleDrop(dropTargetIndex);
-            }
-          }}
-          ref={tokenRowRef}
-        >
-          {renderTokenGroups(tokens)}
-          {/* Trailing drop zone */}
-          <div
-            style={{ width: 24, height: 24 }}
-            onDragOver={(e) => {
-              e.preventDefault();
-              setDropTarget(tokens.length);
-            }}
-            onDrop={(e) => {
-              e.preventDefault();
-              handleDrop(dropTargetIndex ?? tokens.length);
-            }}
-          />
-        </div>
-        {/* Categories */}
-        <div style={categoryPanelStyle}>
-            <div style={{ ...rowLabelStyle, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-              <span style={{ visibility: "hidden" }}>{t("tokenEditor.categories")}</span>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                {isLoadingErrorTypes && <span style={{ color: "#94a3b8" }}>{t("common.loading")}</span>}
-                <button
-                  style={{
-                    ...miniNeutralButton,
-                    padding: "6px 8px",
-                    minWidth: 32,
-                    height: 32,
-                    display: "inline-flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                  }}
-                  onClick={handleOpenSettings}
-                  title={t("common.settings")}
-                >
-                  ⚙
-                </button>
-              </div>
-            </div>
-            {errorTypesError && (
-              <div style={{ color: "#fca5a5", fontSize: 12 }}>{errorTypesError}</div>
-            )}
-            {!isLoadingErrorTypes && !errorTypesError && groupedErrorTypes.length === 0 && (
-              <div style={{ color: "#94a3b8", fontSize: 12 }}>
-                {t("annotation.noErrorTypesTitle")}
-              </div>
-            )}
-            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              {groupedErrorTypes.map((group, groupIdx) => (
-                <div key={`${group.label}-${groupIdx}`} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                  {group.label && (
-                    <div style={{ color: "#cbd5e1", fontWeight: 700, fontSize: 13, textAlign: "left" }}>
-                      {group.label}
-                    </div>
-                  )}
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                    {group.items.map((type, idx) => {
-                      const primary = getErrorTypeLabel(type, locale);
-                      const chipBg =
-                        colorWithAlpha(type.default_color, 0.3) ??
-                        categoryColors[(groupIdx + idx) % categoryColors.length];
-                      const isActiveType = activeErrorTypeId === type.id;
-                      const hotkey = (type.default_hotkey ?? "").trim();
-                      return (
-                        <div
-                          key={type.id}
-                          style={{
-                            ...categoryChipStyle,
-                            background: chipBg,
-                            border: isActiveType ? "2px solid rgba(16,185,129,0.8)" : "1px solid rgba(148,163,184,0.35)",
-                            boxShadow: isActiveType ? "0 0 0 2px rgba(16,185,129,0.25)" : "none",
-                          }}
-                          title={type.description ?? undefined}
-                          role="button"
-                          tabIndex={0}
-                          onClick={() => {
-                            setActiveErrorTypeId((prev) => (prev === type.id ? null : type.id));
-                            applyTypeToSelection(type.id);
-                          }}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter" || e.key === " ") {
-                              e.preventDefault();
-                              setActiveErrorTypeId((prev) => (prev === type.id ? null : type.id));
-                              applyTypeToSelection(type.id);
-                            }
-                          }}
-                        >
-                          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                            <div style={{ fontWeight: 700 }}>{primary}</div>
-                            {hotkey && (
-                              <span
-                                style={{
-                                  fontSize: 10,
-                                  color: "#cbd5e1",
-                                  border: "1px solid rgba(148,163,184,0.5)",
-                                  borderRadius: 6,
-                                  padding: "2px 6px",
-                                  background: "rgba(15,23,42,0.6)",
-                                  lineHeight: 1.2,
-                                }}
-                              >
-                                {hotkey}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
+        <TokenRow
+          tokens={tokens}
+          tokenGap={tokenGap}
+          dropTargetIndex={dropTargetIndex}
+          onSetDropTarget={setDropTarget}
+          onDrop={handleDrop}
+          renderTokenGroups={renderTokenGroups}
+          rowRef={tokenRowRef}
+          hoverOverlay={moveHoverOverlay}
+          onHoverMove={handleHoverMove}
+        />
+        <ErrorTypePanel
+          groupedErrorTypes={groupedErrorTypes}
+          errorTypesError={errorTypesError}
+          isLoadingErrorTypes={isLoadingErrorTypes}
+          activeErrorTypeId={activeErrorTypeId}
+          locale={locale}
+          onTypePick={handleTypePick}
+          onOpenSettings={handleOpenSettings}
+          t={t}
+        />
         </div>
 
       </div>
@@ -2366,7 +2050,7 @@ export const TokenEditor: React.FC<{
                 style={{ ...miniOutlineButton, borderColor: "rgba(239,68,68,0.6)", color: "#fecdd3" }}
                 onClick={() => {
                   closeClearConfirm();
-                  skipAutoSelectRef.current = true;
+                  markSkipAutoSelect();
                   dispatch({ type: "CLEAR_ALL" });
                   setSelection({ start: null, end: null });
                   endEdit();
@@ -2434,6 +2118,181 @@ export const TokenEditor: React.FC<{
     </div>
   );
 };
+
+type TokenRowProps = {
+  tokens: Token[];
+  tokenGap: number;
+  dropTargetIndex: number | null;
+  onSetDropTarget: (index: number | null) => void;
+  onDrop: (index: number) => void;
+  renderTokenGroups: (tokens: Token[]) => React.ReactNode[];
+  rowRef: React.RefObject<HTMLDivElement>;
+  hoverOverlay?: React.ReactNode;
+  onHoverMove?: (moveId: string | null) => void;
+};
+
+const TokenRow: React.FC<TokenRowProps> = ({
+  tokens,
+  tokenGap,
+  dropTargetIndex,
+  onSetDropTarget,
+  onDrop,
+  renderTokenGroups,
+  rowRef,
+  hoverOverlay,
+  onHoverMove,
+}) => (
+  <div
+    data-testid="corrected-panel"
+    style={{ ...tokenRowStyleBase, gap: Math.max(0, tokenGap) }}
+    onDragOver={(e) => {
+      e.preventDefault();
+    }}
+    onDrop={(e) => {
+      e.preventDefault();
+      if (dropTargetIndex !== null) {
+        onDrop(dropTargetIndex);
+      }
+    }}
+    onMouseMove={(e) => {
+      if (!onHoverMove) return;
+      const target = e.target as Element | null;
+      if (!target) return;
+      const moveEl = target.closest<HTMLElement>("[data-move-id]");
+      const moveId = moveEl?.dataset.moveId ?? null;
+      onHoverMove(moveId);
+    }}
+    onMouseLeave={() => {
+      onHoverMove?.(null);
+    }}
+    ref={rowRef}
+  >
+    {hoverOverlay}
+    {renderTokenGroups(tokens)}
+    <div
+      style={{ width: 24, height: 24 }}
+      onDragOver={(e) => {
+        e.preventDefault();
+        onSetDropTarget(tokens.length);
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        onDrop(dropTargetIndex ?? tokens.length);
+      }}
+    />
+  </div>
+);
+
+type ErrorTypePanelProps = {
+  groupedErrorTypes: Array<{ label: string; items: ErrorType[] }>;
+  errorTypesError: string | null;
+  isLoadingErrorTypes: boolean;
+  activeErrorTypeId: number | null;
+  locale: string;
+  onTypePick: (typeId: number) => void;
+  onOpenSettings: () => void;
+  t: (key: string) => string;
+};
+
+const ErrorTypePanel: React.FC<ErrorTypePanelProps> = ({
+  groupedErrorTypes,
+  errorTypesError,
+  isLoadingErrorTypes,
+  activeErrorTypeId,
+  locale,
+  onTypePick,
+  onOpenSettings,
+  t,
+}) => (
+  <div style={categoryPanelStyle}>
+    <div style={{ ...rowLabelStyle, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+      <span style={{ visibility: "hidden" }}>{t("tokenEditor.categories")}</span>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        {isLoadingErrorTypes && <span style={{ color: "#94a3b8" }}>{t("common.loading")}</span>}
+        <button
+          style={{
+            ...miniNeutralButton,
+            padding: "6px 8px",
+            minWidth: 32,
+            height: 32,
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+          onClick={onOpenSettings}
+          title={t("common.settings")}
+        >
+          ⚙
+        </button>
+      </div>
+    </div>
+    {errorTypesError && <div style={{ color: "#fca5a5", fontSize: 12 }}>{errorTypesError}</div>}
+    {!isLoadingErrorTypes && !errorTypesError && groupedErrorTypes.length === 0 && (
+      <div style={{ color: "#94a3b8", fontSize: 12 }}>{t("annotation.noErrorTypesTitle")}</div>
+    )}
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      {groupedErrorTypes.map((group, groupIdx) => (
+        <div key={`${group.label}-${groupIdx}`} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          {group.label && (
+            <div style={{ color: "#cbd5e1", fontWeight: 700, fontSize: 13, textAlign: "left" }}>
+              {group.label}
+            </div>
+          )}
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            {group.items.map((type, idx) => {
+              const primary = getErrorTypeLabel(type, locale);
+              const chipBg =
+                colorWithAlpha(type.default_color, 0.3) ??
+                categoryColors[(groupIdx + idx) % categoryColors.length];
+              const isActiveType = activeErrorTypeId === type.id;
+              const hotkey = (type.default_hotkey ?? "").trim();
+              return (
+                <div
+                  key={type.id}
+                  style={{
+                    ...categoryChipStyle,
+                    background: chipBg,
+                    border: isActiveType ? "2px solid rgba(16,185,129,0.8)" : "1px solid rgba(148,163,184,0.35)",
+                    boxShadow: isActiveType ? "0 0 0 2px rgba(16,185,129,0.25)" : "none",
+                  }}
+                  title={type.description ?? undefined}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => onTypePick(type.id)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      onTypePick(type.id);
+                    }
+                  }}
+                >
+                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                    <div style={{ fontWeight: 700 }}>{primary}</div>
+                    {hotkey && (
+                      <span
+                        style={{
+                          fontSize: 10,
+                          color: "#cbd5e1",
+                          border: "1px solid rgba(148,163,184,0.5)",
+                          borderRadius: 6,
+                          padding: "2px 6px",
+                          background: "rgba(15,23,42,0.6)",
+                          lineHeight: 1.2,
+                        }}
+                      >
+                        {hotkey}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+    </div>
+  </div>
+);
 
 // ---------------------------
 // Styles

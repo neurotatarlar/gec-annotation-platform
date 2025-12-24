@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { MutableRefObject } from "react";
 
 import { AnnotationDraft, AnnotationSavePayload, SaveStatus } from "../types";
 import { shouldSkipSave } from "../components/TokenEditorModel";
@@ -10,8 +11,8 @@ type UseSaveControllerArgs = {
   textId: number;
   serverAnnotationVersion: number;
   setServerAnnotationVersion: (version: number) => void;
-  annotationIdMap: React.MutableRefObject<Map<string, number>>;
-  lastSavedSignatureRef: React.MutableRefObject<string | null>;
+  annotationIdMap: MutableRefObject<Map<string, number>>;
+  lastSavedSignatureRef: MutableRefObject<string | null>;
   formatError: (error: any) => string;
   setActionError: (message: string | null) => void;
   onSaveStatusChange?: (status: SaveStatus) => void;

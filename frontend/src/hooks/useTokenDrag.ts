@@ -1,8 +1,8 @@
 import { useCallback, useRef } from "react";
+import type { Dispatch } from "react";
 
 import { Token } from "../components/TokenEditorModel";
-
-type SelectionRange = { start: number | null; end: number | null };
+import { SelectionRange } from "./useEditorUIState";
 
 type UseTokenDragArgs = {
   tokens: Token[];
@@ -11,7 +11,7 @@ type UseTokenDragArgs = {
   hasSelection: boolean;
   selection: SelectionRange;
   setSelection: (range: SelectionRange) => void;
-  dispatch: React.Dispatch<any>;
+  dispatch: Dispatch<any>;
   startDrag: () => void;
   endDrag: () => void;
   endEdit: () => void;
