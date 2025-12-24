@@ -39,6 +39,125 @@ export * from "./TokenEditorModel";
 // ---------------------------
 type SelectionRange = { start: number | null; end: number | null };
 
+type EditorMode = "idle" | "selecting" | "editing" | "dragging";
+type EditorOverlay = "none" | "clear" | "flag";
+
+type EditorUIState = {
+  mode: EditorMode;
+  overlay: EditorOverlay;
+  selection: SelectionRange;
+  selectionMoveMarkerId: string | null;
+  editingRange: SelectionRange | null;
+  editText: string;
+  isDragging: boolean;
+  dropTargetIndex: number | null;
+  pendingAction: "skip" | "trash" | null;
+  flagReason: string;
+  flagError: string | null;
+};
+
+type EditorUIAction =
+  | { type: "RESET" }
+  | { type: "SET_SELECTION"; range: SelectionRange; moveMarkerId?: string | null }
+  | { type: "CLEAR_MOVE_MARKER" }
+  | { type: "START_EDIT"; range: SelectionRange; text: string }
+  | { type: "UPDATE_EDIT_TEXT"; value: string }
+  | { type: "END_EDIT" }
+  | { type: "START_DRAG" }
+  | { type: "END_DRAG" }
+  | { type: "SET_DROP_TARGET"; index: number | null }
+  | { type: "OPEN_CLEAR_CONFIRM" }
+  | { type: "CLOSE_CLEAR_CONFIRM" }
+  | { type: "OPEN_FLAG"; action: "skip" | "trash" }
+  | { type: "UPDATE_FLAG_REASON"; value: string }
+  | { type: "SET_FLAG_ERROR"; value: string | null }
+  | { type: "CLOSE_FLAG" };
+
+const EMPTY_SELECTION: SelectionRange = { start: null, end: null };
+
+const baseEditorUIState: EditorUIState = {
+  mode: "idle",
+  overlay: "none",
+  selection: EMPTY_SELECTION,
+  selectionMoveMarkerId: null,
+  editingRange: null,
+  editText: "",
+  isDragging: false,
+  dropTargetIndex: null,
+  pendingAction: null,
+  flagReason: "",
+  flagError: null,
+};
+
+const syncEditorMode = (state: EditorUIState): EditorUIState => {
+  let mode: EditorMode = "idle";
+  if (state.editingRange) {
+    mode = "editing";
+  } else if (state.isDragging) {
+    mode = "dragging";
+  } else if (state.selection.start !== null && state.selection.end !== null) {
+    mode = "selecting";
+  }
+  return state.mode === mode ? state : { ...state, mode };
+};
+
+const editorUIReducer = (state: EditorUIState, action: EditorUIAction): EditorUIState => {
+  switch (action.type) {
+    case "RESET":
+      return baseEditorUIState;
+    case "SET_SELECTION": {
+      const range = action.range;
+      const isEmpty = range.start === null || range.end === null;
+      const next: EditorUIState = {
+        ...state,
+        selection: range,
+        selectionMoveMarkerId: isEmpty ? null : action.moveMarkerId ?? null,
+      };
+      return syncEditorMode(next);
+    }
+    case "CLEAR_MOVE_MARKER":
+      return state.selectionMoveMarkerId ? { ...state, selectionMoveMarkerId: null } : state;
+    case "START_EDIT": {
+      const next: EditorUIState = {
+        ...state,
+        editingRange: action.range,
+        editText: action.text,
+      };
+      return syncEditorMode(next);
+    }
+    case "UPDATE_EDIT_TEXT":
+      return { ...state, editText: action.value };
+    case "END_EDIT": {
+      const next: EditorUIState = {
+        ...state,
+        editingRange: null,
+        editText: "",
+      };
+      return syncEditorMode(next);
+    }
+    case "START_DRAG":
+      return syncEditorMode({ ...state, isDragging: true });
+    case "END_DRAG":
+      return syncEditorMode({ ...state, isDragging: false, dropTargetIndex: null });
+    case "SET_DROP_TARGET":
+      return { ...state, dropTargetIndex: action.index };
+    case "OPEN_CLEAR_CONFIRM":
+      return { ...state, overlay: "clear" };
+    case "CLOSE_CLEAR_CONFIRM":
+      return { ...state, overlay: "none" };
+    case "OPEN_FLAG":
+      return { ...state, overlay: "flag", pendingAction: action.action, flagReason: "", flagError: null };
+    case "UPDATE_FLAG_REASON":
+      return { ...state, flagReason: action.value };
+    case "SET_FLAG_ERROR":
+      return { ...state, flagError: action.value };
+    case "CLOSE_FLAG":
+      return { ...state, overlay: "none", pendingAction: null, flagReason: "", flagError: null };
+    default:
+      return state;
+  }
+};
+
 export type SaveStatus = { state: "idle" | "saving" | "saved" | "error"; unsaved: boolean };
 
 const PREFS_KEY = "tokenEditorPrefs";
@@ -191,24 +310,67 @@ export const TokenEditor: React.FC<{
     future: [],
   });
 
-  // Selection and editing UI state (kept outside history).
-  const [selection, setSelectionState] = useState<SelectionRange>({ start: null, end: null });
-  const [selectionMoveMarkerId, setSelectionMoveMarkerId] = useState<string | null>(null);
+  // Selection and editing UI state (kept outside history) is driven by a state machine.
+  const [ui, dispatchUI] = useReducer(editorUIReducer, baseEditorUIState);
+  const selection = ui.selection;
+  const selectionMoveMarkerId = ui.selectionMoveMarkerId;
+  const editingRange = ui.editingRange;
+  const editText = ui.editText;
+  const dropTargetIndex = ui.dropTargetIndex;
+  const pendingAction = ui.pendingAction;
+  const flagReason = ui.flagReason;
+  const flagError = ui.flagError;
+  const showClearConfirm = ui.overlay === "clear";
   const setSelection = useCallback(
     (range: SelectionRange, moveMarkerId: string | null = null) => {
-      setSelectionMoveMarkerId(moveMarkerId);
-      setSelectionState(range);
+      dispatchUI({ type: "SET_SELECTION", range, moveMarkerId });
     },
     []
   );
-  const [editingRange, setEditingRange] = useState<SelectionRange | null>(null);
-  const [editText, setEditText] = useState("");
+  const clearMoveMarkerSelection = useCallback(() => {
+    dispatchUI({ type: "CLEAR_MOVE_MARKER" });
+  }, []);
+  const startEdit = useCallback((range: SelectionRange, text: string) => {
+    dispatchUI({ type: "START_EDIT", range, text });
+  }, []);
+  const updateEditText = useCallback((value: string) => {
+    dispatchUI({ type: "UPDATE_EDIT_TEXT", value });
+  }, []);
+  const endEdit = useCallback(() => {
+    dispatchUI({ type: "END_EDIT" });
+  }, []);
+  const startDrag = useCallback(() => {
+    dispatchUI({ type: "START_DRAG" });
+  }, []);
+  const endDrag = useCallback(() => {
+    dispatchUI({ type: "END_DRAG" });
+  }, []);
+  const setDropTarget = useCallback((index: number | null) => {
+    dispatchUI({ type: "SET_DROP_TARGET", index });
+  }, []);
+  const openClearConfirm = useCallback(() => {
+    dispatchUI({ type: "OPEN_CLEAR_CONFIRM" });
+  }, []);
+  const closeClearConfirm = useCallback(() => {
+    dispatchUI({ type: "CLOSE_CLEAR_CONFIRM" });
+  }, []);
+  const openFlagConfirm = useCallback((action: "skip" | "trash") => {
+    dispatchUI({ type: "OPEN_FLAG", action });
+  }, []);
+  const closeFlagConfirm = useCallback(() => {
+    dispatchUI({ type: "CLOSE_FLAG" });
+  }, []);
+  const updateFlagReason = useCallback((value: string) => {
+    dispatchUI({ type: "UPDATE_FLAG_REASON", value });
+  }, []);
+  const updateFlagError = useCallback((value: string | null) => {
+    dispatchUI({ type: "SET_FLAG_ERROR", value });
+  }, []);
   const prefs = useMemo(() => loadPrefs(), []);
   const [tokenGap, setTokenGap] = useState(Math.max(0, prefs.tokenGap ?? DEFAULT_TOKEN_GAP));
   const [tokenFontSize, setTokenFontSize] = useState(prefs.tokenFontSize ?? DEFAULT_TOKEN_FONT_SIZE);
   const [spaceMarker, setSpaceMarker] = useState<SpaceMarker>(normalizeSpaceMarker(prefs.spaceMarker));
   const editInputRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
-  const [dropTargetIndex, setDropTargetIndex] = useState<number | null>(null); // insertion position 0..tokens.length
   const tokenRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const measureCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const measureTextWidth = useCallback(
@@ -270,10 +432,6 @@ export const TokenEditor: React.FC<{
   const [lastDecision, setLastDecision] = useState<"skip" | "trash" | "submit" | null>(
     prefs.lastTextId === textId ? prefs.lastDecision ?? null : null
   );
-  const [pendingAction, setPendingAction] = useState<"skip" | "trash" | null>(null);
-  const [flagReason, setFlagReason] = useState("");
-  const [flagError, setFlagError] = useState<string | null>(null);
-  const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [errorTypes, setErrorTypes] = useState<ErrorType[]>([]);
   const [isLoadingErrorTypes, setIsLoadingErrorTypes] = useState(false);
   const [errorTypesError, setErrorTypesError] = useState<string | null>(null);
@@ -292,7 +450,7 @@ export const TokenEditor: React.FC<{
     pendingSelectIndexRef.current = rangeStart;
     dispatch({ type: "REVERT_CORRECTION", rangeStart, rangeEnd, markerId });
     setSelection({ start: null, end: null });
-    setEditingRange(null);
+    endEdit();
   };
 
   const tokens = history.present.tokens;
@@ -415,6 +573,7 @@ export const TokenEditor: React.FC<{
     setCorrectionTypeMap({});
     setServerAnnotationVersion(0);
     hydratedFromServerRef.current = false;
+    dispatchUI({ type: "RESET" });
   }, [textId]);
 
   useEffect(() => {
@@ -744,12 +903,12 @@ export const TokenEditor: React.FC<{
   useEffect(() => {
     if (!selectionMoveMarkerId) return;
     if (!hasSelection) {
-      setSelectionMoveMarkerId(null);
+      clearMoveMarkerSelection();
       return;
     }
     const marker = moveMarkerById.get(selectionMoveMarkerId);
     if (!marker) {
-      setSelectionMoveMarkerId(null);
+      clearMoveMarkerSelection();
       return;
     }
     const minSel = Math.min(selection.start!, selection.end!);
@@ -757,9 +916,9 @@ export const TokenEditor: React.FC<{
     const markerMin = Math.min(marker.fromStart, marker.toStart);
     const markerMax = Math.max(marker.fromEnd, marker.toEnd);
     if (minSel !== markerMin || maxSel !== markerMax) {
-      setSelectionMoveMarkerId(null);
+      clearMoveMarkerSelection();
     }
-  }, [hasSelection, moveMarkerById, selection, selectionMoveMarkerId]);
+  }, [clearMoveMarkerSelection, hasSelection, moveMarkerById, selection, selectionMoveMarkerId]);
 
   const requestNextText = useCallback(async () => {
     try {
@@ -827,17 +986,15 @@ export const TokenEditor: React.FC<{
   const handleFlag = useCallback((flagType: "skip" | "trash") => {
     setActionError(null);
     setActionMessage(null);
-    setPendingAction(flagType);
-    setFlagReason("");
-    setFlagError(null);
-  }, []);
+    openFlagConfirm(flagType);
+  }, [openFlagConfirm]);
 
   const confirmFlag = useCallback(async () => {
     if (!pendingAction) return;
     const flagType = pendingAction;
     setActionError(null);
     setActionMessage(null);
-    setFlagError(null);
+    updateFlagError(null);
     flagType === "skip" ? setIsSkipping(true) : setIsTrashing(true);
     let succeeded = false;
     try {
@@ -847,21 +1004,18 @@ export const TokenEditor: React.FC<{
       await requestNextText();
       succeeded = true;
     } catch (error: any) {
-      setFlagError(formatError(error));
+      updateFlagError(formatError(error));
     } finally {
       flagType === "skip" ? setIsSkipping(false) : setIsTrashing(false);
       if (succeeded) {
-        setPendingAction(null);
-        setFlagReason("");
+        closeFlagConfirm();
       }
     }
-  }, [post, flagReason, navigate, pendingAction, requestNextText, t, textId]);
+  }, [post, flagReason, pendingAction, requestNextText, textId, updateFlagError, closeFlagConfirm]);
 
   const cancelFlag = useCallback(() => {
-    setPendingAction(null);
-    setFlagReason("");
-    setFlagError(null);
-  }, []);
+    closeFlagConfirm();
+  }, [closeFlagConfirm]);
 
   // Enter edit mode from selection.
   const beginEdit = (range?: { start: number; end: number }, caretIndex?: number) => {
@@ -872,9 +1026,8 @@ export const TokenEditor: React.FC<{
     if (slice.some((tok) => tok.kind === "empty" || tok.kind === "special")) {
       return;
     }
-    setEditingRange(activeRange);
     const editValue = buildEditableTextFromTokens(slice);
-    setEditText(editValue);
+    startEdit(activeRange, editValue);
     const desiredCaret = typeof caretIndex === "number" ? caretIndex : editValue.length;
     setTimeout(() => {
       if (editInputRef.current) {
@@ -894,7 +1047,7 @@ export const TokenEditor: React.FC<{
     const { start, end } = editingRange;
     pendingSelectIndexRef.current = start!;
     dispatch({ type: "EDIT_SELECTED_RANGE_AS_TEXT", range: [start!, end!], newText: editText });
-    setEditingRange(null);
+    endEdit();
     setSelection({ start, end });
   };
 
@@ -909,8 +1062,7 @@ export const TokenEditor: React.FC<{
         dispatch({ type: "CANCEL_INSERT_PLACEHOLDER", range: [s, e] });
       }
     }
-    setEditingRange(null);
-    setEditText("");
+    endEdit();
   };
 
   // Selection click logic with contiguous Ctrl-select.
@@ -981,17 +1133,12 @@ export const TokenEditor: React.FC<{
       }
       if (showClearConfirm && event.key === "Escape") {
         event.preventDefault();
-        setShowClearConfirm(false);
+        closeClearConfirm();
         return;
       }
       if (pendingAction && event.key === "Escape") {
         event.preventDefault();
         cancelFlag();
-        return;
-      }
-      if (showClearConfirm && event.key === "Escape") {
-        event.preventDefault();
-        setShowClearConfirm(false);
         return;
       }
       if (isInput && !(isUndoKey || isRedoKey)) return;
@@ -1023,8 +1170,7 @@ export const TokenEditor: React.FC<{
         // prepare to edit the new token
         const newIndex = end + 1;
         setSelection({ start: newIndex, end: newIndex });
-        setEditingRange({ start: newIndex, end: newIndex });
-        setEditText("");
+        startEdit({ start: newIndex, end: newIndex }, "");
         setTimeout(() => editInputRef.current?.focus(), 10);
       }
       if (event.key === "Escape") {
@@ -1037,7 +1183,7 @@ export const TokenEditor: React.FC<{
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [editingRange, hasSelection, selection, showClearConfirm, pendingAction, cancelFlag]);
+  }, [editingRange, hasSelection, selection, showClearConfirm, pendingAction, cancelFlag, closeClearConfirm]);
 
   // Drag & drop support for moving selected block.
   const dragInfoRef = useRef<{ fromIndex: number; count: number } | null>(null);
@@ -1077,6 +1223,7 @@ export const TokenEditor: React.FC<{
 
     const count = rangeEnd - rangeStart + 1;
     dragInfoRef.current = { fromIndex: rangeStart, count };
+    startDrag();
     // Required by some browsers to allow drop.
     evt.dataTransfer.setData("text/plain", "moving-tokens");
     // Ghost preview with selected text
@@ -1098,7 +1245,8 @@ export const TokenEditor: React.FC<{
   const handleDrop = (targetIndex: number) => {
     const info = dragInfoRef.current;
     dragInfoRef.current = null;
-    setDropTargetIndex(null);
+    setDropTarget(null);
+    endDrag();
     if (!info) return;
     const { fromIndex, count } = info;
     const start = fromIndex;
@@ -1108,7 +1256,7 @@ export const TokenEditor: React.FC<{
     dispatch({ type: "MOVE_SELECTED_BY_DRAG", fromIndex, toIndex: targetIndex, count });
     // After moving, clear selection so the moved tokens don't show a background.
     setSelection({ start: null, end: null });
-    setEditingRange(null);
+    endEdit();
   };
 
   const renderToken = (token: Token, index: number, forceChanged = false) => {
@@ -1213,7 +1361,7 @@ export const TokenEditor: React.FC<{
               margin: 0,
             }}
             value={editText}
-            onChange={(e) => setEditText(e.target.value)}
+            onChange={(e) => updateEditText(e.target.value)}
             onBlur={commitEdit}
             onKeyDown={(e) => {
               if (e.key === "Enter") {
@@ -1259,11 +1407,15 @@ export const TokenEditor: React.FC<{
           const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
           const relative = (e.clientX - rect.left) / Math.max(rect.width, 1);
           const targetIdx = relative > 0.5 ? index + 1 : index;
-          setDropTargetIndex(targetIdx);
+          setDropTarget(targetIdx);
         }}
         onDrop={(e) => {
           e.preventDefault();
           handleDrop(dropTargetIndex ?? index);
+        }}
+        onDragEnd={() => {
+          setDropTarget(null);
+          endDrag();
         }}
         onClick={(e) => {
           if (isSpecial) return;
@@ -1366,7 +1518,7 @@ export const TokenEditor: React.FC<{
           }}
           onDragOver={(e) => {
             e.preventDefault();
-            setDropTargetIndex(idx);
+            setDropTarget(idx);
           }}
           onDrop={(e) => {
             e.preventDefault();
@@ -1494,15 +1646,15 @@ export const TokenEditor: React.FC<{
             }}
             onDragOver={(e) => {
               e.preventDefault();
-              setDropTargetIndex(group.start);
+              setDropTarget(group.start);
             }}
             onDrop={(e) => {
               e.preventDefault();
               handleDrop(dropTargetIndex ?? group.start);
-              setDropTargetIndex(null);
+              setDropTarget(null);
             }}
             onMouseLeave={() => {
-              setDropTargetIndex(null);
+              setDropTarget(null);
             }}
           >
             {(hasHistory || matchingMarker) && (
@@ -1512,7 +1664,7 @@ export const TokenEditor: React.FC<{
                   e.stopPropagation();
                   handleRevert(group.start, group.end, matchingMarker?.id ?? null);
                   setSelection({ start: null, end: null });
-                  setEditingRange(null);
+                  endEdit();
                 }}
                 title={t("tokenEditor.undo")}
               >
@@ -2015,8 +2167,7 @@ export const TokenEditor: React.FC<{
                   dispatch({ type: "INSERT_TOKEN_BEFORE_SELECTED", range: [start, Math.max(s, e)] });
                   // Immediately enter edit mode on the newly inserted token.
                   setSelection({ start, end: start });
-                  setEditingRange({ start, end: start });
-                  setEditText("");
+                  startEdit({ start, end: start }, "");
                   setActiveErrorTypeId((prev) => prev); // preserve current active error type for hotkeys
                   setTimeout(() => {
                     if (editInputRef.current) {
@@ -2035,8 +2186,7 @@ export const TokenEditor: React.FC<{
                   dispatch({ type: "INSERT_TOKEN_AFTER_SELECTED", range: [start, end] });
                   const newIndex = end + 1;
                   setSelection({ start: newIndex, end: newIndex });
-                  setEditingRange({ start: newIndex, end: newIndex });
-                  setEditText("");
+                  startEdit({ start: newIndex, end: newIndex }, "");
                   setActiveErrorTypeId((prev) => prev); // preserve active type for hotkeys
                   setTimeout(() => {
                     if (editInputRef.current) {
@@ -2086,7 +2236,7 @@ export const TokenEditor: React.FC<{
                   }}
                   onClick={() => {
                     if (!hasCorrections) return;
-                    setShowClearConfirm(true);
+                    openClearConfirm();
                   }}
                   disabled={!hasCorrections || isSubmitting || isSkipping || isTrashing}
                 >
@@ -2305,7 +2455,7 @@ export const TokenEditor: React.FC<{
             style={{ width: 24, height: 24 }}
             onDragOver={(e) => {
               e.preventDefault();
-              setDropTargetIndex(tokens.length);
+              setDropTarget(tokens.length);
             }}
             onDrop={(e) => {
               e.preventDefault();
@@ -2419,17 +2569,17 @@ export const TokenEditor: React.FC<{
           <div style={modalContentStyle}>
             <p style={{ color: "#e2e8f0", marginBottom: 12 }}>{t("tokenEditor.clearConfirmMessage") ?? "Clear all corrections?"}</p>
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-              <button style={miniOutlineButton} onClick={() => setShowClearConfirm(false)}>
+              <button style={miniOutlineButton} onClick={closeClearConfirm}>
                 {t("tokenEditor.clearCancel") ?? "Cancel"}
               </button>
               <button
                 style={{ ...miniOutlineButton, borderColor: "rgba(239,68,68,0.6)", color: "#fecdd3" }}
                 onClick={() => {
-                  setShowClearConfirm(false);
+                  closeClearConfirm();
                   skipAutoSelectRef.current = true;
                   dispatch({ type: "CLEAR_ALL" });
                   setSelection({ start: null, end: null });
-                  setEditingRange(null);
+                  endEdit();
                 }}
               >
                 {t("tokenEditor.clearConfirm") ?? "Clear"}
@@ -2465,7 +2615,7 @@ export const TokenEditor: React.FC<{
                   : t("annotation.trashPlaceholder") ?? "Reason (optional)"
               }
               value={flagReason}
-              onChange={(e) => setFlagReason(e.target.value)}
+              onChange={(e) => updateFlagReason(e.target.value)}
             />
             {flagError && (
               <div style={{ color: "#fca5a5", fontSize: 12, marginTop: 8 }}>
