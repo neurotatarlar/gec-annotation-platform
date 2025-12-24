@@ -789,7 +789,7 @@ describe("insertion splitting", () => {
     const input = await screen.findByPlaceholderText("tokenEditor.editPlaceholder");
     await user.clear(input);
     await user.type(input, "hi");
-    await user.keyboard("{Enter}");
+    fireEvent.blur(input);
 
     await waitFor(() => expect(screen.getByRole("button", { name: "hi" })).toBeTruthy());
 
@@ -1164,6 +1164,62 @@ describe("revert clears selection", () => {
     await waitFor(() => {
       expect(placeholder).toHaveAttribute("aria-pressed", "true");
       expect(moved).toHaveAttribute("aria-pressed", "true");
+    });
+  });
+
+  it("drops multi-token moves at the intended caret even when dragging from the last token", async () => {
+    mockGet.mockReset();
+    mockPost.mockReset();
+    localStorage.clear();
+    await renderEditor("one two three four five six seven eight");
+    const user = userEvent.setup();
+
+    const six = await screen.findByRole("button", { name: "six" });
+    const eight = screen.getByRole("button", { name: "eight" });
+    await user.click(six);
+    await user.click(eight, { ctrlKey: true });
+
+    const dataTransfer = {
+      setData: vi.fn(),
+      getData: vi.fn(),
+      setDragImage: vi.fn(),
+      dropEffect: "move",
+      effectAllowed: "move",
+    };
+
+    await act(async () => {
+      fireEvent.dragStart(eight, { dataTransfer });
+    });
+
+    const corrected = await screen.findByTestId("corrected-panel");
+    const tokenNodes = Array.from(corrected.querySelectorAll("[data-token-index]")) as HTMLElement[];
+    tokenNodes.forEach((node) => {
+      const idx = Number(node.dataset.tokenIndex ?? 0);
+      node.getBoundingClientRect = () =>
+        ({
+          left: idx * 20,
+          right: idx * 20 + 10,
+          top: 0,
+          bottom: 10,
+          width: 10,
+          height: 10,
+          x: idx * 20,
+          y: 0,
+          toJSON: () => ({}),
+        }) as DOMRect;
+    });
+
+    await act(async () => {
+      fireEvent.dragOver(corrected, { dataTransfer, clientX: 75, clientY: 5 });
+      fireEvent.drop(corrected, { dataTransfer, clientX: 75, clientY: 5 });
+    });
+
+    await waitFor(() => {
+      const tokenNodes = Array.from(corrected.querySelectorAll("[data-token-index]")) as HTMLElement[];
+      const texts = tokenNodes
+        .map((node) => node.textContent?.trim() ?? "")
+        .filter((text) => text && text !== "⬚");
+      expect(texts).toEqual(["one", "two", "three", "four", "six", "seven", "eight", "five"]);
     });
   });
 

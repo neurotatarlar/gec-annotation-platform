@@ -977,6 +977,69 @@ export const TokenEditor: React.FC<{
     endEdit,
     setDropTarget,
   });
+  const getDropIndexFromPoint = useCallback((clientX: number, clientY: number) => {
+    const items = tokens
+      .map((tok, idx) => {
+        const el = tokenRefs.current[tok.id];
+        if (!el) return null;
+        const rect = el.getBoundingClientRect();
+        if (!Number.isFinite(rect.left) || (!rect.width && !rect.height)) return null;
+        return { idx, rect };
+      })
+      .filter(Boolean) as Array<{ idx: number; rect: DOMRect }>;
+    if (!items.length) return null;
+    items.sort((a, b) => a.rect.top - b.rect.top || a.rect.left - b.rect.left);
+    const rowTolerance = 6;
+    const rows: Array<{ top: number; bottom: number; items: typeof items }> = [];
+    items.forEach((item) => {
+      const row = rows.find((r) => Math.abs(item.rect.top - r.top) <= rowTolerance);
+      if (row) {
+        row.items.push(item);
+        row.top = Math.min(row.top, item.rect.top);
+        row.bottom = Math.max(row.bottom, item.rect.bottom);
+      } else {
+        rows.push({ top: item.rect.top, bottom: item.rect.bottom, items: [item] });
+      }
+    });
+    let targetRow = rows.find((r) => clientY >= r.top - rowTolerance && clientY <= r.bottom + rowTolerance);
+    if (!targetRow) {
+      targetRow = rows.reduce((best, row) => {
+        const bestCenter = (best.top + best.bottom) / 2;
+        const rowCenter = (row.top + row.bottom) / 2;
+        return Math.abs(clientY - rowCenter) < Math.abs(clientY - bestCenter) ? row : best;
+      }, rows[0]);
+    }
+    const rowItems = [...targetRow.items].sort((a, b) => a.rect.left - b.rect.left);
+    for (const item of rowItems) {
+      const mid = item.rect.left + item.rect.width / 2;
+      if (clientX < mid) return item.idx;
+    }
+    return rowItems[rowItems.length - 1].idx + 1;
+  }, [tokens]);
+
+  const getDropIndexFromTarget = useCallback((target: EventTarget | null, clientX?: number, clientY?: number) => {
+    if (!(target instanceof Element)) return null;
+    const gap = target.closest<HTMLElement>("[data-drop-index]");
+    const gapIndex = gap?.dataset.dropIndex;
+    if (gapIndex !== undefined) {
+      const parsed = Number(gapIndex);
+      return Number.isFinite(parsed) ? parsed : null;
+    }
+    const tokenEl = target.closest<HTMLElement>("[data-token-index]");
+    const tokenIndex = tokenEl?.dataset.tokenIndex;
+    if (tokenIndex === undefined) {
+      if (typeof clientX === "number" && typeof clientY === "number") {
+        return getDropIndexFromPoint(clientX, clientY);
+      }
+      return null;
+    }
+    const parsed = Number(tokenIndex);
+    if (!Number.isFinite(parsed)) return null;
+    if (typeof clientX !== "number") return parsed;
+    const rect = tokenEl.getBoundingClientRect();
+    const relative = (clientX - rect.left) / Math.max(rect.width, 1);
+    return relative > 0.5 ? parsed + 1 : parsed;
+  }, [getDropIndexFromPoint]);
 
   const renderToken = (token: Token, index: number, forceChanged = false) => {
     const isSelected = selectedSet.has(index);
@@ -1116,6 +1179,7 @@ export const TokenEditor: React.FC<{
       <div
         key={token.id}
         style={style}
+        data-token-index={index}
         draggable={!isSpecial && !isEmpty}
         onDragStart={(e) => {
           if (isSpecial || isEmpty) return;
@@ -1123,20 +1187,23 @@ export const TokenEditor: React.FC<{
         }}
         onDragOver={(e) => {
           e.preventDefault();
-          const idx = getDropIndexFromPoint(e.clientX, e.clientY);
+          const idx = getDropIndexFromTarget(e.target, e.clientX, e.clientY);
           if (idx !== null) {
             setDropTarget(idx);
-          } else {
-            const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-            const relative = (e.clientX - rect.left) / Math.max(rect.width, 1);
-            const targetIdx = relative > 0.5 ? index + 1 : index;
-            setDropTarget(targetIdx);
+          } else if (typeof e.clientX === "number" && typeof e.clientY === "number") {
+            const fallback = getDropIndexFromPoint(e.clientX, e.clientY);
+            if (fallback !== null) setDropTarget(fallback);
           }
         }}
         onDrop={(e) => {
           e.preventDefault();
-          const idx = getDropIndexFromPoint(e.clientX, e.clientY);
-          handleDrop(idx ?? index);
+          const idx =
+            getDropIndexFromTarget(e.target, e.clientX, e.clientY) ??
+            (typeof e.clientX === "number" && typeof e.clientY === "number"
+              ? getDropIndexFromPoint(e.clientX, e.clientY)
+              : null) ??
+            index;
+          handleDrop(idx);
         }}
         onDragEnd={handleDragEnd}
         onClick={(e) => {
@@ -1174,49 +1241,6 @@ export const TokenEditor: React.FC<{
       </div>
     );
   };
-
-  const getDropIndexFromPoint = useCallback(
-    (clientX: number, clientY: number) => {
-      const items = tokens
-        .map((tok, idx) => {
-          const el = tokenRefs.current[tok.id];
-          if (!el) return null;
-          const rect = el.getBoundingClientRect();
-          if (!Number.isFinite(rect.left) || (!rect.width && !rect.height)) return null;
-          return { idx, rect };
-        })
-        .filter(Boolean) as Array<{ idx: number; rect: DOMRect }>;
-      if (!items.length) return null;
-      items.sort((a, b) => a.rect.top - b.rect.top || a.rect.left - b.rect.left);
-      const rowTolerance = 6;
-      const rows: Array<{ top: number; bottom: number; items: typeof items }> = [];
-      items.forEach((item) => {
-        const row = rows.find((r) => Math.abs(item.rect.top - r.top) <= rowTolerance);
-        if (row) {
-          row.items.push(item);
-          row.top = Math.min(row.top, item.rect.top);
-          row.bottom = Math.max(row.bottom, item.rect.bottom);
-        } else {
-          rows.push({ top: item.rect.top, bottom: item.rect.bottom, items: [item] });
-        }
-      });
-      let targetRow = rows.find((r) => clientY >= r.top - rowTolerance && clientY <= r.bottom + rowTolerance);
-      if (!targetRow) {
-        targetRow = rows.reduce((best, row) => {
-          const bestCenter = (best.top + best.bottom) / 2;
-          const rowCenter = (row.top + row.bottom) / 2;
-          return Math.abs(clientY - rowCenter) < Math.abs(clientY - bestCenter) ? row : best;
-        }, rows[0]);
-      }
-      const rowItems = [...targetRow.items].sort((a, b) => a.rect.left - b.rect.left);
-      for (const item of rowItems) {
-        const mid = item.rect.left + item.rect.width / 2;
-        if (clientX < mid) return item.idx;
-      }
-      return rowItems[rowItems.length - 1].idx + 1;
-    },
-    [tokens]
-  );
 
   // Render tokens grouped by groupId so corrected clusters share one border and centered history.
   const renderTokenGroups = (tokenList: Token[]) => {
@@ -1274,6 +1298,7 @@ export const TokenEditor: React.FC<{
       return (
         <div
           key={`gap-${idx}`}
+          data-drop-index={idx}
           style={{
             width: gapWidth,
             height: Math.max(28, tokenFontSize * 1.2),
@@ -1435,13 +1460,23 @@ export const TokenEditor: React.FC<{
             }}
             onDragOver={(e) => {
               e.preventDefault();
-              const idx = getDropIndexFromPoint(e.clientX, e.clientY);
-              if (idx !== null) setDropTarget(idx);
+              const idx = getDropIndexFromTarget(e.target, e.clientX, e.clientY);
+              if (idx !== null) {
+                setDropTarget(idx);
+              } else if (typeof e.clientX === "number" && typeof e.clientY === "number") {
+                const fallback = getDropIndexFromPoint(e.clientX, e.clientY);
+                if (fallback !== null) setDropTarget(fallback);
+              }
             }}
             onDrop={(e) => {
               e.preventDefault();
-              const idx = getDropIndexFromPoint(e.clientX, e.clientY);
-              handleDrop(idx ?? group.start);
+              const idx =
+                getDropIndexFromTarget(e.target, e.clientX, e.clientY) ??
+                (typeof e.clientX === "number" && typeof e.clientY === "number"
+                  ? getDropIndexFromPoint(e.clientX, e.clientY)
+                  : null) ??
+                group.start;
+              handleDrop(idx);
               setDropTarget(null);
             }}
             onMouseLeave={() => {
@@ -1489,6 +1524,7 @@ export const TokenEditor: React.FC<{
                 nodes.push(
                   <div
                     key={`inner-gap-${group.start + i}`}
+                    data-drop-index={group.start + i}
                     style={{
                       width: gapWidth,
                       height: Math.max(28, tokenFontSize * 1.2),
@@ -2147,7 +2183,7 @@ export const TokenEditor: React.FC<{
           rowRef={tokenRowRef}
           hoverOverlay={moveHoverOverlay}
           onHoverMove={handleHoverMove}
-          getDropIndexFromPoint={getDropIndexFromPoint}
+          getDropIndexFromTarget={getDropIndexFromTarget}
         />
         <ErrorTypePanel
           groupedErrorTypes={groupedErrorTypes}
@@ -2254,7 +2290,7 @@ type TokenRowProps = {
   rowRef: React.RefObject<HTMLDivElement>;
   hoverOverlay?: React.ReactNode;
   onHoverMove?: (moveId: string | null) => void;
-  getDropIndexFromPoint?: (clientX: number, clientY: number) => number | null;
+  getDropIndexFromTarget?: (target: EventTarget | null, clientX?: number, clientY?: number) => number | null;
 };
 
 const TokenRow: React.FC<TokenRowProps> = ({
@@ -2267,24 +2303,20 @@ const TokenRow: React.FC<TokenRowProps> = ({
   rowRef,
   hoverOverlay,
   onHoverMove,
-  getDropIndexFromPoint,
+  getDropIndexFromTarget,
 }) => (
   <div
     data-testid="corrected-panel"
     style={{ ...tokenRowStyleBase, gap: Math.max(0, tokenGap) }}
     onDragOver={(e) => {
       e.preventDefault();
-      if (getDropIndexFromPoint) {
-        const idx = getDropIndexFromPoint(e.clientX, e.clientY);
-        if (idx !== null) onSetDropTarget(idx);
-      }
+      const idx = getDropIndexFromTarget?.(e.target, e.clientX, e.clientY);
+      if (idx !== null && idx !== undefined) onSetDropTarget(idx);
     }}
     onDrop={(e) => {
       e.preventDefault();
-      const idx = getDropIndexFromPoint ? getDropIndexFromPoint(e.clientX, e.clientY) : dropTargetIndex;
-      if (idx !== null) {
-        onDrop(idx);
-      }
+      const idx = getDropIndexFromTarget?.(e.target, e.clientX, e.clientY);
+      onDrop(idx ?? tokens.length);
     }}
     onMouseMove={(e) => {
       if (!onHoverMove) return;
@@ -2309,7 +2341,7 @@ const TokenRow: React.FC<TokenRowProps> = ({
       }}
       onDrop={(e) => {
         e.preventDefault();
-        onDrop(dropTargetIndex ?? tokens.length);
+        onDrop(tokens.length);
       }}
     />
   </div>

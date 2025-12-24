@@ -86,7 +86,7 @@ export const useTokenDrag = ({
       ghost.style.borderRadius = "10px";
       document.body.appendChild(ghost);
       // Use the created element as drag image
-      evt.dataTransfer.setDragImage(ghost, 10, 10);
+      evt.dataTransfer.setDragImage(ghost, 0, 0);
       setTimeout(() => document.body.removeChild(ghost), 0);
     },
     [hasSelection, selectedIndices, selectedSet, selection, setSelection, startDrag, tokens]
