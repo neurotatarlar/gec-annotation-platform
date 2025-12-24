@@ -3,7 +3,9 @@ import { useLocation, useNavigate } from "react-router-dom";
 
 import { useAuthedApi } from "../api/client";
 import { useI18n } from "../context/I18nContext";
-import { ErrorType, TokenFragmentPayload } from "../types";
+import { ErrorType, SaveStatus, TokenFragmentPayload } from "../types";
+import { useSaveController } from "../hooks/useSaveController";
+import { useTokenDrag } from "../hooks/useTokenDrag";
 import {
   colorWithAlpha,
   getErrorTypeLabel,
@@ -12,7 +14,6 @@ import {
 import {
   EditorPresentState,
   HotkeySpec,
-  MoveMarker,
   Token,
   buildAnnotationsPayloadStandalone,
   buildEditableTextFromTokens,
@@ -20,13 +21,15 @@ import {
   buildTextFromTokensWithBreaks,
   cloneTokens,
   createId,
+  deriveCorrectionByIndex,
+  deriveCorrectionCards,
   deriveOperationsFromTokens,
   deriveMoveMarkers,
   findGroupRangeForTokens,
+  indexMoveMarkersById,
   makeEmptyPlaceholder,
   normalizeHotkeySpec,
   rangeToArray,
-  shouldSkipSave,
   tokenizeEditedText,
   tokenizeToTokens,
   tokenEditorReducer,
@@ -158,19 +161,12 @@ const editorUIReducer = (state: EditorUIState, action: EditorUIAction): EditorUI
   }
 };
 
-export type SaveStatus = { state: "idle" | "saving" | "saved" | "error"; unsaved: boolean };
 
 const PREFS_KEY = "tokenEditorPrefs";
 const DEFAULT_TOKEN_GAP = 2;
 const DEFAULT_TOKEN_FONT_SIZE = 24;
 type SpaceMarker = "dot" | "box" | "none";
 
-type CorrectionCardLite = {
-  id: string;
-  rangeStart: number;
-  rangeEnd: number;
-  markerId: string | null;
-};
 
 const chipBase: React.CSSProperties = {
   padding: "0px",
@@ -394,9 +390,6 @@ export const TokenEditor: React.FC<{
   const [isTrashing, setIsTrashing] = useState(false);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [isAutosaving, setIsAutosaving] = useState(false);
-  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
-  const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const initialViewTab = useMemo<"original" | "corrected">(() => {
     if (prefs.viewTab === "original" || prefs.viewTab === "corrected") {
       return prefs.viewTab;
@@ -427,7 +420,6 @@ export const TokenEditor: React.FC<{
     });
     return map;
   }, [lineBreaks]);
-  const autosaveInitializedRef = useRef(false);
   const lastSavedSignatureRef = useRef<string | null>(null);
   const [lastDecision, setLastDecision] = useState<"skip" | "trash" | "submit" | null>(
     prefs.lastTextId === textId ? prefs.lastDecision ?? null : null
@@ -824,81 +816,13 @@ export const TokenEditor: React.FC<{
     return Array.from(groups.values());
   }, [activeErrorTypes, locale, t]);
 
-  const correctionCards = useMemo(() => {
-    const movePlaceholderIndices = new Set(history.present.moveMarkers.map((m) => m.fromStart));
-    const moveDestIndices = new Set<number>();
-    history.present.moveMarkers.forEach((m) => {
-      for (let i = m.toStart; i <= m.toEnd; i += 1) {
-        moveDestIndices.add(i);
-      }
-    });
-    const visited = new Set<number>();
+  const correctionCards = useMemo(
+    () => deriveCorrectionCards(tokens, history.present.moveMarkers),
+    [tokens, history.present.moveMarkers]
+  );
 
-    const tokenCards = tokens
-      .map((tok, idx) => {
-        if (visited.has(idx)) return null;
-        if (!tok.previousTokens?.length) return null;
-        if (movePlaceholderIndices.has(idx)) return null; // move will be shown as a single correction card
-        if (moveDestIndices.has(idx)) return null; // avoid duplicate move card; handled separately
-        const [rangeStart, rangeEnd] = findGroupRangeForTokens(tokens, idx);
-        for (let i = rangeStart; i <= rangeEnd; i += 1) visited.add(i);
-        return {
-          id: tok.groupId ?? tok.id,
-          title: `Item (${rangeStart + 1}-${rangeEnd + 1})`,
-          original: tok.previousTokens.map((p) => p.text).join(" "),
-          updated: tokens.slice(rangeStart, rangeEnd + 1).map((t) => t.text).join(" "),
-          range: rangeStart === rangeEnd ? `${rangeStart + 1}` : `${rangeStart + 1}-${rangeEnd + 1}`,
-          rangeStart,
-          rangeEnd,
-          markerId: null,
-        };
-      })
-      .filter(Boolean) as Array<{
-        id: string;
-        title: string;
-        original: string;
-        updated: string;
-        range: string;
-        rangeStart: number;
-        rangeEnd: number;
-        markerId: string | null;
-      }>;
-
-    const moveCards = history.present.moveMarkers
-      .map((marker) => {
-        const placeholder = tokens[marker.fromStart];
-        const oldTokens = placeholder?.previousTokens ?? [];
-        const newTokens = tokens.slice(marker.toStart, marker.toEnd + 1);
-        return {
-          id: marker.id,
-          title: `Move ${marker.fromStart + 1}-${marker.fromEnd + 1} → ${marker.toStart + 1}-${marker.toEnd + 1}`,
-          original: oldTokens.length ? oldTokens.map((t) => t.text).join(" ") : "⬚",
-          updated: newTokens.map((t) => t.text).join(" ") || "⬚",
-          range: `${marker.toStart + 1}-${marker.toEnd + 1}`,
-          rangeStart: marker.toStart,
-          rangeEnd: marker.toEnd,
-          markerId: marker.id,
-        };
-      })
-      .filter(Boolean);
-
-    return [...tokenCards, ...moveCards];
-  }, [tokens, history.present.moveMarkers]);
-
-  const correctionByIndex = useMemo(() => {
-    const map = new Map<number, string>();
-    correctionCards.forEach((card) => {
-      for (let i = card.rangeStart; i <= card.rangeEnd; i += 1) {
-        map.set(i, card.id);
-      }
-    });
-    return map;
-  }, [correctionCards]);
-  const moveMarkerById = useMemo(() => {
-    const map = new Map<string, MoveMarker>();
-    history.present.moveMarkers.forEach((m) => map.set(m.id, m));
-    return map;
-  }, [history.present.moveMarkers]);
+  const correctionByIndex = useMemo(() => deriveCorrectionByIndex(correctionCards), [correctionCards]);
+  const moveMarkerById = useMemo(() => indexMoveMarkersById(history.present.moveMarkers), [history.present.moveMarkers]);
 
   useEffect(() => {
     if (!selectionMoveMarkerId) return;
@@ -1185,79 +1109,19 @@ export const TokenEditor: React.FC<{
     return () => window.removeEventListener("keydown", handler);
   }, [editingRange, hasSelection, selection, showClearConfirm, pendingAction, cancelFlag, closeClearConfirm]);
 
-  // Drag & drop support for moving selected block.
-  const dragInfoRef = useRef<{ fromIndex: number; count: number } | null>(null);
-  const handleDragStart = (index: number, evt: React.DragEvent) => {
-    const expandGroup = (idx: number): [number, number] => {
-      const tok = tokens[idx];
-      if (!tok?.groupId) return [idx, idx];
-      let l = idx;
-      let r = idx;
-      while (l - 1 >= 0 && tokens[l - 1]?.groupId === tok.groupId) l -= 1;
-      while (r + 1 < tokens.length && tokens[r + 1]?.groupId === tok.groupId) r += 1;
-      return [l, r];
-    };
-
-    let rangeStart = hasSelection && selectedSet.has(index) ? Math.min(selection.start!, selection.end!) : index;
-    let rangeEnd = hasSelection && selectedSet.has(index) ? Math.max(selection.start!, selection.end!) : index;
-
-    // If the token belongs to a group (edited/replaced), move the whole group.
-    const [gStart, gEnd] = expandGroup(index);
-    rangeStart = Math.min(rangeStart, gStart);
-    rangeEnd = Math.max(rangeEnd, gEnd);
-
-    if (!hasSelection || !selectedSet.has(index)) {
-      // If nothing (or other block) is selected, start with the group selection.
-      setSelection({ start: rangeStart, end: rangeEnd });
-    }
-
-    const slice = tokens.slice(rangeStart, rangeEnd + 1);
-    // Block moving pure inserted groups or pure deletion placeholders.
-    const allInserted = slice.every((t) => t.origin === "inserted");
-    const allDeletionPlaceholder = slice.every((t) => t.kind === "empty" && t.previousTokens && t.previousTokens.length);
-    if (allInserted || allDeletionPlaceholder) {
-      dragInfoRef.current = null;
-      evt.preventDefault();
-      return;
-    }
-
-    const count = rangeEnd - rangeStart + 1;
-    dragInfoRef.current = { fromIndex: rangeStart, count };
-    startDrag();
-    // Required by some browsers to allow drop.
-    evt.dataTransfer.setData("text/plain", "moving-tokens");
-    // Ghost preview with selected text
-    const ghost = document.createElement("div");
-    ghost.textContent = selectedIndices.map((i) => tokens[i]?.text).filter(Boolean).join(" ");
-    ghost.style.position = "absolute";
-    ghost.style.top = "-9999px";
-    ghost.style.left = "-9999px";
-    ghost.style.padding = "6px 10px";
-    ghost.style.background = "rgba(30,41,59,0.9)";
-    ghost.style.color = "#e2e8f0";
-    ghost.style.border = "1px solid rgba(148,163,184,0.6)";
-    ghost.style.borderRadius = "10px";
-    document.body.appendChild(ghost);
-    // Use the created element as drag image
-    evt.dataTransfer.setDragImage(ghost, 10, 10);
-    setTimeout(() => document.body.removeChild(ghost), 0);
-  };
-  const handleDrop = (targetIndex: number) => {
-    const info = dragInfoRef.current;
-    dragInfoRef.current = null;
-    setDropTarget(null);
-    endDrag();
-    if (!info) return;
-    const { fromIndex, count } = info;
-    const start = fromIndex;
-    const end = fromIndex + count - 1;
-    // Ignore drops inside the same block (no movement).
-    if (targetIndex >= start && targetIndex <= end + 1) return;
-    dispatch({ type: "MOVE_SELECTED_BY_DRAG", fromIndex, toIndex: targetIndex, count });
-    // After moving, clear selection so the moved tokens don't show a background.
-    setSelection({ start: null, end: null });
-    endEdit();
-  };
+  const { handleDragStart, handleDrop, handleDragEnd } = useTokenDrag({
+    tokens,
+    selectedIndices,
+    selectedSet,
+    hasSelection,
+    selection,
+    setSelection,
+    dispatch,
+    startDrag,
+    endDrag,
+    endEdit,
+    setDropTarget,
+  });
 
   const renderToken = (token: Token, index: number, forceChanged = false) => {
     const isSelected = selectedSet.has(index);
@@ -1413,10 +1277,7 @@ export const TokenEditor: React.FC<{
           e.preventDefault();
           handleDrop(dropTargetIndex ?? index);
         }}
-        onDragEnd={() => {
-          setDropTarget(null);
-          endDrag();
-        }}
+        onDragEnd={handleDragEnd}
         onClick={(e) => {
           if (isSpecial) return;
           handleTokenClick(index, e.ctrlKey || e.metaKey);
@@ -1931,91 +1792,20 @@ export const TokenEditor: React.FC<{
     [annotationIdMap, correctionCards, correctionTypeMap, history.present.moveMarkers, initialText, originalTokens, tokens]
   );
 
-  const saveAnnotations = useCallback(async () => {
-    const annotations = await buildAnnotationsPayload();
-    const spans = new Set(annotations.map((ann) => `${ann.start_token}-${ann.end_token}`));
-    const deletedIds =
-      annotationIdMap.current
-        ? Array.from(annotationIdMap.current.entries())
-            .filter(([spanKey]) => !spans.has(spanKey))
-            .map(([, id]) => id)
-        : [];
-    const { skip, nextSignature } = shouldSkipSave(lastSavedSignatureRef.current, annotations);
-    if (skip) {
-      lastSavedSignatureRef.current = nextSignature;
-      setHasUnsavedChanges(false);
-      setSaveStatus("saved");
-      return;
-    }
-    const payload: AnnotationSavePayload = {
-      annotations,
-      client_version: serverAnnotationVersion,
-    };
-    if (deletedIds.length) {
-      payload.deleted_ids = deletedIds;
-    }
-    const response = await post(`/api/texts/${textId}/annotations`, payload);
-    lastSavedSignatureRef.current = nextSignature;
-    const items = Array.isArray(response.data) ? response.data : [];
-    annotationIdMap.current = new Map<string, number>();
-    items.forEach((ann: any) => {
-      if (ann?.id != null && typeof ann.start_token === "number" && typeof ann.end_token === "number") {
-        const spanKey = `${ann.start_token}-${ann.end_token}`;
-        annotationIdMap.current.set(spanKey, ann.id);
-      }
-    });
-    const maxVersion = items.reduce(
-      (acc: number, ann: any) => Math.max(acc, ann?.version ?? serverAnnotationVersion),
-      serverAnnotationVersion
-    );
-    setServerAnnotationVersion(maxVersion || serverAnnotationVersion + 1);
-  }, [post, buildAnnotationsPayload, correctionCards, serverAnnotationVersion, textId]);
-
-  // Autosave on token changes (debounced).
-  useEffect(() => {
-    if (process.env.NODE_ENV === "test") return;
-    if (!history.present.tokens.length) return;
-    if (!autosaveInitializedRef.current) {
-      autosaveInitializedRef.current = true;
-      return;
-    }
-    setHasUnsavedChanges(true);
-    setSaveStatus("idle");
-    let timer: number | null = window.setTimeout(async () => {
-      setIsAutosaving(true);
-      setSaveStatus("saving");
-      setActionError(null);
-      try {
-        await saveAnnotations();
-        setHasUnsavedChanges(false);
-        setSaveStatus("saved");
-      } catch (error: any) {
-        setActionError(formatError(error));
-        setSaveStatus("error");
-      } finally {
-        setIsAutosaving(false);
-        timer = null;
-      }
-    }, 800);
-
-    return () => {
-      if (timer) {
-        window.clearTimeout(timer);
-      }
-    };
-  }, [history.present.tokens, saveAnnotations, t]);
-
-  const lastEmittedStatus = useRef<SaveStatus | null>(null);
-  useEffect(() => {
-    const next: SaveStatus = { state: saveStatus, unsaved: hasUnsavedChanges };
-    if (
-      lastEmittedStatus.current?.state !== next.state ||
-      lastEmittedStatus.current?.unsaved !== next.unsaved
-    ) {
-      lastEmittedStatus.current = next;
-      onSaveStatusChange?.(next);
-    }
-  }, [saveStatus, hasUnsavedChanges, onSaveStatusChange, lastDecision]);
+  const { saveAnnotations } = useSaveController({
+    tokens: history.present.tokens,
+    buildAnnotationsPayload,
+    post,
+    textId,
+    serverAnnotationVersion,
+    setServerAnnotationVersion,
+    annotationIdMap,
+    lastSavedSignatureRef,
+    formatError,
+    setActionError,
+    onSaveStatusChange,
+    statusTrigger: lastDecision,
+  });
 
   useEffect(() => {
     window.localStorage.setItem(

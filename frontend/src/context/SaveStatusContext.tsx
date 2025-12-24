@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState } from "react";
 
-import { SaveStatus } from "../components/TokenEditor";
+import { SaveStatus } from "../types";
 
 type SaveStatusContextValue = {
   status: SaveStatus | null;

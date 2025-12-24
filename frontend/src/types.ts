@@ -26,6 +26,8 @@ export interface AnnotationSavePayload {
   deleted_ids?: number[];
 }
 
+export type SaveStatus = { state: "idle" | "saving" | "saved" | "error"; unsaved: boolean };
+
 export type TokenId = string;
 
 export interface BaseToken {

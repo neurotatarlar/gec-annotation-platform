@@ -56,6 +56,13 @@ export type Operation = {
   moveTo?: number;
 };
 
+export type CorrectionCardLite = {
+  id: string;
+  rangeStart: number;
+  rangeEnd: number;
+  markerId: string | null;
+};
+
 // Reducer actions. Most UI-specific data (like selection range) is provided in payload.
 type Action =
   | { type: "INIT_FROM_TEXT"; text: string }
@@ -315,6 +322,59 @@ export const findGroupRangeForTokens = (tokens: Token[], idx: number): [number, 
   while (l - 1 >= 0 && tokens[l - 1]?.groupId === tok.groupId) l -= 1;
   while (r + 1 < tokens.length && tokens[r + 1]?.groupId === tok.groupId) r += 1;
   return [l, r];
+};
+
+export const deriveCorrectionCards = (tokens: Token[], moveMarkers: MoveMarker[]): CorrectionCardLite[] => {
+  const movePlaceholderIndices = new Set(moveMarkers.map((m) => m.fromStart));
+  const moveDestIndices = new Set<number>();
+  moveMarkers.forEach((m) => {
+    for (let i = m.toStart; i <= m.toEnd; i += 1) {
+      moveDestIndices.add(i);
+    }
+  });
+  const visited = new Set<number>();
+
+  const tokenCards = tokens
+    .map((tok, idx) => {
+      if (visited.has(idx)) return null;
+      if (!tok.previousTokens?.length) return null;
+      if (movePlaceholderIndices.has(idx)) return null;
+      if (moveDestIndices.has(idx)) return null;
+      const [rangeStart, rangeEnd] = findGroupRangeForTokens(tokens, idx);
+      for (let i = rangeStart; i <= rangeEnd; i += 1) visited.add(i);
+      return {
+        id: tok.groupId ?? tok.id,
+        rangeStart,
+        rangeEnd,
+        markerId: null,
+      };
+    })
+    .filter(Boolean) as CorrectionCardLite[];
+
+  const moveCards = moveMarkers.map((marker) => ({
+    id: marker.id,
+    rangeStart: marker.toStart,
+    rangeEnd: marker.toEnd,
+    markerId: marker.id,
+  }));
+
+  return [...tokenCards, ...moveCards];
+};
+
+export const deriveCorrectionByIndex = (cards: CorrectionCardLite[]): Map<number, string> => {
+  const map = new Map<number, string>();
+  cards.forEach((card) => {
+    for (let i = card.rangeStart; i <= card.rangeEnd; i += 1) {
+      map.set(i, card.id);
+    }
+  });
+  return map;
+};
+
+export const indexMoveMarkersById = (moveMarkers: MoveMarker[]): Map<string, MoveMarker> => {
+  const map = new Map<string, MoveMarker>();
+  moveMarkers.forEach((m) => map.set(m.id, m));
+  return map;
 };
 
 // Detect the placeholder token we create for insertions (text empty + previous empty marker).
@@ -1388,7 +1448,7 @@ export const buildM2Preview = ({
 }: {
   originalTokens: Token[];
   tokens: Token[];
-  correctionCards?: Array<{ id: string; rangeStart: number; rangeEnd: number; original: string; updated: string }>;
+  correctionCards?: CorrectionCardLite[];
   correctionTypeMap?: Record<string, number | null | undefined>;
   correctionByIndex?: Map<number, string>;
   resolveTypeLabel?: (typeId: number) => string | null;
