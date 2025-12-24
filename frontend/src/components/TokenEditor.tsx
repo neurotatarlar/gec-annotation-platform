@@ -518,7 +518,7 @@ export const TokenEditor: React.FC<{
             groupId,
             moveId,
             selected: false,
-            previousTokens: cloneTokens(sourceHistory),
+            previousTokens: [makeEmptyPlaceholder([])],
           }));
           typeMap[moveId] = cardType;
           const destIdx = Math.max(0, Math.min(working.length, moveTo + offset));
@@ -1586,6 +1586,19 @@ export const TokenEditor: React.FC<{
           overflow: "visible",
         }}
       >
+        <defs>
+          <marker
+            id="move-arrowhead"
+            markerWidth="6"
+            markerHeight="6"
+            refX="5"
+            refY="3"
+            orient="auto"
+            markerUnits="strokeWidth"
+          >
+            <path d="M0,0 L6,3 L0,6 Z" fill="rgba(94,234,212,0.85)" />
+          </marker>
+        </defs>
         <line
           x1={x1}
           y1={y1}
@@ -1595,6 +1608,7 @@ export const TokenEditor: React.FC<{
           strokeWidth={1.5}
           strokeDasharray="2 4"
           strokeLinecap="round"
+          markerEnd="url(#move-arrowhead)"
         />
       </svg>
     );

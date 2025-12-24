@@ -516,7 +516,6 @@ const applyOperations = (originalTokens: Token[], operations: Operation[]): { to
       const removeCount = Math.max(0, op.end - op.start + 1);
       const sourceLeadingSpace = sourceIdx === 0 ? false : working[sourceIdx]?.spaceBefore !== false;
       const srcSlice = working.slice(sourceIdx, sourceIdx + removeCount);
-      const historyTokens = buildHistoryTokensForSpan(originalTokens, op.start, op.end);
       const fallbackTokens = buildTokensFromFragments(op.after, "", sourceLeadingSpace);
       const sourceHistory = srcSlice.length > 0 ? cloneTokens(srcSlice) : cloneTokens(fallbackTokens);
       const placeholder = {
@@ -529,13 +528,14 @@ const applyOperations = (originalTokens: Token[], operations: Operation[]): { to
       working = [...working.slice(0, sourceIdx), placeholder, ...working.slice(sourceIdx + removeCount)];
       offset += 1 - removeCount;
 
+      const destHistory = [makeEmptyPlaceholder([])];
       const moveTokens = buildTokensFromFragments(op.after, "", undefined).map((tok, idx) => ({
         ...tok,
         id: `${op.id}-${idx}`,
         groupId: op.id,
         moveId: op.id,
         selected: false,
-        previousTokens: cloneTokens(historyTokens),
+        previousTokens: cloneTokens(destHistory),
       }));
       const destIdx = Math.max(0, Math.min(working.length, moveTo + offset));
       if (moveTokens.length) {

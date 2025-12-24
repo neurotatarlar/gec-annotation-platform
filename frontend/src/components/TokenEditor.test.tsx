@@ -1518,8 +1518,8 @@ describe("TokenEditor view toggles", () => {
       .filter((t) => t && t !== "↺") as string[];
     expect(chips).toContain("brave");
     expect(chips.join(" ")).toBe("hello ⬚ new world brave");
-    // Placeholder should be rendered for the source location.
-    expect(within(corrected).getAllByText("⬚").length).toBeGreaterThan(0);
+    // Placeholder should be rendered for the source location and destination history.
+    expect(within(corrected).getAllByText("⬚").length).toBeGreaterThan(1);
   });
 
   it("hydrates multi-token moves with placeholder and moved group", async () => {
@@ -1562,7 +1562,7 @@ describe("TokenEditor view toggles", () => {
       .map((c) => c.textContent?.trim())
       .filter((t) => t && t !== "↺") as string[];
     expect(chips.join(" ")).toBe("one ⬚ four five two three");
-    expect(within(corrected).getAllByText("⬚").length).toBeGreaterThan(0);
+    expect(within(corrected).getAllByText("⬚").length).toBeGreaterThan(1);
   });
 
   it("hydrates server edits with literal punctuation spacing", async () => {
