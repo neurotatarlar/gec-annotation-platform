@@ -1,5 +1,5 @@
 problem on setting page
-case with 2 tokens edited in place
 
-
-warning in testsвә
+warning in tests
+deleting already deleted tokens + new tokens drop some tokens from rendering
+ctrl + z should work for in tatr layout as well
