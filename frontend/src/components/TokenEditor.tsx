@@ -1617,6 +1617,49 @@ export const TokenEditor: React.FC<{
     );
   })();
 
+  const getDropIndexFromPoint = useCallback(
+    (clientX: number, clientY: number) => {
+      const items = tokens
+        .map((tok, idx) => {
+          const el = tokenRefs.current[tok.id];
+          if (!el) return null;
+          const rect = el.getBoundingClientRect();
+          if (!Number.isFinite(rect.left) || (!rect.width && !rect.height)) return null;
+          return { idx, rect };
+        })
+        .filter(Boolean) as Array<{ idx: number; rect: DOMRect }>;
+      if (!items.length) return null;
+      items.sort((a, b) => a.rect.top - b.rect.top || a.rect.left - b.rect.left);
+      const rowTolerance = 6;
+      const rows: Array<{ top: number; bottom: number; items: typeof items }> = [];
+      items.forEach((item) => {
+        const row = rows.find((r) => Math.abs(item.rect.top - r.top) <= rowTolerance);
+        if (row) {
+          row.items.push(item);
+          row.top = Math.min(row.top, item.rect.top);
+          row.bottom = Math.max(row.bottom, item.rect.bottom);
+        } else {
+          rows.push({ top: item.rect.top, bottom: item.rect.bottom, items: [item] });
+        }
+      });
+      let targetRow = rows.find((r) => clientY >= r.top - rowTolerance && clientY <= r.bottom + rowTolerance);
+      if (!targetRow) {
+        targetRow = rows.reduce((best, row) => {
+          const bestCenter = (best.top + best.bottom) / 2;
+          const rowCenter = (row.top + row.bottom) / 2;
+          return Math.abs(clientY - rowCenter) < Math.abs(clientY - bestCenter) ? row : best;
+        }, rows[0]);
+      }
+      const rowItems = [...targetRow.items].sort((a, b) => a.rect.left - b.rect.left);
+      for (const item of rowItems) {
+        const mid = item.rect.left + item.rect.width / 2;
+        if (clientX < mid) return item.idx;
+      }
+      return rowItems[rowItems.length - 1].idx + 1;
+    },
+    [tokens]
+  );
+
   const toolbarButton = (label: string, onClick: () => void, disabled?: boolean, hotkey?: string, icon?: string) => (
     <button
       style={{
@@ -2096,6 +2139,7 @@ export const TokenEditor: React.FC<{
           rowRef={tokenRowRef}
           hoverOverlay={moveHoverOverlay}
           onHoverMove={handleHoverMove}
+          getDropIndexFromPoint={getDropIndexFromPoint}
         />
         <ErrorTypePanel
           groupedErrorTypes={groupedErrorTypes}
@@ -2202,6 +2246,7 @@ type TokenRowProps = {
   rowRef: React.RefObject<HTMLDivElement>;
   hoverOverlay?: React.ReactNode;
   onHoverMove?: (moveId: string | null) => void;
+  getDropIndexFromPoint?: (clientX: number, clientY: number) => number | null;
 };
 
 const TokenRow: React.FC<TokenRowProps> = ({
@@ -2214,12 +2259,17 @@ const TokenRow: React.FC<TokenRowProps> = ({
   rowRef,
   hoverOverlay,
   onHoverMove,
+  getDropIndexFromPoint,
 }) => (
   <div
     data-testid="corrected-panel"
     style={{ ...tokenRowStyleBase, gap: Math.max(0, tokenGap) }}
     onDragOver={(e) => {
       e.preventDefault();
+      if (getDropIndexFromPoint) {
+        const idx = getDropIndexFromPoint(e.clientX, e.clientY);
+        if (idx !== null) onSetDropTarget(idx);
+      }
     }}
     onDrop={(e) => {
       e.preventDefault();

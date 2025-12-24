@@ -1,6 +1,5 @@
 problem on setting page
-
 deleting already deleted tokens + new tokens drop some tokens from rendering
-ctrl + z should work for in tatr layout as well
 problem with whitespaces on in-place editions in case of punctuatuon marks
-moving already move tokens
+moving already moved tokens
+further simplification
