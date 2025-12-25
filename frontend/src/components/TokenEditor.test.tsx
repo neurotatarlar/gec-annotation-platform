@@ -98,6 +98,44 @@ const renderEditor = (initialText: string, opts?: { getImpl?: (url: string) => P
   );
 };
 
+const stubTokenRects = (container: HTMLElement) => {
+  const tokenNodes = Array.from(container.querySelectorAll("[data-token-index]")) as HTMLElement[];
+  tokenNodes.forEach((node) => {
+    const idx = Number(node.dataset.tokenIndex ?? 0);
+    node.getBoundingClientRect = () =>
+      ({
+        left: idx * 20,
+        right: idx * 20 + 10,
+        top: 0,
+        bottom: 10,
+        width: 10,
+        height: 10,
+        x: idx * 20,
+        y: 0,
+        toJSON: () => ({}),
+      }) as DOMRect;
+  });
+};
+
+const stubDropRects = (container: HTMLElement) => {
+  const gapNodes = Array.from(container.querySelectorAll("[data-drop-index]")) as HTMLElement[];
+  gapNodes.forEach((node) => {
+    const idx = Number(node.dataset.dropIndex ?? 0);
+    node.getBoundingClientRect = () =>
+      ({
+        left: idx * 20 - 5,
+        right: idx * 20 + 5,
+        top: 0,
+        bottom: 10,
+        width: 10,
+        height: 10,
+        x: idx * 20 - 5,
+        y: 0,
+        toJSON: () => ({}),
+      }) as DOMRect;
+  });
+};
+
 const initState = (text = "hello world"): EditorHistoryState =>
   tokenEditorReducer(createInitialHistoryState(), { type: "INIT_FROM_TEXT", text });
 
@@ -1179,39 +1217,14 @@ describe("revert clears selection", () => {
     await user.click(six);
     await user.click(eight, { ctrlKey: true });
 
-    const dataTransfer = {
-      setData: vi.fn(),
-      getData: vi.fn(),
-      setDragImage: vi.fn(),
-      dropEffect: "move",
-      effectAllowed: "move",
-    };
-
-    await act(async () => {
-      fireEvent.dragStart(eight, { dataTransfer });
-    });
-
     const corrected = await screen.findByTestId("corrected-panel");
-    const tokenNodes = Array.from(corrected.querySelectorAll("[data-token-index]")) as HTMLElement[];
-    tokenNodes.forEach((node) => {
-      const idx = Number(node.dataset.tokenIndex ?? 0);
-      node.getBoundingClientRect = () =>
-        ({
-          left: idx * 20,
-          right: idx * 20 + 10,
-          top: 0,
-          bottom: 10,
-          width: 10,
-          height: 10,
-          x: idx * 20,
-          y: 0,
-          toJSON: () => ({}),
-        }) as DOMRect;
-    });
+    stubTokenRects(corrected);
+    stubDropRects(corrected);
 
     await act(async () => {
-      fireEvent.dragOver(corrected, { dataTransfer, clientX: 75, clientY: 5 });
-      fireEvent.drop(corrected, { dataTransfer, clientX: 75, clientY: 5 });
+      fireEvent.mouseDown(eight, { clientX: 150, clientY: 5 });
+      fireEvent.mouseMove(window, { clientX: 80, clientY: 5 });
+      fireEvent.mouseUp(window, { clientX: 80, clientY: 5 });
     });
 
     await waitFor(() => {
@@ -1220,6 +1233,37 @@ describe("revert clears selection", () => {
         .map((node) => node.textContent?.trim() ?? "")
         .filter((text) => text && text !== "⬚");
       expect(texts).toEqual(["one", "two", "three", "four", "six", "seven", "eight", "five"]);
+    });
+  });
+
+  it("drops left-to-right multi-token moves at the intended caret", async () => {
+    mockGet.mockReset();
+    mockPost.mockReset();
+    localStorage.clear();
+    await renderEditor("one two three four five six seven eight");
+    const user = userEvent.setup();
+
+    const two = await screen.findByRole("button", { name: "two" });
+    const three = screen.getByRole("button", { name: "three" });
+    await user.click(two);
+    await user.click(three, { ctrlKey: true });
+
+    const corrected = await screen.findByTestId("corrected-panel");
+    stubTokenRects(corrected);
+    stubDropRects(corrected);
+
+    await act(async () => {
+      fireEvent.mouseDown(three, { clientX: 50, clientY: 5 });
+      fireEvent.mouseMove(window, { clientX: 120, clientY: 5 });
+      fireEvent.mouseUp(window, { clientX: 120, clientY: 5 });
+    });
+
+    await waitFor(() => {
+      const tokenNodes = Array.from(corrected.querySelectorAll("[data-token-index]")) as HTMLElement[];
+      const texts = tokenNodes
+        .map((node) => node.textContent?.trim() ?? "")
+        .filter((text) => text && text !== "⬚");
+      expect(texts).toEqual(["one", "four", "five", "six", "two", "three", "seven", "eight"]);
     });
   });
 

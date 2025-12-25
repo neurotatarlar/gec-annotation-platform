@@ -6,7 +6,6 @@ import { SelectionRange } from "./useEditorUIState";
 
 type UseTokenDragArgs = {
   tokens: Token[];
-  selectedIndices: number[];
   selectedSet: Set<number>;
   hasSelection: boolean;
   selection: SelectionRange;
@@ -16,11 +15,11 @@ type UseTokenDragArgs = {
   endDrag: () => void;
   endEdit: () => void;
   setDropTarget: (index: number | null) => void;
+  getDropIndexFromPoint: (clientX: number, clientY: number) => number | null;
 };
 
 export const useTokenDrag = ({
   tokens,
-  selectedIndices,
   selectedSet,
   hasSelection,
   selection,
@@ -30,11 +29,27 @@ export const useTokenDrag = ({
   endDrag,
   endEdit,
   setDropTarget,
+  getDropIndexFromPoint,
 }: UseTokenDragArgs) => {
-  const dragInfoRef = useRef<{ fromIndex: number; count: number } | null>(null);
+  const dragInfoRef = useRef<{
+    fromIndex: number;
+    count: number;
+    startX: number;
+    startY: number;
+    active: boolean;
+    lastIndex: number | null;
+  } | null>(null);
+  const suppressClickRef = useRef(false);
 
-  const handleDragStart = useCallback(
-    (index: number, evt: React.DragEvent) => {
+  const consumeClickSuppression = useCallback(() => {
+    const suppressed = suppressClickRef.current;
+    suppressClickRef.current = false;
+    return suppressed;
+  }, []);
+
+  const handleMouseDown = useCallback(
+    (index: number, evt: React.MouseEvent, preserveSelection: boolean) => {
+      if (evt.button !== 0) return;
       const expandGroup = (idx: number): [number, number] => {
         const tok = tokens[idx];
         if (!tok?.groupId) return [idx, idx];
@@ -53,7 +68,7 @@ export const useTokenDrag = ({
       rangeStart = Math.min(rangeStart, gStart);
       rangeEnd = Math.max(rangeEnd, gEnd);
 
-      if (!hasSelection || !selectedSet.has(index)) {
+      if (!preserveSelection && (!hasSelection || !selectedSet.has(index))) {
         // If nothing (or other block) is selected, start with the group selection.
         setSelection({ start: rangeStart, end: rangeEnd });
       }
@@ -69,55 +84,69 @@ export const useTokenDrag = ({
       }
 
       const count = rangeEnd - rangeStart + 1;
-      dragInfoRef.current = { fromIndex: rangeStart, count };
-      startDrag();
-      // Required by some browsers to allow drop.
-      evt.dataTransfer.setData("text/plain", "moving-tokens");
-      // Ghost preview with selected text
-      const ghost = document.createElement("div");
-      ghost.textContent = selectedIndices.map((i) => tokens[i]?.text).filter(Boolean).join(" ");
-      ghost.style.position = "absolute";
-      ghost.style.top = "-9999px";
-      ghost.style.left = "-9999px";
-      ghost.style.padding = "6px 10px";
-      ghost.style.background = "rgba(30,41,59,0.9)";
-      ghost.style.color = "#e2e8f0";
-      ghost.style.border = "1px solid rgba(148,163,184,0.6)";
-      ghost.style.borderRadius = "10px";
-      document.body.appendChild(ghost);
-      // Use the created element as drag image
-      evt.dataTransfer.setDragImage(ghost, 0, 0);
-      setTimeout(() => document.body.removeChild(ghost), 0);
+      dragInfoRef.current = {
+        fromIndex: rangeStart,
+        count,
+        startX: evt.clientX,
+        startY: evt.clientY,
+        active: false,
+        lastIndex: null,
+      };
+
+      const handleMouseMove = (moveEvent: MouseEvent) => {
+        const info = dragInfoRef.current;
+        if (!info) return;
+        const dx = moveEvent.clientX - info.startX;
+        const dy = moveEvent.clientY - info.startY;
+        if (!info.active) {
+          if (Math.hypot(dx, dy) < 4) return;
+          info.active = true;
+          suppressClickRef.current = true;
+          startDrag();
+        }
+        const idx = getDropIndexFromPoint(moveEvent.clientX, moveEvent.clientY);
+        if (idx !== null) {
+          info.lastIndex = idx;
+          setDropTarget(idx);
+        }
+      };
+
+      const handleMouseUp = (upEvent: MouseEvent) => {
+        const info = dragInfoRef.current;
+        dragInfoRef.current = null;
+        window.removeEventListener("mousemove", handleMouseMove);
+        window.removeEventListener("mouseup", handleMouseUp);
+        setDropTarget(null);
+        if (!info || !info.active) return;
+        endDrag();
+        const dropIndex =
+          getDropIndexFromPoint(upEvent.clientX, upEvent.clientY) ?? info.lastIndex ?? tokens.length;
+        const start = info.fromIndex;
+        const end = info.fromIndex + info.count - 1;
+        if (dropIndex >= start && dropIndex <= end + 1) return;
+        const clampedTarget = Math.max(0, Math.min(tokens.length, dropIndex));
+        dispatch({ type: "MOVE_SELECTED_BY_DRAG", fromIndex: info.fromIndex, toIndex: clampedTarget, count: info.count });
+        setSelection({ start: null, end: null });
+        endEdit();
+      };
+
+      window.addEventListener("mousemove", handleMouseMove);
+      window.addEventListener("mouseup", handleMouseUp);
     },
-    [hasSelection, selectedIndices, selectedSet, selection, setSelection, startDrag, tokens]
+    [
+      dispatch,
+      endDrag,
+      endEdit,
+      getDropIndexFromPoint,
+      hasSelection,
+      selectedSet,
+      selection,
+      setDropTarget,
+      setSelection,
+      startDrag,
+      tokens.length,
+    ]
   );
 
-  const handleDrop = useCallback(
-    (targetIndex: number) => {
-      const info = dragInfoRef.current;
-      dragInfoRef.current = null;
-      setDropTarget(null);
-      endDrag();
-      if (!info) return;
-      const { fromIndex, count } = info;
-      const start = fromIndex;
-      const end = fromIndex + count - 1;
-      // Ignore drops inside the same block (no movement).
-      if (targetIndex >= start && targetIndex <= end + 1) return;
-      const clampedTarget = Math.max(0, Math.min(tokens.length, targetIndex));
-      dispatch({ type: "MOVE_SELECTED_BY_DRAG", fromIndex, toIndex: clampedTarget, count });
-      // After moving, clear selection so the moved tokens don't show a background.
-      setSelection({ start: null, end: null });
-      endEdit();
-    },
-    [dispatch, endDrag, endEdit, setDropTarget, setSelection, tokens.length]
-  );
-
-  const handleDragEnd = useCallback(() => {
-    dragInfoRef.current = null;
-    setDropTarget(null);
-    endDrag();
-  }, [endDrag, setDropTarget]);
-
-  return { handleDragStart, handleDrop, handleDragEnd };
+  return { handleMouseDown, consumeClickSuppression };
 };
