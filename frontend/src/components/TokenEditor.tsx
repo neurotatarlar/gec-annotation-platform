@@ -713,6 +713,15 @@ export const TokenEditor: React.FC<{
     tokens,
     setSelection,
   });
+  const revertMove = useCallback(
+    (moveId: string) => {
+      markSkipAutoSelect();
+      setSelection({ start: null, end: null });
+      endEdit();
+      dispatch({ type: "REVERT_MOVE", moveId });
+    },
+    [dispatch, endEdit, markSkipAutoSelect, setSelection]
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -1422,7 +1431,8 @@ export const TokenEditor: React.FC<{
       );
       const cardId = moveId ?? correctionByIndex.get(group.start) ?? correctionByIndex.get(group.end);
       const typeId = cardId ? correctionTypeMap[cardId] ?? null : null;
-      const typeObj = typeId ? errorTypeById.get(typeId) ?? null : null;
+      const resolvedType = typeId ? errorTypeById.get(typeId) ?? null : null;
+      const typeObj = isMoveGroup && !isMoveDestination ? null : resolvedType;
       const badgeText = typeObj ? getErrorTypeLabel(typeObj, locale) : "";
       const badgeColor = typeObj?.default_color ?? "#94a3b8";
       const badgeFontSize = Math.max(8, tokenFontSize * 0.45);
@@ -1441,6 +1451,7 @@ export const TokenEditor: React.FC<{
       });
       const showBorder = hasHistory || isMoveGroup;
       const showHistoryTokens = hasHistory && !isMoveGroup;
+      const showUndo = (hasHistory && !isMoveGroup) || (isMoveDestination && moveId);
       const isMoveHover = Boolean(moveId && hoveredMoveId === moveId);
 
       const groupPadY = 0;
@@ -1518,14 +1529,18 @@ export const TokenEditor: React.FC<{
               marginBottom: Math.max(0, tokenFontSize * 0.03),
             }}
           >
-            {hasHistory && !isMoveGroup && (
+            {showUndo && (
               <button
                 style={groupUndoButtonStyle}
                 onClick={(e) => {
                   e.stopPropagation();
-                  handleRevert(group.start, group.end);
-                  setSelection({ start: null, end: null });
-                  endEdit();
+                  if (isMoveDestination && moveId) {
+                    revertMove(moveId);
+                  } else {
+                    handleRevert(group.start, group.end);
+                    setSelection({ start: null, end: null });
+                    endEdit();
+                  }
                 }}
                 title={t("tokenEditor.undo")}
               >

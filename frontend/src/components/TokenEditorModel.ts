@@ -74,6 +74,7 @@ type Action =
   | { type: "MERGE_WITH_NEXT"; index: number }
   | { type: "CANCEL_INSERT_PLACEHOLDER"; range: [number, number] }
   | { type: "CLEAR_ALL" }
+  | { type: "REVERT_MOVE"; moveId: string }
   | { type: "REVERT_CORRECTION"; rangeStart: number; rangeEnd: number }
   | { type: "UNDO" }
   | { type: "REDO" };
@@ -908,6 +909,36 @@ const tokenReducer = (state: EditorHistoryState, action: Action): EditorHistoryS
       tokens.splice(insertionIndex, 0, ...movedTokens);
 
       const next: EditorPresentState = { ...state.present, tokens };
+      return pushPresent(state, next);
+    }
+    case "REVERT_MOVE": {
+      const tokens = cloneTokens(state.present.tokens);
+      const markers = deriveMoveMarkers(tokens);
+      const marker = markers.find((m) => m.id === action.moveId);
+      if (!marker) return state;
+
+      const destLen = marker.toEnd - marker.toStart + 1;
+      tokens.splice(marker.toStart, destLen);
+
+      let placeholderIndex = marker.fromStart;
+      if (marker.toStart < marker.fromStart) {
+        placeholderIndex -= destLen;
+      }
+      const placeholderSpan = marker.fromEnd - marker.fromStart + 1;
+      const placeholder = tokens.slice(placeholderIndex, placeholderIndex + placeholderSpan).find((t) => t.moveId === action.moveId && t.kind === "empty");
+      const history =
+        placeholder?.previousTokens?.length
+          ? dedupeTokens(unwindToOriginal(cloneTokens(placeholder.previousTokens))).map((t) => ({
+              ...t,
+              selected: false,
+              previousTokens: undefined,
+              moveId: undefined,
+              groupId: undefined,
+            }))
+          : [];
+      tokens.splice(placeholderIndex, placeholderSpan, ...history);
+      const cleaned = dropRedundantEmpties(tokens);
+      const next: EditorPresentState = { ...state.present, tokens: cleaned };
       return pushPresent(state, next);
     }
     case "INSERT_TOKEN_BEFORE_SELECTED": {
