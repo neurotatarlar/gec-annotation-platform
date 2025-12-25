@@ -17,23 +17,12 @@ export type Token = {
   previousTokens?: Token[];
   groupId?: string;
   origin?: "inserted";
-  moveId?: string;
-};
-
-// MoveMarker helps visualize a drag move (old position -> new position).
-export type MoveMarker = {
-  id: string;
-  fromStart: number;
-  fromEnd: number;
-  toStart: number;
-  toEnd: number;
 };
 
 // Present (undoable) state: originalTokens are read-only, tokens are editable.
 export type EditorPresentState = {
   originalTokens: Token[];
   tokens: Token[];
-  moveMarkers: MoveMarker[];
   operations: Operation[];
 };
 
@@ -52,15 +41,12 @@ export type Operation = {
   start: number;
   end: number;
   after: TokenFragmentPayload[];
-  moveFrom?: number;
-  moveTo?: number;
 };
 
 export type CorrectionCardLite = {
   id: string;
   rangeStart: number;
   rangeEnd: number;
-  markerId: string | null;
 };
 
 // Reducer actions. Most UI-specific data (like selection range) is provided in payload.
@@ -75,7 +61,7 @@ type Action =
   | { type: "MERGE_WITH_NEXT"; index: number }
   | { type: "CANCEL_INSERT_PLACEHOLDER"; range: [number, number] }
   | { type: "CLEAR_ALL" }
-  | { type: "REVERT_CORRECTION"; rangeStart: number; rangeEnd: number; markerId: string | null }
+  | { type: "REVERT_CORRECTION"; rangeStart: number; rangeEnd: number }
   | { type: "UNDO" }
   | { type: "REDO" };
 
@@ -263,7 +249,6 @@ export const cloneTokens = (items: Token[]) =>
     ...t,
     previousTokens: t.previousTokens?.map((p) => ({ ...p })),
     origin: t.origin,
-    moveId: t.moveId,
   }));
 
 export const makeEmptyPlaceholder = (previousTokens: Token[]): Token => ({
@@ -336,7 +321,6 @@ export const deriveCorrectionCards = (tokens: Token[]): CorrectionCardLite[] => 
         id: tok.groupId ?? tok.id,
         rangeStart,
         rangeEnd,
-        markerId: null,
       };
     })
     .filter(Boolean) as CorrectionCardLite[];
@@ -352,11 +336,6 @@ export const deriveCorrectionByIndex = (cards: CorrectionCardLite[]): Map<number
   return map;
 };
 
-export const indexMoveMarkersById = (moveMarkers: MoveMarker[]): Map<string, MoveMarker> => {
-  const map = new Map<string, MoveMarker>();
-  moveMarkers.forEach((m) => map.set(m.id, m));
-  return map;
-};
 
 // Detect the placeholder token we create for insertions (text empty + previous empty marker).
 export const isInsertPlaceholder = (tokens: Token[]) =>
@@ -410,7 +389,7 @@ const pushPresent = (state: EditorHistoryState, nextPresent: EditorPresentState)
 
 export const createInitialHistoryState = (): EditorHistoryState => ({
   past: [],
-  present: { originalTokens: [], tokens: [], moveMarkers: [], operations: [] },
+  present: { originalTokens: [], tokens: [], operations: [] },
   future: [],
 });
 
@@ -423,7 +402,6 @@ const buildHistoryTokensForSpan = (originalTokens: Token[], start: number, end: 
     selected: false,
     previousTokens: undefined,
     groupId: undefined,
-    moveId: undefined,
     baseIndex: tok.baseIndex,
   }));
 };
@@ -473,13 +451,12 @@ const buildTokensFromFragments = (
   return built;
 };
 
-const applyOperations = (originalTokens: Token[], operations: Operation[]): { tokens: Token[]; moveMarkers: MoveMarker[] } => {
+const applyOperations = (originalTokens: Token[], operations: Operation[]): Token[] => {
   const baseTokens = cloneTokens(originalTokens).map((tok, idx) => ({
     ...tok,
     selected: false,
     previousTokens: undefined,
     groupId: undefined,
-    moveId: undefined,
     baseIndex: idx,
   }));
   let working = baseTokens;
@@ -539,30 +516,9 @@ const applyOperations = (originalTokens: Token[], operations: Operation[]): { to
     offset += newTokens.length - removeCount;
   });
 
-  return { tokens: working, moveMarkers: deriveMoveMarkers(working) };
+  return working;
 };
 
-// Build earliest-known originals for a block: if any token in the block has history, use the union of all histories;
-// otherwise fall back to unwinding the block itself.
-const buildOriginalHistoryForBlock = (block: Token[]): Token[] => {
-  const hasHistory = block.some((t) => t.previousTokens && t.previousTokens.length);
-  const source: Token[] = [];
-  if (hasHistory) {
-    block.forEach((tok) => {
-      if (tok.previousTokens && tok.previousTokens.length) {
-        source.push(...cloneTokens(tok.previousTokens));
-      }
-    });
-  } else {
-    source.push(...cloneTokens(block));
-  }
-  return dedupeTokens(unwindToOriginal(source))
-    .filter((t) => t.kind !== "empty")
-    .map((t) => ({ ...t, previousTokens: undefined, selected: false, groupId: undefined, moveId: undefined }));
-};
-
-// Derive move markers from tokens (so moves stay atomic even after other edits).
-export const deriveMoveMarkers = (_tokens: Token[]): MoveMarker[] => [];
 
 export const deriveOperationsFromTokens = (originalTokens: Token[], tokens: Token[]): Operation[] => {
   const originalIndexById = new Map<string, number>();
@@ -660,11 +616,10 @@ export const deriveOperationsFromTokens = (originalTokens: Token[], tokens: Toke
 };
 
 const buildPresentFromOperations = (originalTokens: Token[], operations: Operation[]): EditorPresentState => {
-  const { tokens, moveMarkers } = applyOperations(originalTokens, operations);
+  const tokens = applyOperations(originalTokens, operations);
   return {
     originalTokens: cloneTokens(originalTokens),
     tokens,
-    moveMarkers,
     operations: [...operations],
   };
 };
@@ -672,7 +627,6 @@ const buildPresentFromOperations = (originalTokens: Token[], operations: Operati
 const buildPresentWithDerivedOperations = (present: EditorPresentState): EditorPresentState => ({
   originalTokens: cloneTokens(present.originalTokens),
   tokens: cloneTokens(present.tokens),
-  moveMarkers: deriveMoveMarkers(present.tokens),
   operations: deriveOperationsFromTokens(present.originalTokens, present.tokens),
 });
 
@@ -718,7 +672,6 @@ const tokenReducer = (state: EditorHistoryState, action: Action): EditorHistoryS
       const present: EditorPresentState = {
         originalTokens: cloneTokens(original),
         tokens: cloneTokens(original),
-        moveMarkers: deriveMoveMarkers(original),
       };
       return { past: [], present, future: [] };
     }
@@ -726,7 +679,6 @@ const tokenReducer = (state: EditorHistoryState, action: Action): EditorHistoryS
       const present: EditorPresentState = {
         originalTokens: cloneTokens(action.state.originalTokens),
         tokens: cloneTokens(action.state.tokens),
-        moveMarkers: [...action.state.moveMarkers],
       };
       return { past: [], present, future: [] };
     }
@@ -734,32 +686,6 @@ const tokenReducer = (state: EditorHistoryState, action: Action): EditorHistoryS
       let [start, end] = action.range;
       if (start < 0 || end < start || start >= state.present.tokens.length) return state;
       const tokens = cloneTokens(state.present.tokens);
-      const markersNow = deriveMoveMarkers(tokens);
-      // If selection intersects a move marker (either placeholder or destination), revert the whole move atomically.
-      const hitMarker = markersNow.find(
-        (m) =>
-          (start <= m.fromEnd && end >= m.fromStart) ||
-          (start <= m.toEnd && end >= m.toStart)
-      );
-      if (hitMarker) {
-        const placeholderIndex = hitMarker.fromStart;
-        const placeholder = tokens[placeholderIndex];
-        tokens.splice(placeholderIndex, 1);
-        const blockStart = placeholderIndex < hitMarker.toStart ? hitMarker.toStart - 1 : hitMarker.toStart;
-        const blockLen = hitMarker.toEnd - hitMarker.toStart + 1;
-        tokens.splice(blockStart, blockLen);
-        const restore =
-          placeholder?.previousTokens?.length
-            ? buildOriginalHistoryForBlock(placeholder.previousTokens)
-            : [makeEmptyPlaceholder([])];
-        tokens.splice(placeholderIndex, 0, ...restore);
-        const next: EditorPresentState = {
-          ...state.present,
-          tokens: dropRedundantEmpties(tokens),
-          moveMarkers: state.present.moveMarkers.filter((m) => m.id !== hitMarker.id),
-        };
-        return pushPresent(state, next);
-      }
       // Expand selection to include the whole inserted group if selection intersects it.
       let expanded = true;
       while (expanded) {
@@ -830,7 +756,7 @@ const tokenReducer = (state: EditorHistoryState, action: Action): EditorHistoryS
       const allInserted = removed.every((t) => t.origin === "inserted");
       if (allInserted) {
         tokens.splice(start, removed.length);
-        const next: EditorPresentState = { ...state.present, tokens, moveMarkers: deriveMoveMarkers(tokens) };
+        const next: EditorPresentState = { ...state.present, tokens };
         return pushPresent(state, next);
       }
       // If selection contains a correction cluster (e.g., split) with history, restore the original tokens instead of adding ⬚.
@@ -844,13 +770,13 @@ const tokenReducer = (state: EditorHistoryState, action: Action): EditorHistoryS
         }));
         tokens.splice(start, removed.length, ...restore);
         const cleanedTokens = dropRedundantEmpties(tokens);
-        const next: EditorPresentState = { ...state.present, tokens: cleanedTokens, moveMarkers: deriveMoveMarkers(cleanedTokens) };
+        const next: EditorPresentState = { ...state.present, tokens: cleanedTokens };
         return pushPresent(state, next);
       }
       // If a single empty with no history, just remove it.
       if (removed.length === 1 && removed[0].kind === "empty" && !removed[0].previousTokens?.length) {
         tokens.splice(start, removed.length);
-        const next: EditorPresentState = { ...state.present, tokens, moveMarkers: deriveMoveMarkers(tokens) };
+        const next: EditorPresentState = { ...state.present, tokens };
         return pushPresent(state, next);
       }
       const previousTokens = dedupeTokens(removed.flatMap((t) => unwindToOriginal([t])).map((tok) => ({ ...tok, selected: false })));
@@ -860,7 +786,7 @@ const tokenReducer = (state: EditorHistoryState, action: Action): EditorHistoryS
       const placeholder = makeEmptyPlaceholder(previousTokens);
       placeholder.spaceBefore = leadingSpace;
       tokens.splice(start, removed.length, placeholder);
-      const next: EditorPresentState = { ...state.present, tokens, moveMarkers: deriveMoveMarkers(tokens) };
+      const next: EditorPresentState = { ...state.present, tokens };
       return pushPresent(state, next);
     }
     case "INSERT_TOKEN_BEFORE_SELECTED": {
@@ -879,7 +805,7 @@ const tokenReducer = (state: EditorHistoryState, action: Action): EditorHistoryS
         spaceBefore: leadingSpace,
       };
       tokens.splice(start, 0, inserted);
-      const next: EditorPresentState = { ...state.present, tokens, moveMarkers: deriveMoveMarkers(tokens) };
+      const next: EditorPresentState = { ...state.present, tokens };
       // Do NOT push to history yet; this is a transient insertion until user confirms.
       return { ...state, present: next, future: [] };
     }
@@ -899,7 +825,7 @@ const tokenReducer = (state: EditorHistoryState, action: Action): EditorHistoryS
         spaceBefore: leadingSpace,
       };
       tokens.splice(end + 1, 0, inserted);
-      const next: EditorPresentState = { ...state.present, tokens, moveMarkers: deriveMoveMarkers(tokens) };
+      const next: EditorPresentState = { ...state.present, tokens };
       // Do NOT push to history yet; this is a transient insertion until user confirms.
       return { ...state, present: next, future: [] };
     }
@@ -933,10 +859,6 @@ const tokenReducer = (state: EditorHistoryState, action: Action): EditorHistoryS
       if (newTokensRaw.length && sameTokenSequence(oldSlice, newTokensRaw)) {
         return state;
       }
-      const moveIdReuse =
-        oldSlice.length > 0 && oldSlice.every((tok) => tok.moveId === oldSlice[0].moveId)
-          ? oldSlice[0].moveId
-          : undefined;
       const existingGroupId =
         oldSlice.length > 0 && oldSlice.every((tok) => tok.groupId === oldSlice[0].groupId) ? oldSlice[0].groupId : null;
       const anchorExistingHistory =
@@ -954,22 +876,20 @@ const tokenReducer = (state: EditorHistoryState, action: Action): EditorHistoryS
           selected: false,
           previousTokens: undefined,
           groupId: undefined,
-          moveId: undefined,
         }));
         tokens.splice(start, oldSlice.length, ...restored);
         const cleaned = dropRedundantEmpties(tokens);
         const next: EditorPresentState = {
           ...state.present,
           tokens: cleaned,
-          moveMarkers: deriveMoveMarkers(cleaned),
         };
         return pushPresent(state, next);
       }
 
       const groupId = reuseHistory && existingGroupId ? existingGroupId : createId();
       let replacement: Token[] = newTokensRaw.length
-        ? cloneTokens(newTokensRaw).map((tok) => ({ ...tok, groupId, moveId: moveIdReuse }))
-        : [{ ...makeEmptyPlaceholder([]), moveId: moveIdReuse }];
+        ? cloneTokens(newTokensRaw).map((tok) => ({ ...tok, groupId }))
+        : [makeEmptyPlaceholder([])];
       if (oldSliceAllInserted) {
         replacement = replacement.map((tok) => ({ ...tok, origin: "inserted" }));
       }
@@ -985,7 +905,7 @@ const tokenReducer = (state: EditorHistoryState, action: Action): EditorHistoryS
         replacement[0].previousTokens = baseHistory;
       }
       tokens.splice(start, oldSlice.length, ...replacement);
-      const next: EditorPresentState = { ...state.present, tokens, moveMarkers: deriveMoveMarkers(tokens) };
+      const next: EditorPresentState = { ...state.present, tokens };
       if (oldSliceAllInserted) {
         // Do not record the transient empty insertion; push the pre-insert snapshot instead.
         const preInsertTokens = cloneTokens(state.present.tokens);
@@ -993,7 +913,6 @@ const tokenReducer = (state: EditorHistoryState, action: Action): EditorHistoryS
         const pastEntry: EditorPresentState = {
           ...state.present,
           tokens: preInsertTokens,
-          moveMarkers: deriveMoveMarkers(preInsertTokens),
         };
         return {
           past: [...state.past, pastEntry],
@@ -1016,7 +935,7 @@ const tokenReducer = (state: EditorHistoryState, action: Action): EditorHistoryS
         merged.origin = "inserted";
       }
       tokens.splice(start, slice.length, merged);
-      const nextState: EditorPresentState = { ...state.present, tokens, moveMarkers: deriveMoveMarkers(tokens) };
+      const nextState: EditorPresentState = { ...state.present, tokens };
       return pushPresent(state, nextState);
     }
     case "CLEAR_ALL": {
@@ -1024,43 +943,12 @@ const tokenReducer = (state: EditorHistoryState, action: Action): EditorHistoryS
       const present: EditorPresentState = {
         originalTokens: cloneTokens(original),
         tokens: cloneTokens(original),
-        moveMarkers: deriveMoveMarkers(original),
       };
       return pushPresent(state, present);
     }
     case "REVERT_CORRECTION": {
-      const { rangeStart, rangeEnd, markerId } = action;
+      const { rangeStart, rangeEnd } = action;
       const tokens = cloneTokens(state.present.tokens);
-      // Revert move correction.
-      if (markerId) {
-        const markersNow = deriveMoveMarkers(tokens);
-        const marker = markersNow.find((m) => m.id === markerId);
-        if (!marker) return state;
-        let placeholderIndex = marker.fromStart;
-        const blockStart = marker.toStart;
-        const blockLen = marker.toEnd - marker.toStart + 1;
-        // Remove moved block first to normalize indices.
-        const removed = tokens.splice(blockStart, blockLen);
-        if (blockStart < placeholderIndex) {
-          placeholderIndex -= blockLen;
-        }
-        const placeholder = tokens[placeholderIndex];
-        // remove placeholder
-        tokens.splice(placeholderIndex, 1);
-        const restore =
-          placeholder?.previousTokens?.length
-            ? buildOriginalHistoryForBlock(placeholder.previousTokens)
-            : [makeEmptyPlaceholder([])];
-        tokens.splice(placeholderIndex, 0, ...restore);
-        const cleanedTokens = dropRedundantEmpties(tokens);
-        const next: EditorPresentState = {
-          ...state.present,
-          tokens: cleanedTokens,
-          moveMarkers: deriveMoveMarkers(cleanedTokens).filter((m) => m.id !== markerId),
-        };
-        return pushPresent(state, next);
-      }
-
       // Revert standard correction by replacing range with previousTokens found in the anchor.
       const anchorIdx = tokens.findIndex(
         (tok, idx) =>
@@ -1087,7 +975,7 @@ const tokenReducer = (state: EditorHistoryState, action: Action): EditorHistoryS
         tokens.splice(rangeStart, rangeLen, ...replacement);
       }
       const cleaned = dropRedundantEmpties(tokens);
-      const next: EditorPresentState = { ...state.present, tokens: cleaned, moveMarkers: deriveMoveMarkers(cleaned) };
+      const next: EditorPresentState = { ...state.present, tokens: cleaned };
       return pushPresent(state, next);
     }
     case "MERGE_WITH_NEXT": {
@@ -1099,7 +987,7 @@ const tokenReducer = (state: EditorHistoryState, action: Action): EditorHistoryS
       const merged = buildMergedToken([current, nextToken]);
       if (!merged) return state;
       tokens.splice(action.index, 2, merged);
-      const nextState: EditorPresentState = { ...state.present, tokens, moveMarkers: deriveMoveMarkers(tokens) };
+      const nextState: EditorPresentState = { ...state.present, tokens };
       return pushPresent(state, nextState);
     }
     case "CANCEL_INSERT_PLACEHOLDER": {
@@ -1111,7 +999,7 @@ const tokenReducer = (state: EditorHistoryState, action: Action): EditorHistoryS
       );
       if (!allEmptyInserted) return state;
       tokens.splice(start, slice.length);
-      const next: EditorPresentState = { ...state.present, tokens, moveMarkers: deriveMoveMarkers(tokens) };
+      const next: EditorPresentState = { ...state.present, tokens };
       // Transient cleanup; do not push to history.
       return { ...state, present: next, future: [] };
     }
@@ -1147,7 +1035,7 @@ const reducer = (state: EditorHistoryState, action: Action): EditorHistoryState 
     return { past: [], present, future: [] };
   }
   if (action.type === "INIT_FROM_STATE") {
-    if (Array.isArray(action.state.operations)) {
+    if (Array.isArray(action.state.operations) && action.state.operations.length > 0) {
       const present = buildPresentFromOperations(action.state.originalTokens, action.state.operations);
       return { past: [], present, future: [] };
     }
@@ -1528,7 +1416,7 @@ export const buildAnnotationsPayloadStandalone = async ({
   correctionCards.forEach((card) => {
     const typeId = correctionTypeMap[card.id];
     if (!typeId) return;
-    const key = `${card.rangeStart}-${card.rangeEnd}-${card.markerId ?? "nomove"}`;
+    const key = `${card.rangeStart}-${card.rangeEnd}`;
     if (seenKeys.has(key)) return;
     seenKeys.add(key);
 

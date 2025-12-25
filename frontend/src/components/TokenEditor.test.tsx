@@ -647,7 +647,7 @@ describe("buildAnnotationsPayloadStandalone", () => {
   it("includes text token hash and carries annotation ids", async () => {
     const originalTokens = [baseToken("t1", "hello"), baseToken("t2", "world")];
     const tokens = [baseToken("t1", "hi"), baseToken("t2", "world")];
-    const correctionCards = [{ id: "card-1", rangeStart: 0, rangeEnd: 0, markerId: null }];
+    const correctionCards = [{ id: "card-1", rangeStart: 0, rangeEnd: 0 }];
     const correctionTypeMap = { "card-1": 7 };
     const annotationIdMap = new Map<string, number>([["0-0", 42]]);
 
@@ -672,7 +672,7 @@ describe("buildAnnotationsPayloadStandalone", () => {
   it("adds deleted_ids when includeDeletedIds is true", async () => {
     const originalTokens = tokenizeToTokens("hello world");
     const tokens = tokenizeToTokens("hi world");
-    const correctionCards = [{ id: "card-1", rangeStart: 0, rangeEnd: 0, markerId: null }];
+    const correctionCards = [{ id: "card-1", rangeStart: 0, rangeEnd: 0 }];
     const correctionTypeMap = { "card-1": 7 };
     const annotationIdMap = new Map<string, number>([
       ["0-0", 10],
@@ -1021,7 +1021,7 @@ describe("revert clears selection", () => {
       newText: "foo-bar",
     });
     const correctionCards = [
-      { id: "c1", rangeStart: 0, rangeEnd: 0, markerId: null },
+      { id: "c1", rangeStart: 0, rangeEnd: 0 },
     ];
     const correctionTypeMap = { c1: 1 };
     const payloads = await buildAnnotationsPayloadStandalone({
@@ -1381,7 +1381,7 @@ describe("TokenEditor view toggles", () => {
       initialText: "foobar zulu",
       tokens: edited.present.tokens,
       originalTokens: edited.present.originalTokens,
-      correctionCards: [{ id: "c1", rangeStart: 0, rangeEnd: 1, markerId: null }],
+      correctionCards: [{ id: "c1", rangeStart: 0, rangeEnd: 1 }],
       correctionTypeMap: { c1: 1 },
     });
     expect(annotation.start_token).toBe(0);
@@ -1431,7 +1431,7 @@ describe("TokenEditor view toggles", () => {
       initialText: "alpha beta gamma",
       tokens: edited.present.tokens,
       originalTokens: edited.present.originalTokens,
-      correctionCards: [{ id: "c1", rangeStart: 0, rangeEnd: 2, markerId: null }],
+      correctionCards: [{ id: "c1", rangeStart: 0, rangeEnd: 2 }],
       correctionTypeMap: { c1: 1 },
     });
     expect(annotation.start_token).toBe(0);
@@ -1482,7 +1482,7 @@ describe("TokenEditor view toggles", () => {
       initialText: "foo bar baz",
       tokens: edited.present.tokens,
       originalTokens: edited.present.originalTokens,
-      correctionCards: [{ id: "c1", rangeStart: 0, rangeEnd: 0, markerId: null }],
+      correctionCards: [{ id: "c1", rangeStart: 0, rangeEnd: 0 }],
       correctionTypeMap: { c1: 1 },
     });
     expect(annotation.start_token).toBe(0);

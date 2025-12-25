@@ -115,8 +115,9 @@ const loadEditorState = (textId: number): EditorPresentState | null => {
     const parsed = JSON.parse(raw);
     if (!parsed?.originalTokens || !parsed?.tokens) return null;
     return {
-      ...parsed,
-      moveMarkers: [],
+      originalTokens: parsed.originalTokens,
+      tokens: parsed.tokens,
+      operations: Array.isArray(parsed.operations) ? parsed.operations : [],
     } as EditorPresentState;
   } catch {
     return null;
@@ -126,7 +127,7 @@ const loadEditorState = (textId: number): EditorPresentState | null => {
 const persistEditorState = (textId: number, state: EditorPresentState) => {
   if (process.env.NODE_ENV !== "test") return;
   try {
-    localStorage.setItem(`${PREFS_KEY}:state:${textId}`, JSON.stringify({ ...state, moveMarkers: [] }));
+    localStorage.setItem(`${PREFS_KEY}:state:${textId}`, JSON.stringify(state));
   } catch {
     // ignore
   }
@@ -154,7 +155,7 @@ export const TokenEditor: React.FC<{
 
   const [history, dispatch] = useReducer(tokenEditorReducer, {
     past: [],
-    present: { originalTokens: [], tokens: [], moveMarkers: [], operations: [] },
+    present: { originalTokens: [], tokens: [], operations: [] },
     future: [],
   });
 
@@ -249,10 +250,10 @@ export const TokenEditor: React.FC<{
   const annotationIdMap = useRef<Map<string, number>>(new Map());
   const pendingLocalStateRef = useRef<EditorPresentState | null>(null);
   const hydratedFromServerRef = useRef(false);
-  const handleRevert = (rangeStart: number, rangeEnd: number, markerId: string | null = null) => {
+  const handleRevert = (rangeStart: number, rangeEnd: number) => {
     markSkipAutoSelect();
     setPendingSelectIndex(rangeStart);
-    dispatch({ type: "REVERT_CORRECTION", rangeStart, rangeEnd, markerId });
+    dispatch({ type: "REVERT_CORRECTION", rangeStart, rangeEnd });
     setSelection({ start: null, end: null });
     endEdit();
   };
@@ -469,7 +470,6 @@ export const TokenEditor: React.FC<{
       const present: EditorPresentState = {
         originalTokens: cloneTokens(baseTokens),
         tokens: working,
-        moveMarkers: [],
         operations,
       };
       return { present, typeMap, spanMap };
@@ -1158,7 +1158,7 @@ export const TokenEditor: React.FC<{
                 style={groupUndoButtonStyle}
                 onClick={(e) => {
                   e.stopPropagation();
-                  handleRevert(group.start, group.end, null);
+                  handleRevert(group.start, group.end);
                   setSelection({ start: null, end: null });
                   endEdit();
                 }}
@@ -1323,12 +1323,7 @@ export const TokenEditor: React.FC<{
         initialText,
         tokens,
         originalTokens,
-        correctionCards: correctionCards.map((c) => ({
-          id: c.id,
-          rangeStart: c.rangeStart,
-          rangeEnd: c.rangeEnd,
-          markerId: c.markerId,
-        })),
+        correctionCards,
         correctionTypeMap,
         annotationIdMap: annotationIdMap.current,
       }),

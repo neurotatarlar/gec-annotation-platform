@@ -2,18 +2,15 @@ import { useCallback, useReducer } from "react";
 
 export type SelectionRange = { start: number | null; end: number | null };
 
-type EditorMode = "idle" | "selecting" | "editing" | "dragging";
+type EditorMode = "idle" | "selecting" | "editing";
 type EditorOverlay = "none" | "clear" | "flag";
 
 type EditorUIState = {
   mode: EditorMode;
   overlay: EditorOverlay;
   selection: SelectionRange;
-  selectionMoveMarkerId: string | null;
   editingRange: SelectionRange | null;
   editText: string;
-  isDragging: boolean;
-  dropTargetIndex: number | null;
   pendingAction: "skip" | "trash" | null;
   flagReason: string;
   flagError: string | null;
@@ -21,14 +18,10 @@ type EditorUIState = {
 
 type EditorUIAction =
   | { type: "RESET" }
-  | { type: "SET_SELECTION"; range: SelectionRange; moveMarkerId?: string | null }
-  | { type: "CLEAR_MOVE_MARKER" }
+  | { type: "SET_SELECTION"; range: SelectionRange }
   | { type: "START_EDIT"; range: SelectionRange; text: string }
   | { type: "UPDATE_EDIT_TEXT"; value: string }
   | { type: "END_EDIT" }
-  | { type: "START_DRAG" }
-  | { type: "END_DRAG" }
-  | { type: "SET_DROP_TARGET"; index: number | null }
   | { type: "OPEN_CLEAR_CONFIRM" }
   | { type: "CLOSE_CLEAR_CONFIRM" }
   | { type: "OPEN_FLAG"; action: "skip" | "trash" }
@@ -42,11 +35,8 @@ const baseEditorUIState: EditorUIState = {
   mode: "idle",
   overlay: "none",
   selection: EMPTY_SELECTION,
-  selectionMoveMarkerId: null,
   editingRange: null,
   editText: "",
-  isDragging: false,
-  dropTargetIndex: null,
   pendingAction: null,
   flagReason: "",
   flagError: null,
@@ -56,8 +46,6 @@ const syncEditorMode = (state: EditorUIState): EditorUIState => {
   let mode: EditorMode = "idle";
   if (state.editingRange) {
     mode = "editing";
-  } else if (state.isDragging) {
-    mode = "dragging";
   } else if (state.selection.start !== null && state.selection.end !== null) {
     mode = "selecting";
   }
@@ -70,16 +58,9 @@ const editorUIReducer = (state: EditorUIState, action: EditorUIAction): EditorUI
       return baseEditorUIState;
     case "SET_SELECTION": {
       const range = action.range;
-      const isEmpty = range.start === null || range.end === null;
-      const next: EditorUIState = {
-        ...state,
-        selection: range,
-        selectionMoveMarkerId: isEmpty ? null : action.moveMarkerId ?? null,
-      };
+      const next: EditorUIState = { ...state, selection: range };
       return syncEditorMode(next);
     }
-    case "CLEAR_MOVE_MARKER":
-      return state.selectionMoveMarkerId ? { ...state, selectionMoveMarkerId: null } : state;
     case "START_EDIT": {
       const next: EditorUIState = {
         ...state,
@@ -98,12 +79,6 @@ const editorUIReducer = (state: EditorUIState, action: EditorUIAction): EditorUI
       };
       return syncEditorMode(next);
     }
-    case "START_DRAG":
-      return syncEditorMode({ ...state, isDragging: true });
-    case "END_DRAG":
-      return syncEditorMode({ ...state, isDragging: false, dropTargetIndex: null });
-    case "SET_DROP_TARGET":
-      return { ...state, dropTargetIndex: action.index };
     case "OPEN_CLEAR_CONFIRM":
       return { ...state, overlay: "clear" };
     case "CLOSE_CLEAR_CONFIRM":
@@ -124,11 +99,8 @@ const editorUIReducer = (state: EditorUIState, action: EditorUIAction): EditorUI
 export const useEditorUIState = () => {
   const [ui, dispatch] = useReducer(editorUIReducer, baseEditorUIState);
 
-  const setSelection = useCallback((range: SelectionRange, moveMarkerId: string | null = null) => {
-    dispatch({ type: "SET_SELECTION", range, moveMarkerId });
-  }, []);
-  const clearMoveMarkerSelection = useCallback(() => {
-    dispatch({ type: "CLEAR_MOVE_MARKER" });
+  const setSelection = useCallback((range: SelectionRange) => {
+    dispatch({ type: "SET_SELECTION", range });
   }, []);
   const startEdit = useCallback((range: SelectionRange, text: string) => {
     dispatch({ type: "START_EDIT", range, text });
@@ -138,15 +110,6 @@ export const useEditorUIState = () => {
   }, []);
   const endEdit = useCallback(() => {
     dispatch({ type: "END_EDIT" });
-  }, []);
-  const startDrag = useCallback(() => {
-    dispatch({ type: "START_DRAG" });
-  }, []);
-  const endDrag = useCallback(() => {
-    dispatch({ type: "END_DRAG" });
-  }, []);
-  const setDropTarget = useCallback((index: number | null) => {
-    dispatch({ type: "SET_DROP_TARGET", index });
   }, []);
   const openClearConfirm = useCallback(() => {
     dispatch({ type: "OPEN_CLEAR_CONFIRM" });
@@ -173,13 +136,9 @@ export const useEditorUIState = () => {
   return {
     ui,
     setSelection,
-    clearMoveMarkerSelection,
     startEdit,
     updateEditText,
     endEdit,
-    startDrag,
-    endDrag,
-    setDropTarget,
     openClearConfirm,
     closeClearConfirm,
     openFlagConfirm,

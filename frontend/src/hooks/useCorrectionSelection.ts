@@ -6,7 +6,7 @@ import { SelectionRange } from "./useEditorUIState";
 type UseCorrectionSelectionArgs = {
   correctionCards: CorrectionCardLite[];
   tokens: Token[];
-  setSelection: (range: SelectionRange, markerId?: string | null) => void;
+  setSelection: (range: SelectionRange) => void;
 };
 
 export const useCorrectionSelection = ({
