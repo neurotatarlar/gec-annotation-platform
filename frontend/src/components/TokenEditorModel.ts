@@ -872,6 +872,43 @@ const tokenReducer = (state: EditorHistoryState, action: Action): EditorHistoryS
       const movedSlice = tokens.slice(fromStart, fromEnd + 1);
       if (movedSlice.length === 0 || movedSlice.some((tok) => tok.kind === "empty")) return state;
 
+      // If the selection is an existing move destination, reuse the same moveId and placeholder.
+      const sameMoveId =
+        movedSlice.every((t) => t.moveId) && movedSlice.every((t) => t.moveId === movedSlice[0].moveId);
+      const existingMarker =
+        sameMoveId && movedSlice[0].moveId ? deriveMoveMarkers(tokens).find((m) => m.id === movedSlice[0].moveId) : null;
+      if (existingMarker) {
+        const moveId = existingMarker.id;
+        // Prevent dropping into the placeholder span.
+        if (toIndex >= existingMarker.fromStart && toIndex <= existingMarker.fromEnd + 1) {
+          return state;
+        }
+        // Remove existing destination tokens entirely.
+        const removedDest = tokens.splice(existingMarker.toStart, existingMarker.toEnd - existingMarker.toStart + 1);
+        // Adjust insertion index after removal.
+        let insertionIndex = toIndex;
+        if (insertionIndex > existingMarker.toStart) {
+          insertionIndex -= removedDest.length;
+        }
+        // If placeholder sits before insertion and was not removed, account for it.
+        if (insertionIndex > existingMarker.fromStart && insertionIndex <= existingMarker.fromEnd + 1) {
+          insertionIndex = existingMarker.fromEnd + 1;
+        }
+        insertionIndex = Math.max(0, Math.min(tokens.length, insertionIndex));
+
+        const leadingSpace = insertionIndex === 0 ? false : tokens[insertionIndex]?.spaceBefore !== false;
+        const movedTokens = removedDest.map((tok, idx) => ({
+          ...tok,
+          groupId: `move-dest-${moveId}`,
+          moveId,
+          spaceBefore: idx === 0 ? leadingSpace : tok.spaceBefore,
+        }));
+        tokens.splice(insertionIndex, 0, ...movedTokens);
+        const cleaned = dropRedundantEmpties(tokens);
+        const next: EditorPresentState = { ...state.present, tokens: cleaned };
+        return pushPresent(state, next);
+      }
+
       const placeholderHistory = dedupeTokens(unwindToOriginal(movedSlice)).map((tok) => ({
         ...tok,
         previousTokens: undefined,

@@ -680,6 +680,29 @@ describe("tokenEditorReducer move operations", () => {
     const redone = tokenEditorReducer(undone, { type: "REDO" });
     expect(redone.present.tokens.map((t) => t.text).join(" ")).toBe("alpha ⬚ gamma beta delta");
   });
+
+  it("repositions an existing move destination without creating a new placeholder", () => {
+    const base = initState("alpha beta gamma delta");
+    const firstMove = tokenEditorReducer(base, {
+      type: "MOVE_SELECTED_TOKENS",
+      fromStart: 2,
+      fromEnd: 2,
+      toIndex: 0,
+    });
+    const secondMove = tokenEditorReducer(firstMove, {
+      type: "MOVE_SELECTED_TOKENS",
+      fromStart: 0,
+      fromEnd: 0,
+      toIndex: 5,
+    });
+    const texts = secondMove.present.tokens.map((t) => t.text);
+    expect(texts.join(" ")).toBe("alpha beta ⬚ delta gamma");
+    const placeholders = texts.filter((t) => t === "⬚");
+    expect(placeholders.length).toBe(1);
+    const moveMarkers = deriveMoveMarkers(secondMove.present.tokens);
+    expect(moveMarkers).toHaveLength(1);
+    expect(moveMarkers[0].fromStart).toBeGreaterThanOrEqual(0);
+  });
 });
 
 describe("buildAnnotationsPayloadStandalone", () => {
