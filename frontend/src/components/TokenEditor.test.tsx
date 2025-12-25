@@ -763,6 +763,37 @@ describe("buildAnnotationsPayloadStandalone", () => {
     expect(payloads[0].payload.move_from).toBeTypeOf("number");
     expect(payloads[0].payload.move_to).toBeTypeOf("number");
   });
+
+  it("emits separate payloads for multiple move corrections", async () => {
+    const base = initState("alpha beta gamma delta");
+    const firstMove = tokenEditorReducer(base, {
+      type: "MOVE_SELECTED_TOKENS",
+      fromStart: 3,
+      fromEnd: 3,
+      toIndex: 0,
+    });
+    const secondMove = tokenEditorReducer(firstMove, {
+      type: "MOVE_SELECTED_TOKENS",
+      fromStart: 2,
+      fromEnd: 2,
+      toIndex: 1,
+    });
+    const moveMarkers = deriveMoveMarkers(secondMove.present.tokens);
+    const correctionCards = deriveCorrectionCards(secondMove.present.tokens, moveMarkers);
+    const correctionTypeMap = Object.fromEntries(moveMarkers.map((m, idx) => [m.id, idx + 1]));
+
+    const payloads = await buildAnnotationsPayloadStandalone({
+      initialText: "alpha beta gamma delta",
+      tokens: secondMove.present.tokens,
+      originalTokens: secondMove.present.originalTokens,
+      correctionCards,
+      correctionTypeMap,
+      moveMarkers,
+    });
+
+    expect(payloads).toHaveLength(2);
+    expect(payloads.every((p) => p.payload.operation === "move")).toBe(true);
+  });
 });
 
 describe("save skipping helpers", () => {
@@ -1402,6 +1433,75 @@ describe("TokenEditor view toggles", () => {
       .filter((t) => t && t !== "↺") as string[];
     expect(chips.join(" ")).toBe("gamma alpha beta ⬚ delta");
     expect(within(corrected).getAllByText("⬚").length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("hydrates multi-token move corrections", async () => {
+    localStorage.clear();
+    await renderEditor("alpha beta gamma delta", {
+      getImpl: (url: string) => {
+        if (url.includes("/api/error-types")) return Promise.resolve({ data: [] });
+        if (url.includes("/annotations")) {
+          return Promise.resolve({
+            data: [
+              {
+                id: 31,
+                author_id: "other",
+                start_token: 0,
+                end_token: 1,
+                replacement: null,
+                error_type_id: 1,
+                payload: {
+                  operation: "move",
+                  move_from: 2,
+                  move_to: 0,
+                  move_len: 2,
+                  before_tokens: [],
+                  after_tokens: [
+                    { id: "m1", text: "gamma", origin: "base" },
+                    { id: "m2", text: "delta", origin: "base" },
+                  ],
+                  text_tokens: ["alpha", "beta", "gamma", "delta"],
+                },
+              },
+            ],
+          });
+        }
+        return Promise.resolve({ data: {} });
+      },
+    });
+
+    const corrected = await screen.findByTestId("corrected-panel");
+    const chips = within(corrected)
+      .getAllByRole("button")
+      .map((c) => c.textContent?.trim())
+      .filter((t) => t && t !== "↺") as string[];
+    expect(chips.join(" ")).toBe("gamma delta alpha beta ⬚");
+    expect(within(corrected).getAllByText("⬚").length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("allows undoing a hydrated move via the inline undo button", async () => {
+    localStorage.clear();
+    const base = initState("alpha beta gamma");
+    const moved = tokenEditorReducer(base, {
+      type: "MOVE_SELECTED_TOKENS",
+      fromStart: 2,
+      fromEnd: 2,
+      toIndex: 0,
+    });
+    localStorage.setItem("tokenEditorPrefs:state:1", JSON.stringify(moved.present));
+
+    await renderEditor("alpha beta gamma");
+    const corrected = await screen.findByTestId("corrected-panel");
+    const undoButtons = within(corrected).getAllByRole("button", { name: "↺" });
+    expect(undoButtons.length).toBeGreaterThan(0);
+    await userEvent.click(undoButtons[0]);
+
+    const chips = within(corrected)
+      .getAllByRole("button")
+      .map((c) => c.textContent?.trim())
+      .filter((t) => t && t !== "↺") as string[];
+    expect(chips.join(" ")).toBe("alpha beta gamma");
+    expect(within(corrected).queryByText("⬚")).toBeNull();
   });
 
   it("hydrates server edits with literal punctuation spacing", async () => {
