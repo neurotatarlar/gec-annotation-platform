@@ -16,6 +16,7 @@ import {
 import {
   EditorPresentState,
   HotkeySpec,
+  MoveMarker,
   Token,
   buildAnnotationsPayloadStandalone,
   buildEditableTextFromTokens,
@@ -23,8 +24,10 @@ import {
   buildTextFromTokensWithBreaks,
   cloneTokens,
   createId,
+  dedupeTokens,
   deriveCorrectionByIndex,
   deriveCorrectionCards,
+  deriveMoveMarkers,
   deriveOperationsFromTokens,
   makeEmptyPlaceholder,
   normalizeHotkeySpec,
@@ -32,6 +35,7 @@ import {
   tokenizeEditedText,
   tokenizeToTokens,
   tokenEditorReducer,
+  unwindToOriginal,
 } from "./TokenEditorModel";
 
 export * from "./TokenEditorModel";
@@ -187,6 +191,8 @@ export const TokenEditor: React.FC<{
   const [spaceMarker, setSpaceMarker] = useState<SpaceMarker>(normalizeSpaceMarker(prefs.spaceMarker));
   const editInputRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
   const tokenRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const groupRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const dragStateRef = useRef<{ start: number; end: number } | null>(null);
   const measureCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const measureTextWidth = useCallback(
     (text: string, size?: number) => {
@@ -204,6 +210,9 @@ export const TokenEditor: React.FC<{
     [tokenFontSize]
   );
   const tokenRowRef = useRef<HTMLDivElement | null>(null);
+  const [dropIndex, setDropIndex] = useState<number | null>(null);
+  const [hoveredMoveId, setHoveredMoveId] = useState<string | null>(null);
+  const [moveLine, setMoveLine] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSkipping, setIsSkipping] = useState(false);
   const [isTrashing, setIsTrashing] = useState(false);
@@ -368,7 +377,137 @@ export const TokenEditor: React.FC<{
         const payload = ann?.payload || {};
         const operation = payload.operation || (ann?.replacement ? "replace" : "noop");
         if (operation === "noop") return;
-        if (operation === "move") return;
+        if (String(operation) === "move") {
+          const afterRaw = Array.isArray(payload.after_tokens) ? payload.after_tokens : [];
+          const beforeTokensPayload = Array.isArray(payload.before_tokens) ? payload.before_tokens : [];
+          const moveFrom =
+            typeof payload.move_from === "number"
+              ? payload.move_from
+              : typeof payload.moveFrom === "number"
+                ? payload.moveFrom
+                : typeof ann?.start_token === "number"
+                  ? ann.start_token
+                  : 0;
+          const moveTo =
+            typeof payload.move_to === "number"
+              ? payload.move_to
+              : typeof payload.moveTo === "number"
+                ? payload.moveTo
+                : typeof ann?.start_token === "number"
+                  ? ann.start_token
+                  : 0;
+          const moveLen =
+            typeof payload.move_len === "number"
+              ? payload.move_len
+              : afterRaw.length
+                ? afterRaw.length
+                : beforeTokensPayload.length
+                  ? beforeTokensPayload.length
+                  : 1;
+          const sourceStart = Math.max(0, Math.min(working.length, moveFrom + offset));
+          const sourceEnd = Math.max(sourceStart, Math.min(working.length - 1, sourceStart + moveLen - 1));
+          const moveId = `move-${createId()}`;
+
+          const originalById = new Map<string, Token>();
+          baseTokens.forEach((tok) => {
+            if (tok.kind === "empty") return;
+            originalById.set(tok.id, tok);
+          });
+          const mappedHistory = beforeTokensPayload
+            .map((id: string) => originalById.get(id))
+            .filter(Boolean)
+            .map((tok) => ({ ...tok!, selected: false, previousTokens: undefined }));
+          const historyTokens = mappedHistory.length
+            ? mappedHistory
+            : dedupeTokens(unwindToOriginal(cloneTokens(working.slice(sourceStart, sourceEnd + 1))));
+          const placeholder = {
+            ...makeEmptyPlaceholder(historyTokens),
+            groupId: `move-src-${moveId}`,
+            moveId,
+            spaceBefore: working[sourceStart]?.spaceBefore ?? true,
+          };
+
+          const buildTokensFromFragments = (
+            fragments: any[],
+            fallbackText: string,
+            defaultFirstSpace?: boolean
+          ): Token[] => {
+            const built: Token[] = [];
+            const hasFragments = fragments.length > 0;
+            const baseFragments = hasFragments ? fragments : fallbackText ? [{ text: fallbackText }] : [];
+            baseFragments.forEach((frag: any, fragIndex: number) => {
+              const text = typeof frag?.text === "string" ? frag.text : "";
+              if (!text) return;
+              const origin = frag?.origin === "inserted" ? "inserted" : undefined;
+              const explicitSpace =
+                typeof frag?.space_before === "boolean"
+                  ? frag.space_before
+                  : typeof frag?.spaceBefore === "boolean"
+                    ? frag.spaceBefore
+                    : undefined;
+              const baseTokens = tokenizeEditedText(text);
+              baseTokens.forEach((tok, idx) => {
+                let spaceBefore = tok.spaceBefore;
+                if (idx === 0) {
+                  if (explicitSpace !== undefined) {
+                    spaceBefore = explicitSpace;
+                  } else if (fragIndex > 0) {
+                    spaceBefore = true;
+                  } else if (defaultFirstSpace !== undefined) {
+                    spaceBefore = defaultFirstSpace;
+                  }
+                }
+                if (idx === 0 && fragIndex > 0 && spaceBefore === false && tok.kind !== "punct") {
+                  spaceBefore = true;
+                }
+                built.push({
+                  ...tok,
+                  id: createId(),
+                  origin,
+                  spaceBefore,
+                });
+              });
+            });
+            return built;
+          };
+
+          const rawMovedTokens = afterRaw.length
+            ? buildTokensFromFragments(afterRaw, "", undefined)
+            : cloneTokens(working.slice(sourceStart, sourceEnd + 1));
+
+          working.splice(sourceStart, sourceEnd - sourceStart + 1);
+          working.splice(sourceStart, 0, placeholder);
+
+          let insertionIndex = Math.max(0, Math.min(working.length, moveTo + offset));
+          if (insertionIndex > sourceEnd + 1) {
+            insertionIndex -= sourceEnd - sourceStart + 1;
+          }
+          if (insertionIndex >= sourceStart) {
+            insertionIndex += 1;
+          }
+          insertionIndex = Math.max(0, Math.min(working.length, insertionIndex));
+          const leadingSpace = insertionIndex === 0 ? false : working[insertionIndex]?.spaceBefore !== false;
+
+          const movedTokens = rawMovedTokens.map((tok, idx) => ({
+            ...tok,
+            id: createId(),
+            groupId: `move-dest-${moveId}`,
+            moveId,
+            spaceBefore: idx === 0 ? leadingSpace : tok.spaceBefore,
+            previousTokens: tok.previousTokens ? cloneTokens(tok.previousTokens) : tok.previousTokens,
+          }));
+
+          working.splice(insertionIndex, 0, ...movedTokens);
+          typeMap[moveId] = ann?.error_type_id ?? null;
+          const spanStart = moveTo;
+          const spanEnd = moveTo + Math.max(1, movedTokens.length) - 1;
+          if (currentUserId && ann?.author_id === currentUserId && ann?.id != null) {
+            const spanKey = `${spanStart}-${spanEnd}`;
+            spanMap.set(spanKey, ann.id);
+          }
+          offset += 1;
+          return;
+        }
         const startOriginal = typeof ann?.start_token === "number" ? ann.start_token : 0;
         const endOriginal = typeof ann?.end_token === "number" ? ann.end_token : startOriginal;
         const targetStart = Math.max(0, Math.min(working.length, startOriginal + offset));
@@ -382,11 +521,11 @@ export const TokenEditor: React.FC<{
           ? Math.min(working.length - targetStart, beforeTokensPayload.length)
           : 0;
         const removeCount = beforeCount > 0 ? beforeCount : removeCountFromSpan;
-      const previousRaw = cloneTokens(working.slice(targetStart, targetStart + removeCount));
-      const previous =
-        operation === "insert" && previousRaw.length === 0 ? [makeEmptyPlaceholder([])] : previousRaw;
-      const afterRaw = Array.isArray(payload.after_tokens) ? payload.after_tokens : [];
-      const replacementText = ann?.replacement ? String(ann.replacement) : "";
+        const previousRaw = cloneTokens(working.slice(targetStart, targetStart + removeCount));
+        const previous =
+          operation === "insert" && previousRaw.length === 0 ? [makeEmptyPlaceholder([])] : previousRaw;
+        const afterRaw = Array.isArray(payload.after_tokens) ? payload.after_tokens : [];
+        const replacementText = ann?.replacement ? String(ann.replacement) : "";
       const buildTokensFromFragments = (
         fragments: any[],
         fallbackText: string,
@@ -505,9 +644,62 @@ export const TokenEditor: React.FC<{
     return Array.from(groups.values());
   }, [activeErrorTypes, locale, t]);
 
-  const correctionCards = useMemo(() => deriveCorrectionCards(tokens), [tokens]);
+  const moveMarkers = useMemo(() => deriveMoveMarkers(tokens), [tokens]);
+  const moveMarkerById = useMemo(() => {
+    const map = new Map<string, MoveMarker>();
+    moveMarkers.forEach((marker) => map.set(marker.id, marker));
+    return map;
+  }, [moveMarkers]);
+  const moveIndexToId = useMemo(() => {
+    const map = new Map<number, string>();
+    moveMarkers.forEach((marker) => {
+      for (let i = marker.fromStart; i <= marker.fromEnd; i += 1) {
+        map.set(i, marker.id);
+      }
+      for (let i = marker.toStart; i <= marker.toEnd; i += 1) {
+        map.set(i, marker.id);
+      }
+    });
+    return map;
+  }, [moveMarkers]);
 
-  const correctionByIndex = useMemo(() => deriveCorrectionByIndex(correctionCards), [correctionCards]);
+  useEffect(() => {
+    if (!hoveredMoveId) {
+      setMoveLine(null);
+      return;
+    }
+    const marker = moveMarkerById.get(hoveredMoveId);
+    if (!marker || !tokenRowRef.current) {
+      setMoveLine(null);
+      return;
+    }
+    const sourceKey = `range:${marker.fromStart}-${marker.fromEnd}`;
+    const destKey = `range:${marker.toStart}-${marker.toEnd}`;
+    const sourceEl = groupRefs.current[sourceKey];
+    const destEl = groupRefs.current[destKey];
+    if (!sourceEl || !destEl) {
+      setMoveLine(null);
+      return;
+    }
+    const containerRect = tokenRowRef.current.getBoundingClientRect();
+    const srcRect = sourceEl.getBoundingClientRect();
+    const dstRect = destEl.getBoundingClientRect();
+    const rightward = dstRect.left >= srcRect.right;
+    const x1 = rightward ? srcRect.right - containerRect.left : srcRect.left - containerRect.left;
+    const x2 = rightward ? dstRect.left - containerRect.left : dstRect.right - containerRect.left;
+    const y1 = srcRect.top + srcRect.height / 2 - containerRect.top;
+    const y2 = dstRect.top + dstRect.height / 2 - containerRect.top;
+    setMoveLine({ x1, y1, x2, y2 });
+  }, [hoveredMoveId, moveMarkerById]);
+  const correctionCards = useMemo(
+    () => deriveCorrectionCards(tokens, moveMarkers),
+    [tokens, moveMarkers]
+  );
+
+  const correctionByIndex = useMemo(
+    () => deriveCorrectionByIndex(correctionCards, moveMarkers),
+    [correctionCards, moveMarkers]
+  );
   const {
     activeErrorTypeId,
     setActiveErrorTypeId,
@@ -712,6 +904,114 @@ export const TokenEditor: React.FC<{
     endEdit();
   };
 
+  const expandRangeToGroups = useCallback(
+    (start: number, end: number) => {
+      let s = Math.min(start, end);
+      let e = Math.max(start, end);
+      let expanded = true;
+      while (expanded) {
+        expanded = false;
+        for (let i = s; i <= e; i += 1) {
+          const tok = tokens[i];
+          if (!tok?.groupId) continue;
+          let l = i;
+          let r = i;
+          while (l - 1 >= 0 && tokens[l - 1]?.groupId === tok.groupId) l -= 1;
+          while (r + 1 < tokens.length && tokens[r + 1]?.groupId === tok.groupId) r += 1;
+          if (l < s || r > e) {
+            s = Math.min(s, l);
+            e = Math.max(e, r);
+            expanded = true;
+            break;
+          }
+        }
+      }
+      return { start: s, end: e };
+    },
+    [tokens]
+  );
+
+  const handleDragStart = useCallback(
+    (index: number, event: React.DragEvent<HTMLDivElement>) => {
+      if (editingRange) {
+        event.preventDefault();
+        return;
+      }
+      const token = tokens[index];
+      if (!token || token.kind === "empty") {
+        event.preventDefault();
+        return;
+      }
+      let range: { start: number; end: number };
+      if (hasSelection && index >= Math.min(selection.start!, selection.end!) && index <= Math.max(selection.start!, selection.end!)) {
+        range = expandRangeToGroups(Math.min(selection.start!, selection.end!), Math.max(selection.start!, selection.end!));
+      } else {
+        range = expandRangeToGroups(index, index);
+        setSelection(range);
+      }
+      const slice = tokens.slice(range.start, range.end + 1);
+      if (!slice.length || slice.some((tok) => tok.kind === "empty")) {
+        event.preventDefault();
+        return;
+      }
+      dragStateRef.current = range;
+      setDropIndex(null);
+      event.dataTransfer.setData("text/plain", "move");
+      event.dataTransfer.effectAllowed = "move";
+      const preview = document.createElement("div");
+      preview.textContent = slice.map((t) => t.text).join(" ");
+      preview.style.position = "absolute";
+      preview.style.top = "-9999px";
+      preview.style.left = "-9999px";
+      preview.style.padding = "6px 10px";
+      preview.style.background = "rgba(30,41,59,0.9)";
+      preview.style.color = "#e2e8f0";
+      preview.style.border = "1px solid rgba(148,163,184,0.6)";
+      preview.style.borderRadius = "10px";
+      document.body.appendChild(preview);
+      event.dataTransfer.setDragImage(preview, 10, 10);
+      setTimeout(() => {
+        document.body.removeChild(preview);
+      }, 0);
+    },
+    [editingRange, expandRangeToGroups, hasSelection, selection, setSelection, tokens]
+  );
+
+  const handleDragOverToken = useCallback(
+    (index: number, event: React.DragEvent<HTMLDivElement>) => {
+      if (!dragStateRef.current) return;
+      event.preventDefault();
+      const rect = event.currentTarget.getBoundingClientRect();
+      const isAfter = (event.clientX - rect.left) / Math.max(1, rect.width) > 0.5;
+      const nextIndex = isAfter ? index + 1 : index;
+      setDropIndex(nextIndex);
+    },
+    []
+  );
+
+  const handleDragOverGap = useCallback((index: number, event: React.DragEvent<HTMLDivElement>) => {
+    if (!dragStateRef.current) return;
+    event.preventDefault();
+    setDropIndex(index);
+  }, []);
+
+  const handleDropAt = useCallback(
+    (index: number) => {
+      const drag = dragStateRef.current;
+      dragStateRef.current = null;
+      setDropIndex(null);
+      if (!drag) return;
+      dispatch({ type: "MOVE_SELECTED_TOKENS", fromStart: drag.start, fromEnd: drag.end, toIndex: index });
+      setSelection({ start: null, end: null });
+    },
+    [setSelection]
+  );
+
+  const handleDragEnd = useCallback(() => {
+    dragStateRef.current = null;
+    setDropIndex(null);
+  }, []);
+
   // Selection click logic with contiguous Ctrl-select.
   const handleTokenClick = (index: number, ctrlKey: boolean) => {
     if (tokens[index]?.kind === "special") return;
@@ -837,7 +1137,8 @@ export const TokenEditor: React.FC<{
 
   const renderToken = (token: Token, index: number, forceChanged = false) => {
     const isSelected = selectedSet.has(index);
-    const hasHistory = forceChanged || Boolean(token.previousTokens?.length);
+    const isMovePlaceholder = Boolean(token.moveId && token.kind === "empty");
+    const hasHistory = forceChanged || (Boolean(token.previousTokens?.length) && !isMovePlaceholder);
     const isSpecial = token.kind === "special";
     const isEmpty = token.kind === "empty";
     const displayText =
@@ -961,6 +1262,23 @@ export const TokenEditor: React.FC<{
         key={token.id}
         style={style}
         data-token-index={index}
+        draggable={!isSpecial && !isEmpty}
+        onDragStart={(e) => {
+          if (isSpecial || isEmpty) {
+            e.preventDefault();
+            return;
+          }
+          handleDragStart(index, e);
+        }}
+        onDragOver={(e) => handleDragOverToken(index, e)}
+        onDrop={(e) => {
+          e.preventDefault();
+          const rect = e.currentTarget.getBoundingClientRect();
+          const isAfter = (e.clientX - rect.left) / Math.max(1, rect.width) > 0.5;
+          const targetIndex = isAfter ? index + 1 : index;
+          handleDropAt(targetIndex);
+        }}
+        onDragEnd={handleDragEnd}
         onClick={(e) => {
           if (isSpecial) return;
           handleTokenClick(index, e.ctrlKey || e.metaKey);
@@ -1053,8 +1371,29 @@ export const TokenEditor: React.FC<{
             display: "flex",
             alignItems: "flex-end",
             justifyContent: "center",
+            position: "relative",
+          }}
+          onDragOver={(e) => handleDragOverGap(idx, e)}
+          onDrop={(e) => {
+            e.preventDefault();
+            handleDropAt(idx);
           }}
         >
+          {dropIndex === idx && (
+            <span
+              aria-hidden="true"
+              style={{
+                position: "absolute",
+                left: "50%",
+                top: -6,
+                bottom: -6,
+                width: 2,
+                background: "rgba(94,234,212,0.85)",
+                boxShadow: "0 0 0 1px rgba(94,234,212,0.5)",
+                transform: "translateX(-50%)",
+              }}
+            />
+          )}
           {markerChar && (
             <span
               aria-hidden="true"
@@ -1075,7 +1414,13 @@ export const TokenEditor: React.FC<{
       const anchorToken =
         group.tokens.find((t) => t.previousTokens?.length) ?? group.tokens[Math.floor(group.tokens.length / 2)];
       const historyTokens = anchorToken.previousTokens ?? [];
-      const cardId = correctionByIndex.get(group.start) ?? correctionByIndex.get(group.end);
+      const moveId = moveIndexToId.get(group.start) ?? moveIndexToId.get(group.end);
+      const moveMarker = moveId ? moveMarkerById.get(moveId) ?? null : null;
+      const isMoveGroup = Boolean(moveId);
+      const isMoveDestination = Boolean(
+        moveMarker && group.start >= moveMarker.toStart && group.end <= moveMarker.toEnd
+      );
+      const cardId = moveId ?? correctionByIndex.get(group.start) ?? correctionByIndex.get(group.end);
       const typeId = cardId ? correctionTypeMap[cardId] ?? null : null;
       const typeObj = typeId ? errorTypeById.get(typeId) ?? null : null;
       const badgeText = typeObj ? getErrorTypeLabel(typeObj, locale) : "";
@@ -1094,7 +1439,9 @@ export const TokenEditor: React.FC<{
       group.tokens.forEach((tok) => {
         if (tok.kind !== "empty") visibleCount += 1;
       });
-      const showBorder = hasHistory;
+      const showBorder = hasHistory || isMoveGroup;
+      const showHistoryTokens = hasHistory && !isMoveGroup;
+      const isMoveHover = Boolean(moveId && hoveredMoveId === moveId);
 
       const groupPadY = 0;
       const groupPadX = isPurePunctGroup ? 0 : 1;
@@ -1125,6 +1472,7 @@ export const TokenEditor: React.FC<{
           ? Math.max(badgeWidth, baseContentWidth, tokenFontSize * 0.7 * group.tokens.length) + groupPadX * 2
           : Math.max(24 + groupPadX * 2, baseContentWidth + groupPadX * 2);
 
+      const groupKey = `range:${group.start}-${group.end}`;
       const groupNode = (
         <div
           key={`group-${groupIndex}-${group.tokens[0].id}`}
@@ -1135,12 +1483,29 @@ export const TokenEditor: React.FC<{
             gap: verticalGap,
             padding: `${paddingTop}px ${groupPadX}px ${groupPadY}px ${groupPadX}px`,
             borderRadius: 14,
-            border: showBorder ? "1px solid rgba(148,163,184,0.35)" : "1px solid transparent",
+            border: showBorder
+              ? isMoveHover
+                ? "1px solid rgba(94,234,212,0.85)"
+                : "1px solid rgba(148,163,184,0.35)"
+              : "1px solid transparent",
             background: "transparent",
-            boxShadow: showBorder ? "0 0 0 1px rgba(148,163,184,0.25)" : "none",
+            boxShadow: showBorder
+              ? isMoveHover
+                ? "0 0 0 1px rgba(94,234,212,0.5)"
+                : "0 0 0 1px rgba(148,163,184,0.25)"
+              : "none",
             flex: "0 0 auto",
             minWidth,
             position: "relative",
+          }}
+          ref={(el) => {
+            groupRefs.current[groupKey] = el;
+          }}
+          onMouseEnter={() => {
+            if (moveId) setHoveredMoveId(moveId);
+          }}
+          onMouseLeave={() => {
+            if (moveId) setHoveredMoveId((prev) => (prev === moveId ? null : prev));
           }}
         >
           <div
@@ -1153,7 +1518,7 @@ export const TokenEditor: React.FC<{
               marginBottom: Math.max(0, tokenFontSize * 0.03),
             }}
           >
-            {hasHistory && (
+            {hasHistory && !isMoveGroup && (
               <button
                 style={groupUndoButtonStyle}
                 onClick={(e) => {
@@ -1202,8 +1567,29 @@ export const TokenEditor: React.FC<{
                       alignItems: "flex-end",
                       justifyContent: "center",
                       flex: "0 0 auto",
+                      position: "relative",
+                    }}
+                    onDragOver={(e) => handleDragOverGap(group.start + i, e)}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      handleDropAt(group.start + i);
                     }}
                   >
+                    {dropIndex === group.start + i && (
+                      <span
+                        aria-hidden="true"
+                        style={{
+                          position: "absolute",
+                          left: "50%",
+                          top: -6,
+                          bottom: -6,
+                          width: 2,
+                          background: "rgba(94,234,212,0.85)",
+                          boxShadow: "0 0 0 1px rgba(94,234,212,0.5)",
+                          transform: "translateX(-50%)",
+                        }}
+                      />
+                    )}
                     {markerChar && (
                       <span
                         aria-hidden="true"
@@ -1216,11 +1602,11 @@ export const TokenEditor: React.FC<{
                   </div>
                 );
               }
-              nodes.push(renderToken(tok, group.start + i, hasHistory));
+              nodes.push(renderToken(tok, group.start + i, isMoveDestination));
               return nodes;
             })}
           </div>
-          {historyTokens.length > 0 && (
+          {showHistoryTokens && historyTokens.length > 0 && (
             <div
               style={{
                 display: "flex",
@@ -1325,9 +1711,10 @@ export const TokenEditor: React.FC<{
         originalTokens,
         correctionCards,
         correctionTypeMap,
+        moveMarkers,
         annotationIdMap: annotationIdMap.current,
       }),
-    [annotationIdMap, correctionCards, correctionTypeMap, initialText, originalTokens, tokens]
+    [annotationIdMap, correctionCards, correctionTypeMap, initialText, moveMarkers, originalTokens, tokens]
   );
 
   const { saveAnnotations } = useSaveController({
@@ -1765,6 +2152,7 @@ export const TokenEditor: React.FC<{
           tokenGap={tokenGap}
           renderTokenGroups={renderTokenGroups}
           rowRef={tokenRowRef}
+          moveLine={moveLine}
         />
         <ErrorTypePanel
           groupedErrorTypes={groupedErrorTypes}
@@ -1866,6 +2254,7 @@ type TokenRowProps = {
   tokenGap: number;
   renderTokenGroups: (tokens: Token[]) => React.ReactNode[];
   rowRef: React.RefObject<HTMLDivElement>;
+  moveLine: { x1: number; y1: number; x2: number; y2: number } | null;
 };
 
 const TokenRow: React.FC<TokenRowProps> = ({
@@ -1873,12 +2262,49 @@ const TokenRow: React.FC<TokenRowProps> = ({
   tokenGap,
   renderTokenGroups,
   rowRef,
+  moveLine,
 }) => (
   <div
     data-testid="corrected-panel"
     style={{ ...tokenRowStyleBase, gap: Math.max(0, tokenGap) }}
     ref={rowRef}
   >
+    {moveLine && (
+      <svg
+        aria-hidden="true"
+        style={{
+          position: "absolute",
+          inset: 0,
+          width: "100%",
+          height: "100%",
+          pointerEvents: "none",
+        }}
+      >
+        <defs>
+          <marker
+            id="move-arrow"
+            viewBox="0 0 10 10"
+            refX="9"
+            refY="5"
+            markerWidth="6"
+            markerHeight="6"
+            orient="auto"
+          >
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="rgba(94,234,212,0.85)" />
+          </marker>
+        </defs>
+        <line
+          x1={moveLine.x1}
+          y1={moveLine.y1}
+          x2={moveLine.x2}
+          y2={moveLine.y2}
+          stroke="rgba(94,234,212,0.85)"
+          strokeWidth="1.5"
+          strokeDasharray="4 4"
+          markerEnd="url(#move-arrow)"
+        />
+      </svg>
+    )}
     {renderTokenGroups(tokens)}
     <div
       style={{ width: 24, height: 24 }}

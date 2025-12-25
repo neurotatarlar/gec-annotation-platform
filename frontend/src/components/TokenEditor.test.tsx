@@ -19,6 +19,8 @@ import {
   TokenEditor,
   tokenEditorReducer,
   tokenizeToTokens,
+  deriveMoveMarkers,
+  deriveCorrectionCards,
   buildHotkeyMap,
   parseHotkey,
   guessCodeFromKey,
@@ -640,6 +642,46 @@ describe("buildM2Preview", () => {
   });
 });
 
+describe("tokenEditorReducer move operations", () => {
+  it("moves a multi-token range to the right without shifting by length", () => {
+    const base = initState("alpha beta gamma delta epsilon");
+    const moved = tokenEditorReducer(base, {
+      type: "MOVE_SELECTED_TOKENS",
+      fromStart: 1,
+      fromEnd: 2,
+      toIndex: 4,
+    });
+    const texts = moved.present.tokens.map((t) => t.text);
+    expect(texts.join(" ")).toBe("alpha ⬚ delta beta gamma epsilon");
+  });
+
+  it("moves a multi-token range to the left without pulling extra tokens", () => {
+    const base = initState("alpha beta gamma delta epsilon");
+    const moved = tokenEditorReducer(base, {
+      type: "MOVE_SELECTED_TOKENS",
+      fromStart: 3,
+      fromEnd: 4,
+      toIndex: 2,
+    });
+    const texts = moved.present.tokens.map((t) => t.text);
+    expect(texts.join(" ")).toBe("alpha beta delta epsilon gamma ⬚");
+  });
+
+  it("undo/redo restores move operations", () => {
+    const base = initState("alpha beta gamma delta");
+    const moved = tokenEditorReducer(base, {
+      type: "MOVE_SELECTED_TOKENS",
+      fromStart: 1,
+      fromEnd: 1,
+      toIndex: 3,
+    });
+    const undone = tokenEditorReducer(moved, { type: "UNDO" });
+    expect(undone.present.tokens.map((t) => t.text).join(" ")).toBe("alpha beta gamma delta");
+    const redone = tokenEditorReducer(undone, { type: "REDO" });
+    expect(redone.present.tokens.map((t) => t.text).join(" ")).toBe("alpha ⬚ gamma beta delta");
+  });
+});
+
 describe("buildAnnotationsPayloadStandalone", () => {
   const baseToken = (id: string, text: string) =>
     ({ id, text, kind: "word", selected: false } as any);
@@ -657,6 +699,7 @@ describe("buildAnnotationsPayloadStandalone", () => {
       originalTokens,
       correctionCards,
       correctionTypeMap,
+      moveMarkers: [],
       annotationIdMap,
     });
 
@@ -685,12 +728,40 @@ describe("buildAnnotationsPayloadStandalone", () => {
       originalTokens,
       correctionCards,
       correctionTypeMap,
+      moveMarkers: [],
       annotationIdMap,
       includeDeletedIds: true,
     })) as any;
 
     expect(payloads.deleted_ids).toContain(11);
     expect(payloads.deleted_ids).not.toContain(10);
+  });
+
+  it("builds move payloads with move_from and move_to", async () => {
+    const base = initState("alpha beta gamma");
+    const moved = tokenEditorReducer(base, {
+      type: "MOVE_SELECTED_TOKENS",
+      fromStart: 2,
+      fromEnd: 2,
+      toIndex: 0,
+    });
+    const moveMarkers = deriveMoveMarkers(moved.present.tokens);
+    const correctionCards = deriveCorrectionCards(moved.present.tokens, moveMarkers);
+    const correctionTypeMap = { [moveMarkers[0].id]: 7 };
+
+    const payloads = await buildAnnotationsPayloadStandalone({
+      initialText: "alpha beta gamma",
+      tokens: moved.present.tokens,
+      originalTokens: moved.present.originalTokens,
+      correctionCards,
+      correctionTypeMap,
+      moveMarkers,
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0].payload.operation).toBe("move");
+    expect(payloads[0].payload.move_from).toBeTypeOf("number");
+    expect(payloads[0].payload.move_to).toBeTypeOf("number");
   });
 });
 
@@ -1030,6 +1101,7 @@ describe("revert clears selection", () => {
       originalTokens: edited.present.originalTokens,
       correctionCards,
       correctionTypeMap,
+      moveMarkers: [],
     });
     expect(payloads).toHaveLength(1);
     expect(payloads[0].replacement).toBe("foo-bar");
@@ -1291,6 +1363,47 @@ describe("TokenEditor view toggles", () => {
     expect(within(corrected).getAllByText("⬚").length).toBeGreaterThan(0);
   });
 
+  it("hydrates move annotations with placeholder and moved group", async () => {
+    localStorage.clear();
+    await renderEditor("alpha beta gamma delta", {
+      getImpl: (url: string) => {
+        if (url.includes("/api/error-types")) return Promise.resolve({ data: [] });
+        if (url.includes("/annotations")) {
+          return Promise.resolve({
+            data: [
+              {
+                id: 30,
+                author_id: "other",
+                start_token: 0,
+                end_token: 0,
+                replacement: null,
+                error_type_id: 1,
+                payload: {
+                  operation: "move",
+                  move_from: 2,
+                  move_to: 0,
+                  move_len: 1,
+                  before_tokens: [],
+                  after_tokens: [{ id: "m1", text: "gamma", origin: "base" }],
+                  text_tokens: ["alpha", "beta", "gamma", "delta"],
+                },
+              },
+            ],
+          });
+        }
+        return Promise.resolve({ data: {} });
+      },
+    });
+
+    const corrected = await screen.findByTestId("corrected-panel");
+    const chips = within(corrected)
+      .getAllByRole("button")
+      .map((c) => c.textContent?.trim())
+      .filter((t) => t && t !== "↺") as string[];
+    expect(chips.join(" ")).toBe("gamma alpha beta ⬚ delta");
+    expect(within(corrected).getAllByText("⬚").length).toBeGreaterThanOrEqual(1);
+  });
+
   it("hydrates server edits with literal punctuation spacing", async () => {
     localStorage.clear();
     await renderEditor("foo bar", {
@@ -1383,6 +1496,7 @@ describe("TokenEditor view toggles", () => {
       originalTokens: edited.present.originalTokens,
       correctionCards: [{ id: "c1", rangeStart: 0, rangeEnd: 1 }],
       correctionTypeMap: { c1: 1 },
+      moveMarkers: [],
     });
     expect(annotation.start_token).toBe(0);
     expect(annotation.end_token).toBe(0);
@@ -1433,6 +1547,7 @@ describe("TokenEditor view toggles", () => {
       originalTokens: edited.present.originalTokens,
       correctionCards: [{ id: "c1", rangeStart: 0, rangeEnd: 2 }],
       correctionTypeMap: { c1: 1 },
+      moveMarkers: [],
     });
     expect(annotation.start_token).toBe(0);
     expect(annotation.end_token).toBe(1);
@@ -1484,6 +1599,7 @@ describe("TokenEditor view toggles", () => {
       originalTokens: edited.present.originalTokens,
       correctionCards: [{ id: "c1", rangeStart: 0, rangeEnd: 0 }],
       correctionTypeMap: { c1: 1 },
+      moveMarkers: [],
     });
     expect(annotation.start_token).toBe(0);
     expect(annotation.end_token).toBe(1);

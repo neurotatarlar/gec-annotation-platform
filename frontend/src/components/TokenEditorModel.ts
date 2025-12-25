@@ -17,6 +17,15 @@ export type Token = {
   previousTokens?: Token[];
   groupId?: string;
   origin?: "inserted";
+  moveId?: string;
+};
+
+export type MoveMarker = {
+  id: string;
+  fromStart: number;
+  fromEnd: number;
+  toStart: number;
+  toEnd: number;
 };
 
 // Present (undoable) state: originalTokens are read-only, tokens are editable.
@@ -41,6 +50,9 @@ export type Operation = {
   start: number;
   end: number;
   after: TokenFragmentPayload[];
+  moveFrom?: number;
+  moveTo?: number;
+  moveLength?: number;
 };
 
 export type CorrectionCardLite = {
@@ -54,6 +66,7 @@ type Action =
   | { type: "INIT_FROM_TEXT"; text: string }
   | { type: "INIT_FROM_STATE"; state: EditorPresentState }
   | { type: "DELETE_SELECTED_TOKENS"; range: [number, number] }
+  | { type: "MOVE_SELECTED_TOKENS"; fromStart: number; fromEnd: number; toIndex: number }
   | { type: "INSERT_TOKEN_BEFORE_SELECTED"; range: [number, number] | null }
   | { type: "INSERT_TOKEN_AFTER_SELECTED"; range: [number, number] | null }
   | { type: "EDIT_SELECTED_RANGE_AS_TEXT"; range: [number, number]; newText: string }
@@ -249,6 +262,7 @@ export const cloneTokens = (items: Token[]) =>
     ...t,
     previousTokens: t.previousTokens?.map((p) => ({ ...p })),
     origin: t.origin,
+    moveId: t.moveId,
   }));
 
 export const makeEmptyPlaceholder = (previousTokens: Token[]): Token => ({
@@ -267,7 +281,7 @@ export const unwindToOriginal = (tokens: Token[]): Token[] => {
     if (tok.previousTokens && tok.previousTokens.length) {
       result.push(...unwindToOriginal(tok.previousTokens));
     } else {
-      result.push({ ...tok, previousTokens: undefined, selected: false });
+      result.push({ ...tok, previousTokens: undefined, selected: false, moveId: undefined });
     }
   });
   return result;
@@ -308,12 +322,12 @@ export const findGroupRangeForTokens = (tokens: Token[], idx: number): [number, 
   return [l, r];
 };
 
-export const deriveCorrectionCards = (tokens: Token[]): CorrectionCardLite[] => {
+export const deriveCorrectionCards = (tokens: Token[], moveMarkers: MoveMarker[]): CorrectionCardLite[] => {
   const visited = new Set<number>();
-
-  return tokens
+  const baseCards = tokens
     .map((tok, idx) => {
       if (visited.has(idx)) return null;
+      if (tok.moveId) return null;
       if (!tok.previousTokens?.length) return null;
       const [rangeStart, rangeEnd] = findGroupRangeForTokens(tokens, idx);
       for (let i = rangeStart; i <= rangeEnd; i += 1) visited.add(i);
@@ -324,13 +338,32 @@ export const deriveCorrectionCards = (tokens: Token[]): CorrectionCardLite[] => 
       };
     })
     .filter(Boolean) as CorrectionCardLite[];
+
+  const moveCards = moveMarkers.map((marker) => ({
+    id: marker.id,
+    rangeStart: marker.toStart,
+    rangeEnd: marker.toEnd,
+  }));
+
+  return [...baseCards, ...moveCards];
 };
 
-export const deriveCorrectionByIndex = (cards: CorrectionCardLite[]): Map<number, string> => {
+export const deriveCorrectionByIndex = (
+  cards: CorrectionCardLite[],
+  moveMarkers: MoveMarker[]
+): Map<number, string> => {
   const map = new Map<number, string>();
   cards.forEach((card) => {
     for (let i = card.rangeStart; i <= card.rangeEnd; i += 1) {
       map.set(i, card.id);
+    }
+  });
+  moveMarkers.forEach((marker) => {
+    for (let i = marker.fromStart; i <= marker.fromEnd; i += 1) {
+      map.set(i, marker.id);
+    }
+    for (let i = marker.toStart; i <= marker.toEnd; i += 1) {
+      map.set(i, marker.id);
     }
   });
   return map;
@@ -369,6 +402,37 @@ export const buildMergedToken = (slice: Token[]): Token | null => {
   };
 };
 
+export const deriveMoveMarkers = (tokens: Token[]): MoveMarker[] => {
+  const map = new Map<
+    string,
+    { fromStart?: number; fromEnd?: number; toStart?: number; toEnd?: number }
+  >();
+  tokens.forEach((tok, idx) => {
+    if (!tok.moveId) return;
+    const entry = map.get(tok.moveId) ?? {};
+    if (tok.kind === "empty") {
+      entry.fromStart = entry.fromStart ?? idx;
+      entry.fromEnd = idx;
+    } else {
+      entry.toStart = entry.toStart === undefined ? idx : Math.min(entry.toStart, idx);
+      entry.toEnd = entry.toEnd === undefined ? idx : Math.max(entry.toEnd, idx);
+    }
+    map.set(tok.moveId, entry);
+  });
+  const markers: MoveMarker[] = [];
+  map.forEach((entry, id) => {
+    if (entry.fromStart === undefined || entry.toStart === undefined || entry.toEnd === undefined) return;
+    markers.push({
+      id,
+      fromStart: entry.fromStart,
+      fromEnd: entry.fromEnd ?? entry.fromStart,
+      toStart: entry.toStart,
+      toEnd: entry.toEnd,
+    });
+  });
+  return markers;
+};
+
 // Compare sequences by visible content (text + kind) ignoring ids and previousTokens.
 const sameTokenSequence = (existing: Token[], nextRaw: Token[]) => {
   if (existing.length !== nextRaw.length) return false;
@@ -402,6 +466,7 @@ const buildHistoryTokensForSpan = (originalTokens: Token[], start: number, end: 
     selected: false,
     previousTokens: undefined,
     groupId: undefined,
+    moveId: undefined,
     baseIndex: tok.baseIndex,
   }));
 };
@@ -572,6 +637,7 @@ export const deriveOperationsFromTokens = (originalTokens: Token[], tokens: Toke
   const visited = new Set<string>();
   for (let i = 0; i < tokens.length; i += 1) {
     const tok = tokens[i];
+    if (tok.moveId) continue;
     const opId = tok.groupId ?? tok.id;
     if (visited.has(opId)) continue;
     const [rangeStart, rangeEnd] = tok.groupId ? findGroupRangeForTokens(tokens, i) : [i, i];
@@ -631,6 +697,7 @@ const buildPresentWithDerivedOperations = (present: EditorPresentState): EditorP
 });
 
 const normalizePresentState = (present: EditorPresentState): EditorPresentState => {
+  const moveMarkers = deriveMoveMarkers(present.tokens);
   let operations = deriveOperationsFromTokens(present.originalTokens, present.tokens);
   if (!operations.length) {
     const originalVisible = present.originalTokens.filter((t) => t.kind !== "empty");
@@ -652,6 +719,9 @@ const normalizePresentState = (present: EditorPresentState): EditorPresentState 
         },
       ];
     }
+  }
+  if (moveMarkers.length) {
+    return { ...present, operations };
   }
   return buildPresentFromOperations(present.originalTokens, operations);
 };
@@ -767,6 +837,7 @@ const tokenReducer = (state: EditorHistoryState, action: Action): EditorHistoryS
           previousTokens: undefined,
           selected: false,
           origin: tok.origin,
+          moveId: undefined,
         }));
         tokens.splice(start, removed.length, ...restore);
         const cleanedTokens = dropRedundantEmpties(tokens);
@@ -786,6 +857,56 @@ const tokenReducer = (state: EditorHistoryState, action: Action): EditorHistoryS
       const placeholder = makeEmptyPlaceholder(previousTokens);
       placeholder.spaceBefore = leadingSpace;
       tokens.splice(start, removed.length, placeholder);
+      const next: EditorPresentState = { ...state.present, tokens };
+      return pushPresent(state, next);
+    }
+    case "MOVE_SELECTED_TOKENS": {
+      let { fromStart, fromEnd, toIndex } = action;
+      if (fromStart < 0 || fromEnd < fromStart || fromStart >= state.present.tokens.length) return state;
+      const tokens = cloneTokens(state.present.tokens);
+      if (toIndex < 0) toIndex = 0;
+      if (toIndex > tokens.length) toIndex = tokens.length;
+      if (toIndex >= fromStart && toIndex <= fromEnd + 1) return state;
+
+      const movedSlice = tokens.slice(fromStart, fromEnd + 1);
+      if (movedSlice.length === 0 || movedSlice.some((tok) => tok.kind === "empty")) return state;
+
+      const placeholderHistory = dedupeTokens(unwindToOriginal(movedSlice)).map((tok) => ({
+        ...tok,
+        previousTokens: undefined,
+        selected: false,
+        groupId: undefined,
+        moveId: undefined,
+      }));
+      const moveId = `move-${createId()}`;
+      const placeholder = {
+        ...makeEmptyPlaceholder(placeholderHistory),
+        groupId: `move-src-${moveId}`,
+        moveId,
+        spaceBefore: movedSlice[0]?.spaceBefore ?? true,
+      };
+
+      tokens.splice(fromStart, movedSlice.length);
+      tokens.splice(fromStart, 0, placeholder);
+
+      let insertionIndex = toIndex;
+      if (toIndex > fromEnd + 1) {
+        insertionIndex -= movedSlice.length;
+      }
+      if (insertionIndex >= fromStart) {
+        insertionIndex += 1;
+      }
+      insertionIndex = Math.max(0, Math.min(tokens.length, insertionIndex));
+
+      const leadingSpace = insertionIndex === 0 ? false : tokens[insertionIndex]?.spaceBefore !== false;
+      const movedTokens = movedSlice.map((tok, idx) => ({
+        ...tok,
+        groupId: `move-dest-${moveId}`,
+        moveId,
+        spaceBefore: idx === 0 ? leadingSpace : tok.spaceBefore,
+      }));
+      tokens.splice(insertionIndex, 0, ...movedTokens);
+
       const next: EditorPresentState = { ...state.present, tokens };
       return pushPresent(state, next);
     }
@@ -841,6 +962,10 @@ const tokenReducer = (state: EditorHistoryState, action: Action): EditorHistoryS
       const oldSlice = tokens.slice(start, end + 1);
       const leadingSpace = start === 0 ? false : oldSlice[0]?.spaceBefore !== false;
       const oldSliceAllInserted = oldSlice.every((tok) => tok.origin === "inserted");
+      const moveIdReuse =
+        oldSlice.length > 0 && oldSlice.every((tok) => tok.moveId === oldSlice[0].moveId)
+          ? oldSlice[0].moveId
+          : undefined;
       const flattenedOld: Token[] = [];
       oldSlice.forEach((tok) => {
         flattenedOld.push({ ...tok, selected: false });
@@ -876,6 +1001,7 @@ const tokenReducer = (state: EditorHistoryState, action: Action): EditorHistoryS
           selected: false,
           previousTokens: undefined,
           groupId: undefined,
+          moveId: undefined,
         }));
         tokens.splice(start, oldSlice.length, ...restored);
         const cleaned = dropRedundantEmpties(tokens);
@@ -888,8 +1014,8 @@ const tokenReducer = (state: EditorHistoryState, action: Action): EditorHistoryS
 
       const groupId = reuseHistory && existingGroupId ? existingGroupId : createId();
       let replacement: Token[] = newTokensRaw.length
-        ? cloneTokens(newTokensRaw).map((tok) => ({ ...tok, groupId }))
-        : [makeEmptyPlaceholder([])];
+        ? cloneTokens(newTokensRaw).map((tok) => ({ ...tok, groupId, moveId: moveIdReuse }))
+        : [{ ...makeEmptyPlaceholder([]), moveId: moveIdReuse }];
       if (oldSliceAllInserted) {
         replacement = replacement.map((tok) => ({ ...tok, origin: "inserted" }));
       }
@@ -930,10 +1056,15 @@ const tokenReducer = (state: EditorHistoryState, action: Action): EditorHistoryS
       if (slice.length <= 1) return state;
       const merged = buildMergedToken(slice);
       if (!merged) return state;
+      const moveIdReuse =
+        slice.length > 0 && slice.every((tok) => tok.moveId === slice[0].moveId)
+          ? slice[0].moveId
+          : undefined;
       // Preserve insertion origin if everything in the slice was originally inserted.
       if (slice.every((tok) => tok.origin === "inserted")) {
         merged.origin = "inserted";
       }
+      merged.moveId = moveIdReuse;
       tokens.splice(start, slice.length, merged);
       const nextState: EditorPresentState = { ...state.present, tokens };
       return pushPresent(state, nextState);
@@ -962,6 +1093,7 @@ const tokenReducer = (state: EditorHistoryState, action: Action): EditorHistoryS
         ...tok,
         previousTokens: undefined,
         selected: false,
+        moveId: undefined,
       }));
       const rangeLen = rangeEnd - rangeStart + 1;
       // If the replacement is just a single empty placeholder with no history, drop the correction entirely.
@@ -986,6 +1118,9 @@ const tokenReducer = (state: EditorHistoryState, action: Action): EditorHistoryS
 
       const merged = buildMergedToken([current, nextToken]);
       if (!merged) return state;
+      const moveIdReuse =
+        current.moveId && current.moveId === nextToken.moveId ? current.moveId : undefined;
+      merged.moveId = moveIdReuse;
       tokens.splice(action.index, 2, merged);
       const nextState: EditorPresentState = { ...state.present, tokens };
       return pushPresent(state, nextState);
@@ -1322,6 +1457,7 @@ type BuildPayloadInput = {
   originalTokens: Token[];
   correctionCards: CorrectionCardLite[];
   correctionTypeMap: Record<string, number | null>;
+  moveMarkers: MoveMarker[];
   annotationIdMap?: Map<string, number>;
   includeDeletedIds?: boolean;
 };
@@ -1332,6 +1468,7 @@ export const buildAnnotationsPayloadStandalone = async ({
   originalTokens,
   correctionCards,
   correctionTypeMap,
+  moveMarkers,
   annotationIdMap,
   includeDeletedIds = false,
 }: BuildPayloadInput): Promise<AnnotationDraft[]> => {
@@ -1413,12 +1550,63 @@ export const buildAnnotationsPayloadStandalone = async ({
     return fragment;
   };
 
+  const moveMarkerById = new Map<string, MoveMarker>();
+  moveMarkers.forEach((marker) => moveMarkerById.set(marker.id, marker));
+
   correctionCards.forEach((card) => {
     const typeId = correctionTypeMap[card.id];
     if (!typeId) return;
     const key = `${card.rangeStart}-${card.rangeEnd}`;
     if (seenKeys.has(key)) return;
     seenKeys.add(key);
+
+    const moveMarker = moveMarkerById.get(card.id);
+    if (moveMarker) {
+      const sourceToken = tokens[moveMarker.fromStart];
+      const historyTokens = sourceToken?.previousTokens?.length
+        ? unwindToOriginal(cloneTokens(sourceToken.previousTokens))
+        : [];
+      const beforeIds = normalizeBeforeIds(historyTokens);
+      const afterFragments = tokens
+        .slice(moveMarker.toStart, moveMarker.toEnd + 1)
+        .filter((tok) => tok.kind !== "empty")
+        .map(fragmentFromToken);
+      const moveFromIndices = beforeIds
+        .map((id) => originalIndexById.get(id))
+        .filter((idx): idx is number => idx !== undefined);
+      const moveFrom = moveFromIndices.length ? Math.min(...moveFromIndices) : moveMarker.fromStart;
+      const moveTo = findInsertionIndex(moveMarker.toStart, moveMarker.toEnd);
+      const moveLength = Math.max(1, afterFragments.length || 1);
+      const replacement = afterFragments.length ? afterFragments.map((f) => f.text).join(" ").trim() : null;
+      const payload: AnnotationDetailPayload = {
+        text_sha256: textHash,
+        text_tokens: textTokensSnapshot,
+        text_tokens_sha256: textTokensHash ?? undefined,
+        operation: "move",
+        before_tokens: beforeIds,
+        after_tokens: afterFragments,
+        source: "manual",
+        move_from: moveFrom,
+        move_to: moveTo,
+        move_len: moveLength,
+      };
+      const spanStart = moveTo;
+      const spanEnd = moveTo + moveLength - 1;
+      const draft: AnnotationDraft = {
+        start_token: spanStart,
+        end_token: spanEnd,
+        replacement,
+        error_type_id: typeId,
+        payload,
+      };
+      const spanKey = `${spanStart}-${spanEnd}`;
+      const existingId = annotationIdMap?.get(spanKey);
+      if (existingId !== undefined) {
+        draft.id = existingId;
+      }
+      payloads.push(draft);
+      return;
+    }
 
     const historyTokens: Token[] = [];
     for (let idx = card.rangeStart; idx <= card.rangeEnd; idx += 1) {
