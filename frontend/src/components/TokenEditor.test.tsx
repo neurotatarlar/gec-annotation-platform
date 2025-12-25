@@ -450,6 +450,23 @@ describe("tokenEditorReducer core flows", () => {
     });
   });
 
+  it("hides space markers while an edit field is open and restores them after committing", async () => {
+    localStorage.clear();
+    await renderEditor("hello world");
+    const user = userEvent.setup();
+    const select = await screen.findByLabelText(/tokeneditor\.spaceMark/i);
+    await user.selectOptions(select, "dot");
+    const hello = await screen.findByText("hello");
+    await user.dblClick(hello);
+    const input = await screen.findByDisplayValue("hello");
+    expect(screen.queryByTestId("space-marker")).toBeNull();
+    await user.type(input, "{Enter}");
+    await waitFor(() => {
+      const markers = screen.getAllByTestId("space-marker");
+      expect(markers.length).toBeGreaterThan(0);
+    });
+  });
+
   it("renders a space marker before a corrected group when spacing exists", async () => {
     localStorage.clear();
     const edited = tokenEditorReducer(initState("hello world"), {
@@ -1525,6 +1542,49 @@ describe("TokenEditor view toggles", () => {
       .filter((t) => t && t !== "↺") as string[];
     expect(chips.join(" ")).toBe("alpha beta gamma");
     expect(within(corrected).queryByText("⬚")).toBeNull();
+  });
+
+  it("only shows the error badge on move destination, not on source placeholder", async () => {
+    localStorage.clear();
+    await renderEditor("alpha beta gamma delta", {
+      getImpl: (url: string) => {
+        if (url.includes("/api/error-types")) {
+          return Promise.resolve({
+            data: [{ id: 1, en_name: "Type A", tt_name: "Type A", is_active: true, default_color: "#00ffaa" }],
+          });
+        }
+        if (url.includes("/annotations")) {
+          return Promise.resolve({
+            data: [
+              {
+                id: 32,
+                author_id: "other",
+                start_token: 0,
+                end_token: 0,
+                replacement: null,
+                error_type_id: 1,
+                payload: {
+                  operation: "move",
+                  move_from: 2,
+                  move_to: 0,
+                  move_len: 1,
+                  before_tokens: [],
+                  after_tokens: [{ id: "m1", text: "gamma", origin: "base" }],
+                  text_tokens: ["alpha", "beta", "gamma", "delta"],
+                },
+              },
+            ],
+          });
+        }
+        return Promise.resolve({ data: {} });
+      },
+    });
+
+    const corrected = await screen.findByTestId("corrected-panel");
+    const badges = within(corrected).getAllByText("Type A");
+    expect(badges.length).toBe(1);
+    // Ensure placeholder exists and is separate from the badge-bearing group.
+    expect(within(corrected).getAllByText("⬚").length).toBeGreaterThan(0);
   });
 
   it("hydrates server edits with literal punctuation spacing", async () => {

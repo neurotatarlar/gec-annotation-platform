@@ -1325,6 +1325,7 @@ export const TokenEditor: React.FC<{
 
   // Render tokens grouped by groupId so corrected clusters share one border and centered history.
   const renderTokenGroups = (tokenList: Token[]) => {
+    const spaceMarkerToUse: SpaceMarker = editingRange ? "none" : spaceMarker;
     const groups: { tokens: Token[]; start: number; end: number }[] = [];
     let visibleCount = 0;
     let idx = 0;
@@ -1354,11 +1355,11 @@ export const TokenEditor: React.FC<{
       const minSpaceWidth = Math.max(2, tokenFontSize * 0.16);
       const gapWidth = hasSpace && !isEdge ? Math.max(baseWidth, minSpaceWidth) : baseWidth;
       const markerChar: string | null =
-        !hasSpace || isEdge
+        !hasSpace || isEdge || editingRange || spaceMarkerToUse === "none"
           ? null
-          : spaceMarker === "dot"
+          : spaceMarkerToUse === "dot"
             ? "·"
-            : spaceMarker === "box"
+            : spaceMarkerToUse === "box"
               ? "␣"
               : null;
       const markerShift = Math.max(0, tokenFontSize * 0.05);
@@ -1477,7 +1478,9 @@ export const TokenEditor: React.FC<{
         const width = Math.max(measureTextWidth(prev.text, badgeFontSize), badgeFontSize * 0.8);
         return acc + width + (i ? 6 : 0);
       }, 0);
-      const baseContentWidth = Math.max(correctedWidth, historyWidth, badgeWidth);
+      const baseContentWidth = isMoveGroup && !isMoveDestination
+        ? correctedWidth
+        : Math.max(correctedWidth, historyWidth, badgeWidth);
       const minWidth =
         isPurePunctGroup && !hasHistory && !typeObj
           ? Math.max(badgeWidth, baseContentWidth, tokenFontSize * 0.7 * group.tokens.length) + groupPadX * 2
@@ -1555,11 +1558,11 @@ export const TokenEditor: React.FC<{
                 const baseWidth = hasSpace ? innerGap : Math.max(0, Math.floor(innerGap * (isPunctAdjacent ? 0.2 : 0.25)));
                 const gapWidth = hasSpace ? Math.max(baseWidth, minSpaceWidth) : baseWidth;
                 const markerChar: string | null =
-                  !hasSpace
+                  !hasSpace || spaceMarkerToUse === "none"
                     ? null
-                    : spaceMarker === "dot"
+                    : spaceMarkerToUse === "dot"
                       ? "·"
-                      : spaceMarker === "box"
+                      : spaceMarkerToUse === "box"
                         ? "␣"
                         : null;
                 const markerShift = Math.max(0, tokenFontSize * 0.05);
