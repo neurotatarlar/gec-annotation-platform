@@ -117,25 +117,6 @@ const stubTokenRects = (container: HTMLElement) => {
   });
 };
 
-const stubDropRects = (container: HTMLElement) => {
-  const gapNodes = Array.from(container.querySelectorAll("[data-drop-index]")) as HTMLElement[];
-  gapNodes.forEach((node) => {
-    const idx = Number(node.dataset.dropIndex ?? 0);
-    node.getBoundingClientRect = () =>
-      ({
-        left: idx * 20 - 5,
-        right: idx * 20 + 5,
-        top: 0,
-        bottom: 10,
-        width: 10,
-        height: 10,
-        x: idx * 20 - 5,
-        y: 0,
-        toJSON: () => ({}),
-      }) as DOMRect;
-  });
-};
-
 const initState = (text = "hello world"): EditorHistoryState =>
   tokenEditorReducer(createInitialHistoryState(), { type: "INIT_FROM_TEXT", text });
 
@@ -152,25 +133,6 @@ describe("tokenEditorReducer core flows", () => {
     const tokens = state2.present.tokens;
     expect(tokens.map((t) => t.text)).toEqual(["hola", "world"]);
     expect(tokens[0].previousTokens?.some((t) => t.text === "hello")).toBe(true);
-  });
-
-  it("restores original order when reverting a leftward move", () => {
-    const state1 = initState("one two three four");
-    const moved = tokenEditorReducer(state1, {
-      type: "MOVE_SELECTED_BY_DRAG",
-      fromIndex: 3,
-      toIndex: 0,
-      count: 1,
-    });
-    const marker = moved.present.moveMarkers[0];
-    expect(marker.toStart).toBe(0);
-    const reverted = tokenEditorReducer(moved, {
-      type: "REVERT_CORRECTION",
-      rangeStart: marker.toStart,
-      rangeEnd: marker.toEnd,
-      markerId: marker.id,
-    });
-    expect(buildTextFromTokens(reverted.present.tokens)).toBe("one two three four");
   });
 
   it("undo restores the prior present state", () => {
@@ -273,7 +235,6 @@ describe("tokenEditorReducer core flows", () => {
     });
     expect(reverted.present.tokens.map((t) => t.text)).toEqual(["hello", "world"]);
     expect(reverted.present.tokens[0].previousTokens).toBeUndefined();
-    expect(reverted.present.moveMarkers.length).toBe(0);
   });
 
   it("deletes a multi-token range into a single placeholder with history", () => {
@@ -300,23 +261,6 @@ describe("tokenEditorReducer core flows", () => {
     expect(anchor.previousTokens?.map((t) => t.text)).toEqual(["alpha", "beta"]);
     expect(tokens[0].groupId).toBe(tokens[1].groupId);
     expect(tokens[1].groupId).toBe(tokens[2].groupId);
-  });
-
-  it("moves a multi-token block and keeps the placeholder history", () => {
-    const state1 = initState("one two three four");
-    const moved = tokenEditorReducer(state1, {
-      type: "MOVE_SELECTED_BY_DRAG",
-      fromIndex: 1,
-      toIndex: 4,
-      count: 2,
-    });
-    const tokens = moved.present.tokens;
-    expect(tokens.map((t) => (t.kind === "empty" ? "⬚" : t.text))).toEqual(["one", "⬚", "four", "two", "three"]);
-    expect(tokens[1].previousTokens?.map((t) => t.text)).toEqual(["two", "three"]);
-    const movedGroup = tokens.slice(3, 5);
-    expect(movedGroup.every((t) => t.groupId === movedGroup[0].groupId)).toBe(true);
-    const destAnchor = movedGroup.find((t) => t.previousTokens?.length);
-    expect(destAnchor?.previousTokens?.[0]?.kind).toBe("empty");
   });
 
   it("clears selection after editing a correction back to the original text", async () => {
@@ -713,7 +657,6 @@ describe("buildAnnotationsPayloadStandalone", () => {
       originalTokens,
       correctionCards,
       correctionTypeMap,
-      moveMarkers: [],
       annotationIdMap,
     });
 
@@ -742,7 +685,6 @@ describe("buildAnnotationsPayloadStandalone", () => {
       originalTokens,
       correctionCards,
       correctionTypeMap,
-      moveMarkers: [],
       annotationIdMap,
       includeDeletedIds: true,
     })) as any;
@@ -791,7 +733,7 @@ describe("insertion splitting", () => {
     localStorage.clear();
     const originalTokens = tokenizeToTokens("hello world");
     const tokens = tokenizeToTokens("foo, bar hello world");
-    const state = { originalTokens, tokens, moveMarkers: [] };
+    const state = { originalTokens, tokens };
     localStorage.setItem("tokenEditorPrefs:state:1", JSON.stringify(state));
     await renderEditor("hello world");
     const correctedPanel = await screen.findByTestId("corrected-panel");
@@ -1088,7 +1030,6 @@ describe("revert clears selection", () => {
       originalTokens: edited.present.originalTokens,
       correctionCards,
       correctionTypeMap,
-      moveMarkers: [],
     });
     expect(payloads).toHaveLength(1);
     expect(payloads[0].replacement).toBe("foo-bar");
@@ -1112,7 +1053,6 @@ describe("revert clears selection", () => {
         },
         { id: "t2", text: "world", kind: "word", selected: false },
       ],
-      moveMarkers: [],
     };
     localStorage.setItem("tokenEditorPrefs:state:1", JSON.stringify(correctedGroup));
     await renderEditor("placeholder");
@@ -1143,149 +1083,6 @@ describe("revert clears selection", () => {
     });
   });
 
-  it("selects placeholder and moved tokens after a right-to-left move", async () => {
-    const present = {
-      originalTokens: [
-        { id: "o1", text: "one", kind: "word", selected: false },
-        { id: "o2", text: "two", kind: "word", selected: false },
-      ],
-      tokens: [
-        {
-          id: "ph",
-          text: "",
-          kind: "empty",
-          selected: false,
-          origin: "base",
-          groupId: "g1",
-          moveId: "m1",
-          previousTokens: [{ id: "o2", text: "two", kind: "word", selected: false }],
-        },
-        { id: "t1", text: "one", kind: "word", selected: false, origin: "base", groupId: "g2", moveId: "m1" },
-      ],
-      moveMarkers: [{ id: "m1", fromStart: 1, fromEnd: 1, toStart: 0, toEnd: 0 }],
-    } as any;
-    localStorage.setItem("tokenEditorPrefs:state:1", JSON.stringify(present));
-    await renderEditor("two one");
-    const placeholder = await screen.findByRole("button", { name: "⬚" });
-    const moved = await screen.findByRole("button", { name: "one" });
-    await waitFor(() => {
-      expect(placeholder).toHaveAttribute("aria-pressed", "true");
-      expect(moved).toHaveAttribute("aria-pressed", "true");
-    });
-  });
-
-  it("selects placeholder and moved tokens after a left-to-right move", async () => {
-    const present = {
-      originalTokens: [
-        { id: "o1", text: "one", kind: "word", selected: false },
-        { id: "o2", text: "two", kind: "word", selected: false },
-      ],
-      tokens: [
-        { id: "t1", text: "two", kind: "word", selected: false, origin: "base", groupId: "g2", moveId: "m1" },
-        {
-          id: "ph",
-          text: "",
-          kind: "empty",
-          selected: false,
-          origin: "base",
-          groupId: "g1",
-          moveId: "m1",
-          previousTokens: [{ id: "o1", text: "one", kind: "word", selected: false }],
-        },
-      ],
-      moveMarkers: [{ id: "m1", fromStart: 0, fromEnd: 0, toStart: 1, toEnd: 1 }],
-    } as any;
-    localStorage.setItem("tokenEditorPrefs:state:1", JSON.stringify(present));
-    await renderEditor("one two");
-    const placeholder = await screen.findByRole("button", { name: "⬚" });
-    const moved = await screen.findByRole("button", { name: "two" });
-    await waitFor(() => {
-      expect(placeholder).toHaveAttribute("aria-pressed", "true");
-      expect(moved).toHaveAttribute("aria-pressed", "true");
-    });
-  });
-
-  it("drops multi-token moves at the intended caret even when dragging from the last token", async () => {
-    mockGet.mockReset();
-    mockPost.mockReset();
-    localStorage.clear();
-    await renderEditor("one two three four five six seven eight");
-    const user = userEvent.setup();
-
-    const six = await screen.findByRole("button", { name: "six" });
-    const eight = screen.getByRole("button", { name: "eight" });
-    await user.click(six);
-    await user.click(eight, { ctrlKey: true });
-
-    const corrected = await screen.findByTestId("corrected-panel");
-    stubTokenRects(corrected);
-    stubDropRects(corrected);
-
-    await act(async () => {
-      fireEvent.mouseDown(eight, { clientX: 150, clientY: 5 });
-      fireEvent.mouseMove(window, { clientX: 80, clientY: 5 });
-      fireEvent.mouseUp(window, { clientX: 80, clientY: 5 });
-    });
-
-    await waitFor(() => {
-      const tokenNodes = Array.from(corrected.querySelectorAll("[data-token-index]")) as HTMLElement[];
-      const texts = tokenNodes
-        .map((node) => node.textContent?.trim() ?? "")
-        .filter((text) => text && text !== "⬚");
-      expect(texts).toEqual(["one", "two", "three", "four", "six", "seven", "eight", "five"]);
-    });
-  });
-
-  it("drops left-to-right multi-token moves at the intended caret", async () => {
-    mockGet.mockReset();
-    mockPost.mockReset();
-    localStorage.clear();
-    await renderEditor("one two three four five six seven eight");
-    const user = userEvent.setup();
-
-    const two = await screen.findByRole("button", { name: "two" });
-    const three = screen.getByRole("button", { name: "three" });
-    await user.click(two);
-    await user.click(three, { ctrlKey: true });
-
-    const corrected = await screen.findByTestId("corrected-panel");
-    stubTokenRects(corrected);
-    stubDropRects(corrected);
-
-    await act(async () => {
-      fireEvent.mouseDown(three, { clientX: 50, clientY: 5 });
-      fireEvent.mouseMove(window, { clientX: 120, clientY: 5 });
-      fireEvent.mouseUp(window, { clientX: 120, clientY: 5 });
-    });
-
-    await waitFor(() => {
-      const tokenNodes = Array.from(corrected.querySelectorAll("[data-token-index]")) as HTMLElement[];
-      const texts = tokenNodes
-        .map((node) => node.textContent?.trim() ?? "")
-        .filter((text) => text && text !== "⬚");
-      expect(texts).toEqual(["one", "four", "five", "six", "two", "three", "seven", "eight"]);
-    });
-  });
-
-  it("draws a move connector on hover", async () => {
-    const moved = tokenEditorReducer(initState("one two three"), {
-      type: "MOVE_SELECTED_BY_DRAG",
-      fromIndex: 1,
-      toIndex: 3,
-      count: 1,
-    });
-    localStorage.setItem("tokenEditorPrefs:state:1", JSON.stringify(moved.present));
-    await renderEditor("one two three");
-    const corrected = await screen.findByTestId("corrected-panel");
-    const moveGroup = corrected.querySelector("[data-move-id][data-move-role]");
-    expect(moveGroup).toBeTruthy();
-    fireEvent.mouseEnter(moveGroup as Element);
-    await waitFor(() => {
-      const line = corrected.querySelector("line[marker-end]");
-      expect(line).toBeTruthy();
-    });
-  });
-
   it("auto-selects the most recent deletion even after prior deletes and reverts", async () => {
     mockGet.mockReset();
     mockPost.mockReset();
@@ -1313,30 +1110,6 @@ describe("revert clears selection", () => {
     });
   });
 
-  it("selects only the placeholder and moved tokens for a lone move without touching intermediates", async () => {
-    mockGet.mockReset();
-    mockPost.mockReset();
-    localStorage.clear();
-    const moved = tokenEditorReducer(initState("alpha beta gamma delta"), {
-      type: "MOVE_SELECTED_BY_DRAG",
-      fromIndex: 0,
-      toIndex: 3,
-      count: 1,
-    });
-    localStorage.setItem("tokenEditorPrefs:state:1", JSON.stringify(moved.present));
-    await renderEditor("alpha beta gamma delta");
-    const placeholder = await screen.findByRole("button", { name: "⬚" });
-    const alpha = await screen.findByRole("button", { name: "alpha" });
-    const beta = screen.getByRole("button", { name: "beta" });
-    const gamma = screen.getByRole("button", { name: "gamma" });
-    await waitFor(() => {
-      expect(placeholder).toHaveAttribute("aria-pressed", "true");
-      expect(alpha).toHaveAttribute("aria-pressed", "true");
-      expect(beta).toHaveAttribute("aria-pressed", "false");
-      expect(gamma).toHaveAttribute("aria-pressed", "false");
-    });
-  });
-
   it("selects the first deletion after clearing all corrections", async () => {
     mockGet.mockReset();
     mockPost.mockReset();
@@ -1359,35 +1132,6 @@ describe("revert clears selection", () => {
     const placeholder = await screen.findByRole("button", { name: "⬚" });
     await waitFor(() => expect(placeholder).toHaveAttribute("aria-pressed", "true"));
   });
-
-  it("prefers the latest move selection even when earlier edits exist", async () => {
-    mockGet.mockReset();
-    mockPost.mockReset();
-    localStorage.clear();
-    const edited = tokenEditorReducer(initState("first second third"), {
-      type: "EDIT_SELECTED_RANGE_AS_TEXT",
-      range: [2, 2],
-      newText: "third!",
-    });
-    const moved = tokenEditorReducer(edited, {
-      type: "MOVE_SELECTED_BY_DRAG",
-      fromIndex: 0,
-      toIndex: 2,
-      count: 1,
-    });
-    localStorage.setItem("tokenEditorPrefs:state:1", JSON.stringify(moved.present));
-    await renderEditor("first second third");
-    const placeholder = await screen.findByRole("button", { name: "⬚" });
-    const movedToken = await screen.findByRole("button", { name: "first" });
-    const second = screen.getByRole("button", { name: "second" });
-    const third = screen.getByRole("button", { name: "third!" });
-    await waitFor(() => {
-      expect(placeholder).toHaveAttribute("aria-pressed", "true");
-      expect(movedToken).toHaveAttribute("aria-pressed", "true");
-      expect(second).toHaveAttribute("aria-pressed", "false");
-      expect(third).toHaveAttribute("aria-pressed", "false");
-    });
-  });
 });
 
 describe("TokenEditor view toggles", () => {
@@ -1395,82 +1139,6 @@ describe("TokenEditor view toggles", () => {
     mockGet.mockReset();
     mockPost.mockReset();
     localStorage.clear();
-  });
-
-  const seedMoveState = () => {
-    const present = {
-      originalTokens: [
-        { id: "o1", text: "first", kind: "word", selected: false },
-        { id: "o2", text: "second", kind: "word", selected: false },
-      ],
-      tokens: [
-        {
-          id: "ph1",
-          text: "",
-          kind: "empty",
-          selected: false,
-          origin: "base",
-          groupId: "g1",
-          moveId: "m1",
-          previousTokens: [{ id: "p1", text: "first", kind: "word", selected: false }],
-        },
-        {
-          id: "t2",
-          text: "second",
-          kind: "word",
-          selected: false,
-          origin: "base",
-          groupId: "g2",
-          moveId: "m1",
-        },
-      ],
-      moveMarkers: [{ id: "m1", fromStart: 0, fromEnd: 0, toStart: 1, toEnd: 1 }],
-    } as any;
-    localStorage.setItem("tokenEditorPrefs:state:1", JSON.stringify(present));
-  };
-
-  it("auto-selects the move correction when it is the newest change", async () => {
-    const present = {
-      originalTokens: [
-        { id: "o1", text: "first", kind: "word", selected: false },
-        { id: "o2", text: "second", kind: "word", selected: false },
-        { id: "o3", text: "third", kind: "word", selected: false },
-      ],
-      tokens: [
-        {
-          id: "ph1",
-          text: "",
-          kind: "empty",
-          selected: false,
-          origin: "base",
-          groupId: "g1",
-          moveId: "m1",
-          previousTokens: [{ id: "p1", text: "third", kind: "word", selected: false }],
-        },
-        { id: "t2", text: "first", kind: "word", selected: false, origin: "base", groupId: "g2", moveId: "m1" },
-        {
-          id: "t3",
-          text: "second",
-          kind: "word",
-          selected: false,
-          origin: "base",
-          groupId: "g3",
-          previousTokens: [{ id: "p2", text: "second-old", kind: "word", selected: false }],
-        },
-      ],
-      moveMarkers: [{ id: "m1", fromStart: 0, fromEnd: 0, toStart: 1, toEnd: 1 }],
-    } as any;
-    localStorage.setItem("tokenEditorPrefs:state:1", JSON.stringify(present));
-
-    await renderEditor("third first second");
-    const placeholder = await screen.findByRole("button", { name: "⬚" });
-    const moved = screen.getByRole("button", { name: "first" });
-    const other = screen.getByRole("button", { name: "second" });
-    await waitFor(() => {
-      expect(placeholder).toHaveAttribute("aria-pressed", "true");
-      expect(moved).toHaveAttribute("aria-pressed", "true");
-      expect(other).toHaveAttribute("aria-pressed", "false");
-    });
   });
 
   it("hydrates multi-token deletions from server annotations", async () => {
@@ -1623,91 +1291,6 @@ describe("TokenEditor view toggles", () => {
     expect(within(corrected).getAllByText("⬚").length).toBeGreaterThan(0);
   });
 
-  it("hydrates server moves with placeholder and moved group", async () => {
-    localStorage.clear();
-    await renderEditor("hello brave new world", {
-      getImpl: (url: string) => {
-        if (url.includes("/api/error-types")) return Promise.resolve({ data: [] });
-        if (url.includes("/annotations")) {
-          return Promise.resolve({
-            data: [
-              {
-                id: 30,
-                author_id: "other",
-                start_token: 1,
-                end_token: 1,
-                replacement: null,
-                error_type_id: 1,
-                payload: {
-                  operation: "move",
-                  before_tokens: ["base-1"],
-                  after_tokens: [{ id: "m1", text: "brave", origin: "base" }],
-                  move_from: 1,
-                  move_to: 4,
-                  text_tokens: ["hello", "brave", "new", "world"],
-                },
-              },
-            ],
-          });
-        }
-        return Promise.resolve({ data: {} });
-      },
-    });
-
-    const corrected = await screen.findByTestId("corrected-panel");
-    const chips = within(corrected)
-      .getAllByRole("button")
-      .map((c) => c.textContent?.trim())
-      .filter((t) => t && t !== "↺") as string[];
-    expect(chips).toContain("brave");
-    expect(chips.join(" ")).toBe("hello ⬚ new world brave");
-    // Placeholder should be rendered for the source location and destination history.
-    expect(within(corrected).getAllByText("⬚").length).toBeGreaterThan(1);
-  });
-
-  it("hydrates multi-token moves with placeholder and moved group", async () => {
-    localStorage.clear();
-    await renderEditor("one two three four five", {
-      getImpl: (url: string) => {
-        if (url.includes("/api/error-types")) return Promise.resolve({ data: [] });
-        if (url.includes("/annotations")) {
-          return Promise.resolve({
-            data: [
-              {
-                id: 40,
-                author_id: "other",
-                start_token: 1,
-                end_token: 2,
-                replacement: null,
-                error_type_id: 1,
-                payload: {
-                  operation: "move",
-                  before_tokens: ["two", "three"],
-                  after_tokens: [
-                    { id: "m2", text: "two", origin: "base" },
-                    { id: "m3", text: "three", origin: "base" },
-                  ],
-                  move_from: 1,
-                  move_to: 5,
-                  text_tokens: ["one", "two", "three", "four", "five"],
-                },
-              },
-            ],
-          });
-        }
-        return Promise.resolve({ data: {} });
-      },
-    });
-
-    const corrected = await screen.findByTestId("corrected-panel");
-    const chips = within(corrected)
-      .getAllByRole("button")
-      .map((c) => c.textContent?.trim())
-      .filter((t) => t && t !== "↺") as string[];
-    expect(chips.join(" ")).toBe("one ⬚ four five two three");
-    expect(within(corrected).getAllByText("⬚").length).toBeGreaterThan(1);
-  });
-
   it("hydrates server edits with literal punctuation spacing", async () => {
     localStorage.clear();
     await renderEditor("foo bar", {
@@ -1800,7 +1383,6 @@ describe("TokenEditor view toggles", () => {
       originalTokens: edited.present.originalTokens,
       correctionCards: [{ id: "c1", rangeStart: 0, rangeEnd: 1, markerId: null }],
       correctionTypeMap: { c1: 1 },
-      moveMarkers: [],
     });
     expect(annotation.start_token).toBe(0);
     expect(annotation.end_token).toBe(0);
@@ -1851,7 +1433,6 @@ describe("TokenEditor view toggles", () => {
       originalTokens: edited.present.originalTokens,
       correctionCards: [{ id: "c1", rangeStart: 0, rangeEnd: 2, markerId: null }],
       correctionTypeMap: { c1: 1 },
-      moveMarkers: [],
     });
     expect(annotation.start_token).toBe(0);
     expect(annotation.end_token).toBe(1);
@@ -1903,7 +1484,6 @@ describe("TokenEditor view toggles", () => {
       originalTokens: edited.present.originalTokens,
       correctionCards: [{ id: "c1", rangeStart: 0, rangeEnd: 0, markerId: null }],
       correctionTypeMap: { c1: 1 },
-      moveMarkers: [],
     });
     expect(annotation.start_token).toBe(0);
     expect(annotation.end_token).toBe(1);

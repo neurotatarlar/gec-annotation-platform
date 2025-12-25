@@ -8,7 +8,6 @@ import { useCorrectionSelection } from "../hooks/useCorrectionSelection";
 import { useCorrectionTypes } from "../hooks/useCorrectionTypes";
 import { useEditorUIState } from "../hooks/useEditorUIState";
 import { useSaveController } from "../hooks/useSaveController";
-import { useTokenDrag } from "../hooks/useTokenDrag";
 import {
   colorWithAlpha,
   getErrorTypeLabel,
@@ -27,8 +26,6 @@ import {
   deriveCorrectionByIndex,
   deriveCorrectionCards,
   deriveOperationsFromTokens,
-  deriveMoveMarkers,
-  indexMoveMarkersById,
   makeEmptyPlaceholder,
   normalizeHotkeySpec,
   rangeToArray,
@@ -116,8 +113,11 @@ const loadEditorState = (textId: number): EditorPresentState | null => {
     const raw = localStorage.getItem(`${PREFS_KEY}:state:${textId}`);
     if (!raw) return null;
     const parsed = JSON.parse(raw);
-    if (!parsed?.originalTokens || !parsed?.tokens || !parsed?.moveMarkers) return null;
-    return parsed as EditorPresentState;
+    if (!parsed?.originalTokens || !parsed?.tokens) return null;
+    return {
+      ...parsed,
+      moveMarkers: [],
+    } as EditorPresentState;
   } catch {
     return null;
   }
@@ -126,7 +126,7 @@ const loadEditorState = (textId: number): EditorPresentState | null => {
 const persistEditorState = (textId: number, state: EditorPresentState) => {
   if (process.env.NODE_ENV !== "test") return;
   try {
-    localStorage.setItem(`${PREFS_KEY}:state:${textId}`, JSON.stringify(state));
+    localStorage.setItem(`${PREFS_KEY}:state:${textId}`, JSON.stringify({ ...state, moveMarkers: [] }));
   } catch {
     // ignore
   }
@@ -162,13 +162,9 @@ export const TokenEditor: React.FC<{
   const {
     ui,
     setSelection,
-    clearMoveMarkerSelection,
     startEdit,
     updateEditText,
     endEdit,
-    startDrag,
-    endDrag,
-    setDropTarget,
     openClearConfirm,
     closeClearConfirm,
     openFlagConfirm,
@@ -178,10 +174,8 @@ export const TokenEditor: React.FC<{
     resetUI,
   } = useEditorUIState();
   const selection = ui.selection;
-  const selectionMoveMarkerId = ui.selectionMoveMarkerId;
   const editingRange = ui.editingRange;
   const editText = ui.editText;
-  const dropTargetIndex = ui.dropTargetIndex;
   const pendingAction = ui.pendingAction;
   const flagReason = ui.flagReason;
   const flagError = ui.flagError;
@@ -209,7 +203,6 @@ export const TokenEditor: React.FC<{
     [tokenFontSize]
   );
   const tokenRowRef = useRef<HTMLDivElement | null>(null);
-  const [hoveredMoveId, setHoveredMoveId] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSkipping, setIsSkipping] = useState(false);
   const [isTrashing, setIsTrashing] = useState(false);
@@ -326,75 +319,15 @@ export const TokenEditor: React.FC<{
     }
   }, []);
 
-  const getRangeRect = (start: number, end: number) => {
-    const safeStart = Math.max(0, start);
-    const safeEnd = Math.min(tokens.length - 1, end);
-    let minLeft = Number.POSITIVE_INFINITY;
-    let minTop = Number.POSITIVE_INFINITY;
-    let maxRight = Number.NEGATIVE_INFINITY;
-    let maxBottom = Number.NEGATIVE_INFINITY;
-    for (let i = safeStart; i <= safeEnd; i += 1) {
-      const tok = tokens[i];
-      if (!tok) continue;
-      const el = tokenRefs.current[tok.id];
-      if (!el) continue;
-      const rect = el.getBoundingClientRect();
-      minLeft = Math.min(minLeft, rect.left);
-      minTop = Math.min(minTop, rect.top);
-      maxRight = Math.max(maxRight, rect.right);
-      maxBottom = Math.max(maxBottom, rect.bottom);
-    }
-    if (!Number.isFinite(minLeft) || !tokenRowRef.current) return null;
-    const containerRect = tokenRowRef.current.getBoundingClientRect();
-    return {
-      left: minLeft - containerRect.left,
-      top: minTop - containerRect.top,
-      right: maxRight - containerRect.left,
-      bottom: maxBottom - containerRect.top,
-      width: maxRight - minLeft,
-      height: maxBottom - minTop,
-    };
-  };
-  const getMoveGroupRect = useCallback(
-    (moveId: string, role: "source" | "dest") => {
-      const container = tokenRowRef.current;
-      if (!container) return null;
-      const el = container.querySelector<HTMLElement>(`[data-move-id="${moveId}"][data-move-role="${role}"]`);
-      if (!el) return null;
-      const rect = el.getBoundingClientRect();
-      const containerRect = container.getBoundingClientRect();
-      return {
-        left: rect.left - containerRect.left,
-        top: rect.top - containerRect.top,
-        right: rect.right - containerRect.left,
-        bottom: rect.bottom - containerRect.top,
-        width: rect.width,
-        height: rect.height,
-      };
-    },
-    []
-  );
-
-  // Recompute move arrows directly in render using current DOM positions.
-
   // Derived helpers
   const hasSelection = selection.start !== null && selection.end !== null;
   const selectedIndices = useMemo(() => {
     if (!hasSelection) return [];
-    if (selectionMoveMarkerId) {
-      const marker = history.present.moveMarkers.find((m) => m.id === selectionMoveMarkerId);
-      if (marker) {
-        const indices: number[] = [];
-        for (let i = marker.fromStart; i <= marker.fromEnd; i += 1) indices.push(i);
-        for (let i = marker.toStart; i <= marker.toEnd; i += 1) indices.push(i);
-        return Array.from(new Set(indices)).sort((a, b) => a - b);
-      }
-    }
     const [s, e] = [selection.start!, selection.end!];
     const start = Math.min(s, e);
     const end = Math.max(s, e);
     return rangeToArray([start, end]);
-  }, [hasSelection, history.present.moveMarkers, selection, selectionMoveMarkerId]);
+  }, [hasSelection, selection]);
 
   // Init from text on mount.
   useEffect(() => {
@@ -434,6 +367,7 @@ export const TokenEditor: React.FC<{
         const payload = ann?.payload || {};
         const operation = payload.operation || (ann?.replacement ? "replace" : "noop");
         if (operation === "noop") return;
+        if (operation === "move") return;
         const startOriginal = typeof ann?.start_token === "number" ? ann.start_token : 0;
         const endOriginal = typeof ann?.end_token === "number" ? ann.end_token : startOriginal;
         const targetStart = Math.max(0, Math.min(working.length, startOriginal + offset));
@@ -498,37 +432,6 @@ export const TokenEditor: React.FC<{
         const groupId = createId();
         const cardType = ann?.error_type_id ?? null;
 
-        if (operation === "move") {
-          const moveId = createId();
-          const moveFrom = typeof (payload as any)?.move_from === "number" ? (payload as any).move_from : startOriginal;
-          const moveTo = typeof (payload as any)?.move_to === "number" ? (payload as any).move_to : startOriginal;
-          const sourceIdx = Math.max(0, Math.min(working.length, moveFrom + offset));
-          const sourceLeadingSpace = sourceIdx === 0 ? false : working[sourceIdx]?.spaceBefore !== false;
-          const srcSlice = working.slice(sourceIdx, sourceIdx + removeCount);
-          const fallbackTokens = buildTokensFromFragments(afterRaw, replacementText);
-          const sourceHistory = srcSlice.length > 0 ? cloneTokens(srcSlice) : cloneTokens(fallbackTokens);
-          const placeholder = { ...makeEmptyPlaceholder(sourceHistory), groupId, moveId, spaceBefore: sourceLeadingSpace };
-          working.splice(sourceIdx, removeCount, placeholder);
-          offset += 1 - removeCount;
-
-          const moveTokens = buildTokensFromFragments(afterRaw, replacementText).map((tok) => ({
-            ...tok,
-            id: createId(),
-            groupId,
-            moveId,
-            selected: false,
-            previousTokens: [makeEmptyPlaceholder([])],
-          }));
-          typeMap[moveId] = cardType;
-          const destIdx = Math.max(0, Math.min(working.length, moveTo + offset));
-          if (moveTokens.length) {
-            moveTokens[0].spaceBefore = destIdx === 0 ? false : working[destIdx]?.spaceBefore !== false;
-          }
-          working.splice(destIdx, 0, ...moveTokens);
-          offset += moveTokens.length;
-          return;
-        }
-
         const newTokens: Token[] = [];
         const builtTokens = buildTokensFromFragments(afterRaw, replacementText, leadingSpace);
         if (!builtTokens.length && (operation === "delete" || operation === "insert")) {
@@ -566,7 +469,7 @@ export const TokenEditor: React.FC<{
       const present: EditorPresentState = {
         originalTokens: cloneTokens(baseTokens),
         tokens: working,
-        moveMarkers: deriveMoveMarkers(working),
+        moveMarkers: [],
         operations,
       };
       return { present, typeMap, spanMap };
@@ -602,18 +505,9 @@ export const TokenEditor: React.FC<{
     return Array.from(groups.values());
   }, [activeErrorTypes, locale, t]);
 
-  const correctionCards = useMemo(
-    () => deriveCorrectionCards(tokens, history.present.moveMarkers),
-    [tokens, history.present.moveMarkers]
-  );
+  const correctionCards = useMemo(() => deriveCorrectionCards(tokens), [tokens]);
 
   const correctionByIndex = useMemo(() => deriveCorrectionByIndex(correctionCards), [correctionCards]);
-  const moveMarkerById = useMemo(() => indexMoveMarkersById(history.present.moveMarkers), [history.present.moveMarkers]);
-  const hoveredMoveMarker = hoveredMoveId ? moveMarkerById.get(hoveredMoveId) ?? null : null;
-  const handleHoverMove = useCallback((moveId: string | null) => {
-    setHoveredMoveId((prev) => (prev === moveId ? prev : moveId));
-  }, []);
-
   const {
     activeErrorTypeId,
     setActiveErrorTypeId,
@@ -625,8 +519,6 @@ export const TokenEditor: React.FC<{
   const { markSkipAutoSelect, setPendingSelectIndex } = useCorrectionSelection({
     correctionCards,
     tokens,
-    moveMarkers: history.present.moveMarkers,
-    moveMarkerById,
     setSelection,
   });
 
@@ -674,26 +566,6 @@ export const TokenEditor: React.FC<{
       cancelled = true;
     };
   }, [get, textId, hydrateFromServerAnnotations, currentUserId, seedCorrectionTypes]);
-
-  useEffect(() => {
-    if (!selectionMoveMarkerId) return;
-    if (!hasSelection) {
-      clearMoveMarkerSelection();
-      return;
-    }
-    const marker = moveMarkerById.get(selectionMoveMarkerId);
-    if (!marker) {
-      clearMoveMarkerSelection();
-      return;
-    }
-    const minSel = Math.min(selection.start!, selection.end!);
-    const maxSel = Math.max(selection.start!, selection.end!);
-    const markerMin = Math.min(marker.fromStart, marker.toStart);
-    const markerMax = Math.max(marker.fromEnd, marker.toEnd);
-    if (minSel !== markerMin || maxSel !== markerMax) {
-      clearMoveMarkerSelection();
-    }
-  }, [clearMoveMarkerSelection, hasSelection, moveMarkerById, selection, selectionMoveMarkerId]);
 
   const requestNextText = useCallback(async () => {
     try {
@@ -963,108 +835,6 @@ export const TokenEditor: React.FC<{
     return () => window.removeEventListener("keydown", handler);
   }, [editingRange, hasSelection, selection, showClearConfirm, pendingAction, cancelFlag, closeClearConfirm]);
 
-  const getDropIndexFromPoint = useCallback((clientX: number, clientY: number) => {
-    const container = tokenRowRef.current;
-    if (container) {
-      const gaps = Array.from(container.querySelectorAll<HTMLElement>("[data-drop-index]"))
-        .map((el) => {
-          const rect = el.getBoundingClientRect();
-          if (!Number.isFinite(rect.left) || (!rect.width && !rect.height)) return null;
-          const idx = Number(el.dataset.dropIndex);
-          if (!Number.isFinite(idx)) return null;
-          return { idx, rect };
-        })
-        .filter(Boolean) as Array<{ idx: number; rect: DOMRect }>;
-
-      if (gaps.length) {
-        const rowTolerance = 6;
-        const rows: Array<{ top: number; bottom: number; items: typeof gaps }> = [];
-        gaps.forEach((item) => {
-          const row = rows.find((r) => Math.abs(item.rect.top - r.top) <= rowTolerance);
-          if (row) {
-            row.items.push(item);
-            row.top = Math.min(row.top, item.rect.top);
-            row.bottom = Math.max(row.bottom, item.rect.bottom);
-          } else {
-            rows.push({ top: item.rect.top, bottom: item.rect.bottom, items: [item] });
-          }
-        });
-        let targetRow = rows.find((r) => clientY >= r.top - rowTolerance && clientY <= r.bottom + rowTolerance);
-        if (!targetRow) {
-          targetRow = rows.reduce((best, row) => {
-            const bestCenter = (best.top + best.bottom) / 2;
-            const rowCenter = (row.top + row.bottom) / 2;
-            return Math.abs(clientY - rowCenter) < Math.abs(clientY - bestCenter) ? row : best;
-          }, rows[0]);
-        }
-        const rowItems = [...targetRow.items].sort((a, b) => a.rect.left - b.rect.left);
-        let best = rowItems[0];
-        let bestDist = Math.abs(clientX - (best.rect.left + best.rect.width / 2));
-        for (let i = 1; i < rowItems.length; i += 1) {
-          const item = rowItems[i];
-          const dist = Math.abs(clientX - (item.rect.left + item.rect.width / 2));
-          if (dist < bestDist) {
-            best = item;
-            bestDist = dist;
-          }
-        }
-        return best.idx;
-      }
-    }
-
-    const items = tokens
-      .map((tok, idx) => {
-        const el = tokenRefs.current[tok.id];
-        if (!el) return null;
-        const rect = el.getBoundingClientRect();
-        if (!Number.isFinite(rect.left) || (!rect.width && !rect.height)) return null;
-        return { idx, rect };
-      })
-      .filter(Boolean) as Array<{ idx: number; rect: DOMRect }>;
-    if (!items.length) return null;
-    items.sort((a, b) => a.rect.top - b.rect.top || a.rect.left - b.rect.left);
-    const rowTolerance = 6;
-    const rows: Array<{ top: number; bottom: number; items: typeof items }> = [];
-    items.forEach((item) => {
-      const row = rows.find((r) => Math.abs(item.rect.top - r.top) <= rowTolerance);
-      if (row) {
-        row.items.push(item);
-        row.top = Math.min(row.top, item.rect.top);
-        row.bottom = Math.max(row.bottom, item.rect.bottom);
-      } else {
-        rows.push({ top: item.rect.top, bottom: item.rect.bottom, items: [item] });
-      }
-    });
-    let targetRow = rows.find((r) => clientY >= r.top - rowTolerance && clientY <= r.bottom + rowTolerance);
-    if (!targetRow) {
-      targetRow = rows.reduce((best, row) => {
-        const bestCenter = (best.top + best.bottom) / 2;
-        const rowCenter = (row.top + row.bottom) / 2;
-        return Math.abs(clientY - rowCenter) < Math.abs(clientY - bestCenter) ? row : best;
-      }, rows[0]);
-    }
-    const rowItems = [...targetRow.items].sort((a, b) => a.rect.left - b.rect.left);
-    for (const item of rowItems) {
-      const mid = item.rect.left + item.rect.width / 2;
-      if (clientX < mid) return item.idx;
-    }
-    return rowItems[rowItems.length - 1].idx + 1;
-  }, [tokens]);
-
-  const { handleMouseDown, consumeClickSuppression } = useTokenDrag({
-    tokens,
-    selectedSet,
-    hasSelection,
-    selection,
-    setSelection,
-    dispatch,
-    startDrag,
-    endDrag,
-    endEdit,
-    setDropTarget,
-    getDropIndexFromPoint,
-  });
-
   const renderToken = (token: Token, index: number, forceChanged = false) => {
     const isSelected = selectedSet.has(index);
     const hasHistory = forceChanged || Boolean(token.previousTokens?.length);
@@ -1186,31 +956,13 @@ export const TokenEditor: React.FC<{
         </div>
       );
     }
-    const dropHighlight = dropTargetIndex !== null && dropTargetIndex === index && !editingRange;
-    const caretHint = dropHighlight
-      ? {
-          position: "absolute" as const,
-          left: -4,
-          top: -8,
-          bottom: -8,
-          width: 2,
-          background: "rgba(94,234,212,0.8)",
-          boxShadow: "0 0 0 1px rgba(94,234,212,0.5)",
-        }
-      : null;
-
     return (
       <div
         key={token.id}
         style={style}
         data-token-index={index}
-        onMouseDown={(e) => {
-          if (isSpecial || isEmpty || editingRange) return;
-          handleMouseDown(index, e, e.ctrlKey || e.metaKey);
-        }}
         onClick={(e) => {
           if (isSpecial) return;
-          if (consumeClickSuppression()) return;
           handleTokenClick(index, e.ctrlKey || e.metaKey);
         }}
         onDoubleClick={(e) => {
@@ -1240,7 +992,6 @@ export const TokenEditor: React.FC<{
         aria-pressed={isSelected}
       >
         <span>{displayText}</span>
-        {caretHint && <span style={caretHint} />}
       </div>
     );
   };
@@ -1264,12 +1015,6 @@ export const TokenEditor: React.FC<{
         idx += 1;
       }
     }
-
-    const activeMarker = history.present.moveMarkers[0] ?? null;
-    const destSet =
-      activeMarker && activeMarker.toStart >= 0 && activeMarker.toEnd >= activeMarker.toStart
-        ? new Set(rangeToArray([activeMarker.toStart, activeMarker.toEnd]))
-        : new Set<number>();
 
     const renderGap = (idx: number) => {
       const base = Math.max(0, tokenGap);
@@ -1349,36 +1094,7 @@ export const TokenEditor: React.FC<{
       group.tokens.forEach((tok) => {
         if (tok.kind !== "empty") visibleCount += 1;
       });
-      const isMoveSource =
-        activeMarker &&
-        group.start <= activeMarker.fromEnd &&
-        group.end >= activeMarker.fromStart;
-      const isMoveDest =
-        activeMarker &&
-        group.start <= activeMarker.toEnd &&
-        group.end >= activeMarker.toStart;
-      const isHoverSource =
-        hoveredMoveMarker &&
-        group.start <= hoveredMoveMarker.fromEnd &&
-        group.end >= hoveredMoveMarker.fromStart;
-      const isHoverDest =
-        hoveredMoveMarker &&
-        group.start <= hoveredMoveMarker.toEnd &&
-        group.end >= hoveredMoveMarker.toStart;
-      const isHoverMove = Boolean(isHoverSource || isHoverDest);
-      const showBorder = hasHistory || Boolean(isMoveDest) || isHoverMove;
-      const matchingMarker =
-        history.present.moveMarkers.find(
-          (m) =>
-            (group.start >= m.fromStart && group.start <= m.fromEnd) ||
-            (group.start >= m.toStart && group.start <= m.toEnd)
-        ) ?? null;
-      const isMarkerSource =
-        matchingMarker && group.start <= matchingMarker.fromEnd && group.end >= matchingMarker.fromStart;
-      const isMarkerDest =
-        matchingMarker && group.start <= matchingMarker.toEnd && group.end >= matchingMarker.toStart;
-      const moveRole = isMarkerSource ? "source" : isMarkerDest ? "dest" : undefined;
-      const isHoveredGroup = isHoverMove;
+      const showBorder = hasHistory;
 
       const groupPadY = 0;
       const groupPadX = isPurePunctGroup ? 0 : 1;
@@ -1405,7 +1121,7 @@ export const TokenEditor: React.FC<{
       }, 0);
       const baseContentWidth = Math.max(correctedWidth, historyWidth, badgeWidth);
       const minWidth =
-        isPurePunctGroup && !hasHistory && !typeObj && !matchingMarker
+        isPurePunctGroup && !hasHistory && !typeObj
           ? Math.max(badgeWidth, baseContentWidth, tokenFontSize * 0.7 * group.tokens.length) + groupPadX * 2
           : Math.max(24 + groupPadX * 2, baseContentWidth + groupPadX * 2);
 
@@ -1419,31 +1135,14 @@ export const TokenEditor: React.FC<{
             gap: verticalGap,
             padding: `${paddingTop}px ${groupPadX}px ${groupPadY}px ${groupPadX}px`,
             borderRadius: 14,
-            border: isHoveredGroup
-              ? "1px solid rgba(94,234,212,0.65)"
-              : showBorder
-                ? "1px solid rgba(148,163,184,0.35)"
-                : "1px solid transparent",
-            background: isHoveredGroup ? "rgba(94,234,212,0.06)" : "transparent",
-            boxShadow: isHoveredGroup
-              ? "0 0 0 1px rgba(94,234,212,0.35)"
-              : showBorder
-                ? "0 0 0 1px rgba(148,163,184,0.25)"
-                : "none",
+            border: showBorder ? "1px solid rgba(148,163,184,0.35)" : "1px solid transparent",
+            background: "transparent",
+            boxShadow: showBorder ? "0 0 0 1px rgba(148,163,184,0.25)" : "none",
             flex: "0 0 auto",
             minWidth,
             position: "relative",
           }}
-          data-move-id={matchingMarker?.id || undefined}
-          data-move-role={moveRole}
-          onMouseEnter={() => {
-            if (matchingMarker) handleHoverMove(matchingMarker.id);
-          }}
-          onMouseLeave={() => {
-            if (matchingMarker) handleHoverMove(null);
-          }}
         >
-          {/* Source marker intentionally removed */}
           <div
             style={{
               display: "flex",
@@ -1454,12 +1153,12 @@ export const TokenEditor: React.FC<{
               marginBottom: Math.max(0, tokenFontSize * 0.03),
             }}
           >
-            {(hasHistory || matchingMarker) && (
+            {hasHistory && (
               <button
                 style={groupUndoButtonStyle}
                 onClick={(e) => {
                   e.stopPropagation();
-                  handleRevert(group.start, group.end, matchingMarker?.id ?? null);
+                  handleRevert(group.start, group.end, null);
                   setSelection({ start: null, end: null });
                   endEdit();
                 }}
@@ -1517,7 +1216,7 @@ export const TokenEditor: React.FC<{
                   </div>
                 );
               }
-              nodes.push(renderToken(tok, group.start + i, hasHistory || destSet.has(group.start + i)));
+              nodes.push(renderToken(tok, group.start + i, hasHistory));
               return nodes;
             })}
           </div>
@@ -1598,83 +1297,6 @@ export const TokenEditor: React.FC<{
     return result;
   };
 
-  const moveHoverOverlay = (() => {
-    if (!hoveredMoveMarker) return null;
-    const sourceRect =
-      getMoveGroupRect(hoveredMoveMarker.id, "source") ??
-      getRangeRect(hoveredMoveMarker.fromStart, hoveredMoveMarker.fromEnd);
-    const destRect =
-      getMoveGroupRect(hoveredMoveMarker.id, "dest") ??
-      getRangeRect(hoveredMoveMarker.toStart, hoveredMoveMarker.toEnd);
-    if (!sourceRect || !destRect) return null;
-    const sourceCenterX = sourceRect.left + sourceRect.width / 2;
-    const sourceCenterY = sourceRect.top + sourceRect.height / 2;
-    const destCenterX = destRect.left + destRect.width / 2;
-    const destCenterY = destRect.top + destRect.height / 2;
-    const dx = destCenterX - sourceCenterX;
-    const dy = destCenterY - sourceCenterY;
-    const edgePoint = (rect: { left: number; right: number; top: number; bottom: number }, dirX: number, dirY: number) => {
-      const centerX = (rect.left + rect.right) / 2;
-      const centerY = (rect.top + rect.bottom) / 2;
-      if (dirX === 0 && dirY === 0) return { x: centerX, y: centerY };
-      if (dirX === 0) {
-        return { x: centerX, y: centerY + Math.sign(dirY) * (rect.bottom - rect.top) / 2 };
-      }
-      if (dirY === 0) {
-        return { x: centerX + Math.sign(dirX) * (rect.right - rect.left) / 2, y: centerY };
-      }
-      const tx = dirX > 0 ? (rect.right - centerX) / dirX : (rect.left - centerX) / dirX;
-      const ty = dirY > 0 ? (rect.bottom - centerY) / dirY : (rect.top - centerY) / dirY;
-      const t = Math.min(tx, ty);
-      return { x: centerX + dirX * t, y: centerY + dirY * t };
-    };
-    const sourceEdge = edgePoint(sourceRect, dx, dy);
-    const destEdge = edgePoint(destRect, -dx, -dy);
-    const x1 = sourceEdge.x;
-    const y1 = sourceEdge.y;
-    const x2 = destEdge.x;
-    const y2 = destEdge.y;
-    return (
-      <svg
-        aria-hidden="true"
-        style={{
-          position: "absolute",
-          inset: 0,
-          width: "100%",
-          height: "100%",
-          pointerEvents: "none",
-          zIndex: 2,
-          overflow: "visible",
-        }}
-      >
-        <defs>
-          <marker
-            id="move-arrowhead"
-            markerWidth="6"
-            markerHeight="6"
-            refX="5"
-            refY="3"
-            orient="auto"
-            markerUnits="strokeWidth"
-          >
-            <path d="M0,0 L6,3 L0,6 Z" fill="rgba(94,234,212,0.85)" />
-          </marker>
-        </defs>
-        <line
-          x1={x1}
-          y1={y1}
-          x2={x2}
-          y2={y2}
-          stroke="rgba(94,234,212,0.85)"
-          strokeWidth={1.5}
-          strokeDasharray="2 4"
-          strokeLinecap="round"
-          markerEnd="url(#move-arrowhead)"
-        />
-      </svg>
-    );
-  })();
-
   const toolbarButton = (label: string, onClick: () => void, disabled?: boolean, hotkey?: string, icon?: string) => (
     <button
       style={{
@@ -1708,10 +1330,9 @@ export const TokenEditor: React.FC<{
           markerId: c.markerId,
         })),
         correctionTypeMap,
-        moveMarkers: history.present.moveMarkers,
         annotationIdMap: annotationIdMap.current,
       }),
-    [annotationIdMap, correctionCards, correctionTypeMap, history.present.moveMarkers, initialText, originalTokens, tokens]
+    [annotationIdMap, correctionCards, correctionTypeMap, initialText, originalTokens, tokens]
   );
 
   const { saveAnnotations } = useSaveController({
@@ -2149,8 +1770,6 @@ export const TokenEditor: React.FC<{
           tokenGap={tokenGap}
           renderTokenGroups={renderTokenGroups}
           rowRef={tokenRowRef}
-          hoverOverlay={moveHoverOverlay}
-          onHoverMove={handleHoverMove}
         />
         <ErrorTypePanel
           groupedErrorTypes={groupedErrorTypes}
@@ -2252,8 +1871,6 @@ type TokenRowProps = {
   tokenGap: number;
   renderTokenGroups: (tokens: Token[]) => React.ReactNode[];
   rowRef: React.RefObject<HTMLDivElement>;
-  hoverOverlay?: React.ReactNode;
-  onHoverMove?: (moveId: string | null) => void;
 };
 
 const TokenRow: React.FC<TokenRowProps> = ({
@@ -2261,26 +1878,12 @@ const TokenRow: React.FC<TokenRowProps> = ({
   tokenGap,
   renderTokenGroups,
   rowRef,
-  hoverOverlay,
-  onHoverMove,
 }) => (
   <div
     data-testid="corrected-panel"
     style={{ ...tokenRowStyleBase, gap: Math.max(0, tokenGap) }}
-    onMouseMove={(e) => {
-      if (!onHoverMove) return;
-      const target = e.target as Element | null;
-      if (!target) return;
-      const moveEl = target.closest<HTMLElement>("[data-move-id]");
-      const moveId = moveEl?.dataset.moveId ?? null;
-      onHoverMove(moveId);
-    }}
-    onMouseLeave={() => {
-      onHoverMove?.(null);
-    }}
     ref={rowRef}
   >
-    {hoverOverlay}
     {renderTokenGroups(tokens)}
     <div
       style={{ width: 24, height: 24 }}
