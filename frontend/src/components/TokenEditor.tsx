@@ -1462,10 +1462,9 @@ export const TokenEditor: React.FC<{
       const badgePaddingY = Math.max(0.5, tokenFontSize * 0.07);
       const badgePaddingX = Math.max(2, tokenFontSize * 0.18);
       const badgeRadius = Math.max(6, tokenFontSize * 0.45);
-      const badgeMaxWidth = Math.max(160, tokenFontSize * 12);
       const badgeTextWidth = badgeText ? measureTextWidth(badgeText, badgeFontSize) : 0;
       const badgeWidth = badgeText
-        ? Math.min(badgeMaxWidth, badgeTextWidth + badgePaddingX * 2 + 10)
+        ? badgeTextWidth + badgePaddingX * 2 + 10
         : 0;
       const isPurePunctGroup = group.tokens.every((t) => t.kind === "punct");
       // Update visible counter for line breaks (count only rendered tokens).
@@ -1684,9 +1683,6 @@ export const TokenEditor: React.FC<{
                 fontWeight: 700,
                 pointerEvents: "none",
                 whiteSpace: "nowrap",
-                maxWidth: Math.max(48, minWidth - groupPadX * 2),
-                overflow: "hidden",
-                textOverflow: "ellipsis",
                 alignSelf: "center",
                 marginTop: 0,
               }}
