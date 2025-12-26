@@ -593,6 +593,7 @@ export const deriveOperationsFromTokens = (originalTokens: Token[], tokens: Toke
   });
 
   const getOriginalSpanForToken = (tok: Token): { min: number; max: number } | null => {
+    if (tok.moveId) return null;
     const indices: number[] = [];
     const direct = originalIndexById.get(tok.id);
     if (direct !== undefined) indices.push(direct);
@@ -1268,7 +1269,8 @@ const reducer = (state: EditorHistoryState, action: Action): EditorHistoryState 
     return { past: [], present, future: [] };
   }
   if (action.type === "INIT_FROM_STATE") {
-    if (Array.isArray(action.state.operations) && action.state.operations.length > 0) {
+    const hasMoveMarkers = deriveMoveMarkers(action.state.tokens ?? []).length > 0;
+    if (!hasMoveMarkers && Array.isArray(action.state.operations) && action.state.operations.length > 0) {
       const present = buildPresentFromOperations(action.state.originalTokens, action.state.operations);
       return { past: [], present, future: [] };
     }
@@ -1604,6 +1606,7 @@ export const buildAnnotationsPayloadStandalone = async ({
       .trim();
 
   const getOriginalSpanForToken = (tok: Token): { min: number; max: number } | null => {
+    if (tok.moveId) return null;
     const indices: number[] = [];
     const direct = originalIndexById.get(tok.id);
     if (direct !== undefined) {
@@ -1665,16 +1668,24 @@ export const buildAnnotationsPayloadStandalone = async ({
         ? unwindToOriginal(cloneTokens(sourceToken.previousTokens))
         : [];
       const beforeIds = normalizeBeforeIds(historyTokens);
-      const afterFragments = tokens
-        .slice(moveMarker.toStart, moveMarker.toEnd + 1)
-        .filter((tok) => tok.kind !== "empty")
-        .map(fragmentFromToken);
+      const movedIndices: number[] = [];
+      tokens.forEach((tok, idx) => {
+        if (tok.kind !== "empty" && tok.moveId === moveMarker.id) {
+          movedIndices.push(idx);
+        }
+      });
+      const moveRangeStart = movedIndices.length ? Math.min(...movedIndices) : moveMarker.toStart;
+      const moveRangeEnd = movedIndices.length ? Math.max(...movedIndices) : moveMarker.toEnd;
+      const movedTokens = tokens
+        .slice(moveRangeStart, moveRangeEnd + 1)
+        .filter((tok) => tok.kind !== "empty" && tok.moveId === moveMarker.id);
+      const afterFragments = movedTokens.map(fragmentFromToken);
       const moveFromIndices = beforeIds
         .map((id) => originalIndexById.get(id))
         .filter((idx): idx is number => idx !== undefined);
       const moveFrom = moveFromIndices.length ? Math.min(...moveFromIndices) : moveMarker.fromStart;
-      const moveTo = findInsertionIndex(moveMarker.toStart, moveMarker.toEnd);
-      const moveLength = Math.max(1, afterFragments.length || 1);
+      const moveTo = findInsertionIndex(moveRangeStart, moveRangeEnd);
+      const moveLength = Math.max(1, beforeIds.length || afterFragments.length || 1);
       const replacement = afterFragments.length ? afterFragments.map((f) => f.text).join(" ").trim() : null;
       const payload: AnnotationDetailPayload = {
         text_sha256: textHash,

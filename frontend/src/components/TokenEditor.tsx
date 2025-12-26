@@ -372,12 +372,24 @@ export const TokenEditor: React.FC<{
       if (!items?.length) return null;
       const baseTokens = tokenizeToTokens(initialText);
       let working = cloneTokens(baseTokens);
-      let offset = 0;
+      const offsetDeltas: Array<{ start: number; delta: number }> = [];
+      const offsetAt = (index: number) =>
+        offsetDeltas.reduce((acc, entry) => (entry.start <= index ? acc + entry.delta : acc), 0);
       const typeMap: Record<string, number | null> = {};
       const spanMap = new Map<string, number>();
-      const sorted = [...items].sort(
-        (a, b) => (a?.start_token ?? 0) - (b?.start_token ?? 0) || (a?.end_token ?? 0) - (b?.end_token ?? 0)
-      );
+      const sorted = [...items].sort((a, b) => {
+        const startA = a?.start_token ?? 0;
+        const startB = b?.start_token ?? 0;
+        if (startA !== startB) return startA - startB;
+        const opA =
+          a?.payload?.operation || (a?.replacement ? "replace" : "noop");
+        const opB =
+          b?.payload?.operation || (b?.replacement ? "replace" : "noop");
+        const priority = (op: string) => (op === "move" ? 0 : 1);
+        const prioDiff = priority(opA) - priority(opB);
+        if (prioDiff !== 0) return prioDiff;
+        return (a?.end_token ?? 0) - (b?.end_token ?? 0);
+      });
       sorted.forEach((ann: any) => {
         const payload = ann?.payload || {};
         const operation = payload.operation || (ann?.replacement ? "replace" : "noop");
@@ -409,7 +421,7 @@ export const TokenEditor: React.FC<{
                 : beforeTokensPayload.length
                   ? beforeTokensPayload.length
                   : 1;
-          const sourceStart = Math.max(0, Math.min(working.length, moveFrom + offset));
+          const sourceStart = Math.max(0, Math.min(working.length, moveFrom + offsetAt(moveFrom)));
           const sourceEnd = Math.max(sourceStart, Math.min(working.length - 1, sourceStart + moveLen - 1));
           const moveId = `move-${createId()}`;
 
@@ -483,7 +495,7 @@ export const TokenEditor: React.FC<{
           working.splice(sourceStart, sourceEnd - sourceStart + 1);
           working.splice(sourceStart, 0, placeholder);
 
-          let insertionIndex = Math.max(0, Math.min(working.length, moveTo + offset));
+          let insertionIndex = Math.max(0, Math.min(working.length, moveTo + offsetAt(moveTo)));
           if (insertionIndex > sourceEnd + 1) {
             insertionIndex -= sourceEnd - sourceStart + 1;
           }
@@ -510,12 +522,15 @@ export const TokenEditor: React.FC<{
             const spanKey = `${spanStart}-${spanEnd}`;
             spanMap.set(spanKey, ann.id);
           }
-          offset += 1;
+          const deltaSource = 1 - moveLen;
+          const deltaDest = movedTokens.length;
+          offsetDeltas.push({ start: moveFrom, delta: deltaSource });
+          offsetDeltas.push({ start: moveTo, delta: deltaDest });
           return;
         }
         const startOriginal = typeof ann?.start_token === "number" ? ann.start_token : 0;
         const endOriginal = typeof ann?.end_token === "number" ? ann.end_token : startOriginal;
-        const targetStart = Math.max(0, Math.min(working.length, startOriginal + offset));
+        const targetStart = Math.max(0, Math.min(working.length, startOriginal + offsetAt(startOriginal)));
         const leadingSpace = targetStart === 0 ? false : working[targetStart]?.spaceBefore !== false;
         const beforeTokensPayload = Array.isArray(payload.before_tokens) ? payload.before_tokens : [];
         const removeCountFromSpan =
@@ -608,7 +623,8 @@ export const TokenEditor: React.FC<{
           const spanKey = `${ann.start_token}-${ann.end_token}`;
           spanMap.set(spanKey, ann.id);
         }
-        offset += newTokens.length - removal;
+        const delta = newTokens.length - removal;
+        offsetDeltas.push({ start: startOriginal, delta });
       });
       const operations = deriveOperationsFromTokens(baseTokens, working);
       const present: EditorPresentState = {

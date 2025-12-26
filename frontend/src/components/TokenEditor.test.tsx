@@ -122,6 +122,70 @@ const stubTokenRects = (container: HTMLElement) => {
 const initState = (text = "hello world"): EditorHistoryState =>
   tokenEditorReducer(createInitialHistoryState(), { type: "INIT_FROM_TEXT", text });
 
+const tokensToDisplay = (tokens: Array<{ kind?: string; text: string }>) =>
+  tokens.map((tok) => (tok.kind === "empty" ? "⬚" : tok.text));
+
+const findIndexByText = (state: EditorHistoryState, text: string) => {
+  const idx = state.present.tokens.findIndex((tok) => tok.kind !== "empty" && tok.text === text);
+  if (idx === -1) {
+    throw new Error(`Token not found: ${text}`);
+  }
+  return idx;
+};
+
+const deleteTokenByText = (state: EditorHistoryState, text: string) => {
+  const idx = findIndexByText(state, text);
+  return tokenEditorReducer(state, { type: "DELETE_SELECTED_TOKENS", range: [idx, idx] });
+};
+
+const editTokenByText = (state: EditorHistoryState, text: string, newText: string) => {
+  const idx = findIndexByText(state, text);
+  return tokenEditorReducer(state, { type: "EDIT_SELECTED_RANGE_AS_TEXT", range: [idx, idx], newText });
+};
+
+const editRangeByText = (state: EditorHistoryState, startText: string, endText: string, newText: string) => {
+  const start = findIndexByText(state, startText);
+  const end = findIndexByText(state, endText);
+  return tokenEditorReducer(state, {
+    type: "EDIT_SELECTED_RANGE_AS_TEXT",
+    range: [Math.min(start, end), Math.max(start, end)],
+    newText,
+  });
+};
+
+const insertAfterToken = (state: EditorHistoryState, targetText: string, insertText: string) => {
+  const idx = findIndexByText(state, targetText);
+  const withPlaceholder = tokenEditorReducer(state, {
+    type: "INSERT_TOKEN_AFTER_SELECTED",
+    range: [idx, idx],
+  });
+  const insertIdx = idx + 1;
+  return tokenEditorReducer(withPlaceholder, {
+    type: "EDIT_SELECTED_RANGE_AS_TEXT",
+    range: [insertIdx, insertIdx],
+    newText: insertText,
+  });
+};
+
+const moveTokensByText = (
+  state: EditorHistoryState,
+  fromTexts: string[],
+  targetText: string,
+  position: "before" | "after"
+) => {
+  const indices = fromTexts.map((text) => findIndexByText(state, text));
+  const fromStart = Math.min(...indices);
+  const fromEnd = Math.max(...indices);
+  const targetIdx = findIndexByText(state, targetText);
+  const toIndex = position === "before" ? targetIdx : targetIdx + 1;
+  return tokenEditorReducer(state, {
+    type: "MOVE_SELECTED_TOKENS",
+    fromStart,
+    fromEnd,
+    toIndex,
+  });
+};
+
 describe("tokenEditorReducer core flows", () => {
   it("replaces a selected token with new text and retains history", () => {
     const state1 = initState();
@@ -1961,6 +2025,119 @@ describe("TokenEditor view toggles", () => {
 
     await user.click(screen.getByTestId("text-panel-toggle"));
     await waitFor(() => expect(screen.getByTestId("text-view-panel")).toBeInTheDocument());
+  });
+});
+
+describe("hydrates combined corrections", () => {
+  const baseText =
+    "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu";
+
+  const buildAnnotationsFromState = async (state: EditorHistoryState) => {
+    const tokens = state.present.tokens;
+    const originalTokens = state.present.originalTokens;
+    const moveMarkers = deriveMoveMarkers(tokens);
+    const correctionCards = deriveCorrectionCards(tokens, moveMarkers);
+    const correctionTypeMap = Object.fromEntries(
+      correctionCards.map((card) => [card.id, 1])
+    );
+    return buildAnnotationsPayloadStandalone({
+      initialText: baseText,
+      tokens,
+      originalTokens,
+      correctionCards,
+      correctionTypeMap,
+      moveMarkers,
+    });
+  };
+
+  const renderAndReadTokens = async (annotations: any[]) => {
+    await renderEditor(baseText, {
+      getImpl: (url: string) => {
+        if (url.includes("/api/error-types")) return Promise.resolve({ data: [] });
+        if (url.includes("/annotations")) {
+          return Promise.resolve({ data: annotations });
+        }
+        return Promise.resolve({ data: {} });
+      },
+    });
+    const corrected = await screen.findByTestId("corrected-panel");
+    return within(corrected)
+      .getAllByRole("button")
+      .filter((el) => el.getAttribute("data-token-index") !== null)
+      .map((el) => el.textContent?.trim())
+      .filter(Boolean) as string[];
+  };
+
+  const scenarios: Array<{ name: string; apply: (state: EditorHistoryState) => EditorHistoryState }> = [
+    {
+      name: "2 corrections non-intersecting (move + delete)",
+      apply: (state) => {
+        let next = moveTokensByText(state, ["delta"], "theta", "after");
+        next = deleteTokenByText(next, "kappa");
+        return next;
+      },
+    },
+    {
+      name: "2 corrections intersecting (move + edit moved)",
+      apply: (state) => {
+        let next = moveTokensByText(state, ["epsilon"], "beta", "after");
+        next = editTokenByText(next, "epsilon", "epsilonX");
+        return next;
+      },
+    },
+    {
+      name: "3 corrections non-intersecting (move + insert + delete)",
+      apply: (state) => {
+        let next = moveTokensByText(state, ["gamma"], "lambda", "after");
+        next = insertAfterToken(next, "beta", "NEW1");
+        next = deleteTokenByText(next, "eta");
+        return next;
+      },
+    },
+    {
+      name: "4 corrections intersecting (move range + edit + insert + delete)",
+      apply: (state) => {
+        let next = moveTokensByText(state, ["delta", "epsilon"], "iota", "after");
+        next = editTokenByText(next, "delta", "deltaX");
+        next = insertAfterToken(next, "deltaX", "PLUS");
+        next = deleteTokenByText(next, "zeta");
+        return next;
+      },
+    },
+    {
+      name: "5 corrections mixed (move range + edit range + insert + delete + delete)",
+      apply: (state) => {
+        let next = moveTokensByText(state, ["theta", "iota"], "beta", "after");
+        next = editRangeByText(next, "theta", "iota", "thetaIota");
+        next = insertAfterToken(next, "thetaIota", "MID");
+        next = deleteTokenByText(next, "gamma");
+        next = deleteTokenByText(next, "mu");
+        return next;
+      },
+    },
+  ];
+
+  it.each(scenarios)("$name", async ({ apply, name }) => {
+    mockGet.mockReset();
+    mockPost.mockReset();
+    localStorage.clear();
+
+    const finalState = apply(initState(baseText));
+    const payloads = await buildAnnotationsFromState(finalState);
+    expect(payloads.some((payload) => payload.payload?.operation === "move")).toBe(true);
+    const annotations = payloads.map((payload, idx) => ({
+      id: 300 + idx,
+      author_id: "other",
+      start_token: payload.start_token,
+      end_token: payload.end_token,
+      replacement: payload.replacement,
+      error_type_id: payload.error_type_id,
+      payload: payload.payload,
+    }));
+
+    const renderedTokens = await renderAndReadTokens(annotations);
+    const expectedTokens = tokensToDisplay(finalState.present.tokens);
+    expect(renderedTokens).toEqual(expectedTokens);
   });
 });
 
