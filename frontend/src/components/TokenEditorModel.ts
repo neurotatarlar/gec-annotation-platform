@@ -1316,33 +1316,31 @@ const reducer = (state: EditorHistoryState, action: Action): EditorHistoryState 
 export const tokenEditorReducer = reducer;
 
 // Concatenate token texts for editing field and plain-text preview, skipping empty placeholders.
-export const buildTextFromTokens = (tokens: Token[]) =>
-  tokens
-    .filter((t) => t.kind !== "empty")
-    .map((t) => t.text)
-    .join(" ")
-    .replace(/\s+([.,;:?!-])/g, "$1");
+export const buildTextFromTokens = (tokens: Token[]) => buildEditableTextFromTokens(tokens);
 
 export const buildTextFromTokensWithBreaks = (tokens: Token[], breaks: number[]) => {
   const breakCounts = new Map<number, number>();
   breaks.forEach((idx) => {
     breakCounts.set(idx, (breakCounts.get(idx) ?? 0) + 1);
   });
-  const parts: string[] = [];
   let visibleIdx = 0;
+  let atLineStart = true;
+  let result = "";
   tokens.forEach((t) => {
     if (t.kind === "empty") return;
-    parts.push(t.text);
+    const needsSpace = !atLineStart && t.spaceBefore !== false;
+    if (needsSpace) result += " ";
+    result += t.text;
     visibleIdx += 1;
     const count = breakCounts.get(visibleIdx) ?? 0;
     if (count > 0) {
-      for (let i = 0; i < count; i += 1) {
-        parts.push("\n");
-      }
+      result += "\n".repeat(count);
+      atLineStart = true;
+    } else {
+      atLineStart = false;
     }
   });
-  const joined = parts.join(" ");
-  return joined.replace(/\s+([.,;:?!-])/g, "$1").replace(/[ \t]*\n[ \t]*/g, "\n").trimEnd();
+  return result;
 };
 
 export const buildEditableTextFromTokens = (tokens: Token[]) => {

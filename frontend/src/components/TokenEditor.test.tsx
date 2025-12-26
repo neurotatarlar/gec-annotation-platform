@@ -362,6 +362,15 @@ describe("tokenEditorReducer core flows", () => {
     expect(buildTextFromTokens(tokens)).toBe("hello world");
   });
 
+  it("buildTextFromTokens preserves explicit spaces before punctuation", () => {
+    const tokens = [
+      { id: "1", text: "foo", kind: "word", selected: false, spaceBefore: false },
+      { id: "2", text: ",", kind: "punct", selected: false, spaceBefore: true },
+      { id: "3", text: "bar", kind: "word", selected: false, spaceBefore: true },
+    ] as any;
+    expect(buildTextFromTokens(tokens)).toBe("foo , bar");
+  });
+
   it("buildTextFromTokensWithBreaks preserves new lines", () => {
     const tokens = [
       { id: "1", text: "hello", kind: "word", selected: false },
@@ -370,6 +379,15 @@ describe("tokenEditorReducer core flows", () => {
     ] as any;
     const breaks = [2]; // newline after second visible token
     expect(buildTextFromTokensWithBreaks(tokens, breaks)).toBe("hello world\nnext");
+  });
+
+  it("buildTextFromTokensWithBreaks preserves spaces before punctuation", () => {
+    const tokens = [
+      { id: "1", text: "foo", kind: "word", selected: false, spaceBefore: false },
+      { id: "2", text: ",", kind: "punct", selected: false, spaceBefore: true },
+      { id: "3", text: "bar", kind: "word", selected: false, spaceBefore: true },
+    ] as any;
+    expect(buildTextFromTokensWithBreaks(tokens, [])).toBe("foo , bar");
   });
 
   it("buildTextFromTokensWithBreaks preserves blank lines", () => {

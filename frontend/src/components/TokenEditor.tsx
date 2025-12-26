@@ -299,11 +299,9 @@ export const TokenEditor: React.FC<{
   }, [originalTokens]);
   const textForIds = useCallback(
     (ids: string[]) =>
-      ids
-        .map((id) => baseTokenMap.get(id)?.text ?? "")
-        .filter(Boolean)
-        .join(" ")
-        .trim(),
+      buildEditableTextFromTokens(
+        ids.map((id) => baseTokenMap.get(id)).filter(Boolean) as Token[]
+      ),
     [baseTokenMap]
   );
   const toFragment = useCallback(
@@ -990,7 +988,7 @@ export const TokenEditor: React.FC<{
       event.dataTransfer.setData("text/plain", "move");
       event.dataTransfer.effectAllowed = "move";
       const preview = document.createElement("div");
-      preview.textContent = slice.map((t) => t.text).join(" ");
+      preview.textContent = buildEditableTextFromTokens(slice);
       preview.style.position = "absolute";
       preview.style.top = "-9999px";
       preview.style.left = "-9999px";
@@ -1273,7 +1271,7 @@ export const TokenEditor: React.FC<{
       if (index !== Math.min(editingRange!.start!, editingRange!.end!)) return null;
       const editStart = Math.min(editingRange!.start!, editingRange!.end!);
       const editEnd = Math.max(editingRange!.start!, editingRange!.end!);
-      const originalSelection = tokens.slice(editStart, editEnd + 1).map((t) => t.text).join(" ");
+      const originalSelection = buildEditableTextFromTokens(tokens.slice(editStart, editEnd + 1));
       const textForWidth = editText.length ? editText : originalSelection;
       const measuredPx = measureTextWidth(textForWidth);
       // Match the editing pill to the text length with only minimal breathing room.
