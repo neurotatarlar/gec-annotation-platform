@@ -49,6 +49,49 @@ const DEFAULT_TOKEN_GAP = 2;
 const DEFAULT_TOKEN_FONT_SIZE = 24;
 type SpaceMarker = "dot" | "box" | "none";
 
+const buildTokensFromFragments = (
+  fragments: TokenFragmentPayload[],
+  fallbackText: string,
+  defaultFirstSpace?: boolean
+): Token[] => {
+  const built: Token[] = [];
+  const hasFragments = fragments.length > 0;
+  const baseFragments = hasFragments ? fragments : fallbackText ? [{ text: fallbackText }] : [];
+  baseFragments.forEach((frag, fragIndex) => {
+    const text = typeof frag?.text === "string" ? frag.text : "";
+    if (!text) return;
+    const origin = frag?.origin === "inserted" ? "inserted" : undefined;
+    const explicitSpace =
+      typeof frag?.space_before === "boolean"
+        ? frag.space_before
+        : typeof (frag as any)?.spaceBefore === "boolean"
+          ? (frag as any).spaceBefore
+          : undefined;
+    const baseTokens = tokenizeEditedText(text);
+    baseTokens.forEach((tok, idx) => {
+      let spaceBefore = tok.spaceBefore;
+      if (idx === 0) {
+        if (explicitSpace !== undefined) {
+          spaceBefore = explicitSpace;
+        } else if (fragIndex > 0) {
+          spaceBefore = true;
+        } else if (defaultFirstSpace !== undefined) {
+          spaceBefore = defaultFirstSpace;
+        }
+      }
+      if (idx === 0 && fragIndex > 0 && spaceBefore === false && tok.kind !== "punct") {
+        spaceBefore = true;
+      }
+      built.push({
+        ...tok,
+        id: createId(),
+        origin,
+        spaceBefore,
+      });
+    });
+  });
+  return built;
+};
 
 const chipBase: React.CSSProperties = {
   padding: "0px",
@@ -443,50 +486,6 @@ export const TokenEditor: React.FC<{
             spaceBefore: working[sourceStart]?.spaceBefore ?? true,
           };
 
-          const buildTokensFromFragments = (
-            fragments: any[],
-            fallbackText: string,
-            defaultFirstSpace?: boolean
-          ): Token[] => {
-            const built: Token[] = [];
-            const hasFragments = fragments.length > 0;
-            const baseFragments = hasFragments ? fragments : fallbackText ? [{ text: fallbackText }] : [];
-            baseFragments.forEach((frag: any, fragIndex: number) => {
-              const text = typeof frag?.text === "string" ? frag.text : "";
-              if (!text) return;
-              const origin = frag?.origin === "inserted" ? "inserted" : undefined;
-              const explicitSpace =
-                typeof frag?.space_before === "boolean"
-                  ? frag.space_before
-                  : typeof frag?.spaceBefore === "boolean"
-                    ? frag.spaceBefore
-                    : undefined;
-              const baseTokens = tokenizeEditedText(text);
-              baseTokens.forEach((tok, idx) => {
-                let spaceBefore = tok.spaceBefore;
-                if (idx === 0) {
-                  if (explicitSpace !== undefined) {
-                    spaceBefore = explicitSpace;
-                  } else if (fragIndex > 0) {
-                    spaceBefore = true;
-                  } else if (defaultFirstSpace !== undefined) {
-                    spaceBefore = defaultFirstSpace;
-                  }
-                }
-                if (idx === 0 && fragIndex > 0 && spaceBefore === false && tok.kind !== "punct") {
-                  spaceBefore = true;
-                }
-                built.push({
-                  ...tok,
-                  id: createId(),
-                  origin,
-                  spaceBefore,
-                });
-              });
-            });
-            return built;
-          };
-
           const rawMovedTokens = afterRaw.length
             ? buildTokensFromFragments(afterRaw, "", undefined)
             : cloneTokens(working.slice(sourceStart, sourceEnd + 1));
@@ -545,54 +544,11 @@ export const TokenEditor: React.FC<{
           operation === "insert" && previousRaw.length === 0 ? [makeEmptyPlaceholder([])] : previousRaw;
         const afterRaw = Array.isArray(payload.after_tokens) ? payload.after_tokens : [];
         const replacementText = ann?.replacement ? String(ann.replacement) : "";
-      const buildTokensFromFragments = (
-        fragments: any[],
-        fallbackText: string,
-        defaultFirstSpace?: boolean
-      ): Token[] => {
-        const built: Token[] = [];
-        const hasFragments = fragments.length > 0;
-        const baseFragments = hasFragments ? fragments : fallbackText ? [{ text: fallbackText }] : [];
-        baseFragments.forEach((frag: any, fragIndex: number) => {
-          const text = typeof frag?.text === "string" ? frag.text : "";
-          if (!text) return;
-          const origin = frag?.origin === "inserted" ? "inserted" : undefined;
-          const explicitSpace =
-            typeof frag?.space_before === "boolean"
-              ? frag.space_before
-              : typeof frag?.spaceBefore === "boolean"
-                ? frag.spaceBefore
-                : undefined;
-          const baseTokens = tokenizeEditedText(text);
-          baseTokens.forEach((tok, idx) => {
-            let spaceBefore = tok.spaceBefore;
-            if (idx === 0) {
-              if (explicitSpace !== undefined) {
-                spaceBefore = explicitSpace;
-              } else if (fragIndex > 0) {
-                spaceBefore = true;
-              } else if (defaultFirstSpace !== undefined) {
-                spaceBefore = defaultFirstSpace;
-              }
-            }
-            if (idx === 0 && fragIndex > 0 && spaceBefore === false && tok.kind !== "punct") {
-              spaceBefore = true;
-            }
-            built.push({
-              ...tok,
-              id: createId(),
-              origin,
-              spaceBefore,
-            });
-          });
-        });
-        return built;
-      };
-        const groupId = createId();
-        const cardType = ann?.error_type_id ?? null;
+      const groupId = createId();
+      const cardType = ann?.error_type_id ?? null;
 
-        const newTokens: Token[] = [];
-        const builtTokens = buildTokensFromFragments(afterRaw, replacementText, leadingSpace);
+      const newTokens: Token[] = [];
+      const builtTokens = buildTokensFromFragments(afterRaw, replacementText, leadingSpace);
         if (!builtTokens.length && (operation === "delete" || operation === "insert")) {
           newTokens.push({ ...makeEmptyPlaceholder(previous), groupId, spaceBefore: leadingSpace });
         } else {

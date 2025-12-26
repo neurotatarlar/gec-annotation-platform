@@ -39,6 +39,18 @@ type SelectionState = {
   activeEdge: "start" | "end";
 };
 
+const formatTokenText = (
+  items: Array<{ text: string; space_before?: boolean; spaceBefore?: boolean }>
+) => {
+  let result = "";
+  items.forEach((item, idx) => {
+    const needsSpace = idx > 0 && (item.space_before ?? item.spaceBefore ?? true);
+    if (needsSpace) result += " ";
+    result += item.text;
+  });
+  return result;
+};
+
 const EMPTY_SELECTION: SelectionState = { start: null, end: null, activeEdge: "end" };
 
 export const AnnotationWorkspace = ({
@@ -102,16 +114,16 @@ export const AnnotationWorkspace = ({
     [baseTokens]
   );
 
-  const getTokenTextsForRange = useCallback(
-    (start: number, end: number): string[] => {
-      const texts: string[] = [];
+  const getTokensForRange = useCallback(
+    (start: number, end: number): BaseToken[] => {
+      const tokens: BaseToken[] = [];
       for (let index = start; index <= end; index += 1) {
         const token = baseTokens[index];
         if (token) {
-          texts.push(token.text);
+          tokens.push(token);
         }
       }
-      return texts;
+      return tokens;
     },
     [baseTokens]
   );
@@ -280,7 +292,7 @@ export const AnnotationWorkspace = ({
       const textValue =
         correction.afterTokens.length === 1 && correction.afterTokens[0].text === "<EMPTY>"
           ? ""
-          : correction.afterTokens.map((token) => token.text).join(" ").trim();
+          : formatTokenText(correction.afterTokens);
       setInlineEditor({
         correctionId: correction.id,
         text: textValue
@@ -332,14 +344,14 @@ export const AnnotationWorkspace = ({
     const correction = ensureCorrectionForRange(start, end);
     if (!correction) return;
     const existingText = correction.afterTokens.length
-      ? correction.afterTokens.map((token) => token.text).join(" ").trim()
-      : getTokenTextsForRange(start, end).join(" ").trim();
+      ? formatTokenText(correction.afterTokens)
+      : formatTokenText(getTokensForRange(start, end));
     onUpdateCorrection(correction.id, (draft) => ({
       ...draft,
       afterTokens: [createInsertedToken(existingText)]
     }));
     onSelectCorrection(correction.id);
-  }, [ensureCorrectionForRange, getTokenTextsForRange, onSelectCorrection, onUpdateCorrection, selectedIndices]);
+  }, [ensureCorrectionForRange, getTokensForRange, onSelectCorrection, onUpdateCorrection, selectedIndices]);
 
   const handleSidebarEdit = useCallback(
     (correctionId: string) => {
@@ -709,7 +721,7 @@ const TokenSequence = ({
         };
 
         if (!segment.ownerCorrectionId) {
-          const tokenText = segment.afterTokens.map((token) => token.text).join(" ") || t("annotation.tokenEmpty");
+          const tokenText = formatTokenText(segment.afterTokens) || t("annotation.tokenEmpty");
           return (
             <div
               key={key}
@@ -731,9 +743,9 @@ const TokenSequence = ({
         }
 
         const correctedText =
-          segment.afterTokens.map((token) => token.text).join(" ").trim() || t("annotation.tokenEmpty");
+          formatTokenText(segment.afterTokens) || t("annotation.tokenEmpty");
         const originalText =
-          segment.baseTokens.map((token) => token.text).join(" ").trim() || t("annotation.tokenEmpty");
+          formatTokenText(segment.baseTokens) || t("annotation.tokenEmpty");
         const meta = correctionMeta.get(segment.ownerCorrectionId);
         const color = meta?.color ?? "#22d3ee";
         const isEmptyPlaceholder = correctedText === "<EMPTY>";
@@ -895,13 +907,12 @@ const CorrectionsSidebar = ({
       ) : (
         <div className="mt-4 space-y-3">
           {corrections.map((correction) => {
-            const originalText = correction.beforeTokens
-              .map((tokenId) => baseTokenMap.get(tokenId)?.text ?? "")
-              .filter(Boolean)
-              .join(" ")
-              .trim();
+            const originalTokens = correction.beforeTokens
+              .map((tokenId) => baseTokenMap.get(tokenId))
+              .filter(Boolean) as BaseToken[];
+            const originalText = formatTokenText(originalTokens);
             const correctedText =
-              correction.afterTokens.map((token) => token.text).join(" ").trim() || t("annotation.tokenEmpty");
+              formatTokenText(correction.afterTokens) || t("annotation.tokenEmpty");
             const errorType = errorTypes.find((type) => type.id === correction.errorTypeId);
             const isActive = activeCorrectionId === correction.id;
             const label = errorType ? getErrorTypeLabel(errorType, locale) : t("annotation.untagged");

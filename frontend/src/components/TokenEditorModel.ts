@@ -1315,10 +1315,7 @@ const reducer = (state: EditorHistoryState, action: Action): EditorHistoryState 
 
 export const tokenEditorReducer = reducer;
 
-// Concatenate token texts for editing field and plain-text preview, skipping empty placeholders.
-export const buildTextFromTokens = (tokens: Token[]) => buildEditableTextFromTokens(tokens);
-
-export const buildTextFromTokensWithBreaks = (tokens: Token[], breaks: number[]) => {
+const formatTokensWithBreaks = (tokens: Token[], breaks: number[] = []) => {
   const breakCounts = new Map<number, number>();
   breaks.forEach((idx) => {
     breakCounts.set(idx, (breakCounts.get(idx) ?? 0) + 1);
@@ -1343,17 +1340,13 @@ export const buildTextFromTokensWithBreaks = (tokens: Token[], breaks: number[])
   return result;
 };
 
-export const buildEditableTextFromTokens = (tokens: Token[]) => {
-  const visible = tokens.filter((t) => t.kind !== "empty");
-  if (!visible.length) return "";
-  return visible
-    .map((t, idx) => {
-      const needsSpace = idx === 0 ? false : t.spaceBefore !== false;
-      const prefix = needsSpace ? " " : "";
-      return `${prefix}${t.text}`;
-    })
-    .join("");
-};
+// Concatenate token texts for editing field and plain-text preview, skipping empty placeholders.
+export const buildEditableTextFromTokens = (tokens: Token[]) => formatTokensWithBreaks(tokens);
+
+export const buildTextFromTokens = (tokens: Token[]) => buildEditableTextFromTokens(tokens);
+
+export const buildTextFromTokensWithBreaks = (tokens: Token[], breaks: number[]) =>
+  formatTokensWithBreaks(tokens, breaks);
 
 type DiffOp = { type: "equal" | "delete" | "insert"; values: string[] };
 
