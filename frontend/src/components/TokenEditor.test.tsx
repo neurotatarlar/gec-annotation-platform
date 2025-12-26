@@ -971,6 +971,60 @@ describe("empty placeholder selection", () => {
     await user.click(placeholder);
     expect(placeholder).toHaveAttribute("aria-pressed", "true");
   }, 12000);
+
+  it("deleting a selection containing a placeholder restores the original token instead of wiping text", async () => {
+    mockGet.mockReset();
+    mockPost.mockReset();
+    localStorage.clear();
+    const base = tokenEditorReducer(createInitialHistoryState(), { type: "INIT_FROM_TEXT", text: "alpha beta gamma" });
+    const deleted = tokenEditorReducer(base, { type: "DELETE_SELECTED_TOKENS", range: [1, 1] });
+    localStorage.setItem("tokenEditorPrefs:state:1", JSON.stringify(deleted.present));
+
+    await renderEditor("alpha beta gamma");
+    const user = userEvent.setup();
+
+    const placeholder = await screen.findByRole("button", { name: "⬚" }, { timeout: 2000 });
+    const gamma = await screen.findByRole("button", { name: "gamma" });
+    await user.click(placeholder);
+    await user.keyboard("{Control>}");
+    await user.click(gamma);
+    await user.keyboard("{/Control}");
+    await waitFor(() => expect(placeholder).toHaveAttribute("aria-pressed", "true"));
+    await waitFor(() => expect(gamma).toHaveAttribute("aria-pressed", "true"));
+    await user.keyboard("{Delete}");
+
+    const corrected = await screen.findByTestId("corrected-panel");
+    const chips = within(corrected).getAllByRole("button");
+    const texts = chips
+      .filter((c) => c.getAttribute("data-token-index") !== null)
+      .map((c) => c.textContent?.trim())
+      .filter(Boolean);
+    expect(texts.join(" ")).toBe("alpha beta gamma");
+  }, 12000);
+
+  it("does not revert a deletion when removing a neighboring token only", async () => {
+    mockGet.mockReset();
+    mockPost.mockReset();
+    localStorage.clear();
+    const base = tokenEditorReducer(createInitialHistoryState(), { type: "INIT_FROM_TEXT", text: "alpha beta gamma" });
+    const deleted = tokenEditorReducer(base, { type: "DELETE_SELECTED_TOKENS", range: [1, 1] });
+    localStorage.setItem("tokenEditorPrefs:state:1", JSON.stringify(deleted.present));
+
+    await renderEditor("alpha beta gamma");
+    const user = userEvent.setup();
+
+    const alpha = await screen.findByRole("button", { name: "alpha" });
+    await user.click(alpha);
+    await user.keyboard("{Delete}");
+
+    const corrected = await screen.findByTestId("corrected-panel");
+    const chips = within(corrected).getAllByRole("button");
+    const texts = chips
+      .filter((c) => c.getAttribute("data-token-index") !== null)
+      .map((c) => c.textContent?.trim())
+      .filter(Boolean);
+    expect(texts.join(" ")).toBe("⬚ ⬚ gamma");
+  }, 12000);
 });
 
 describe("revert clears selection", () => {

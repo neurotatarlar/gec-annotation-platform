@@ -192,6 +192,7 @@ export const TokenEditor: React.FC<{
   const editInputRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
   const tokenRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const groupRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const selectionRef = useRef(selection);
   const dragStateRef = useRef<{ start: number; end: number } | null>(null);
   const measureCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const measureTextWidth = useCallback(
@@ -218,6 +219,10 @@ export const TokenEditor: React.FC<{
   const [isTrashing, setIsTrashing] = useState(false);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+
+  useEffect(() => {
+    selectionRef.current = selection;
+  }, [selection]);
   const initialViewTab = useMemo<"original" | "corrected">(() => {
     if (prefs.viewTab === "original" || prefs.viewTab === "corrected") {
       return prefs.viewTab;
@@ -1024,18 +1029,25 @@ export const TokenEditor: React.FC<{
   // Selection click logic with contiguous Ctrl-select.
   const handleTokenClick = (index: number, ctrlKey: boolean) => {
     if (tokens[index]?.kind === "special") return;
+    const currentSelection = selectionRef.current;
     if (!ctrlKey) {
-      setSelection({ start: index, end: index });
+      const range = { start: index, end: index };
+      selectionRef.current = range;
+      setSelection(range);
       return;
     }
-    if (!hasSelection) {
-      setSelection({ start: index, end: index });
+    if (currentSelection.start === null || currentSelection.end === null) {
+      const range = { start: index, end: index };
+      selectionRef.current = range;
+      setSelection(range);
       return;
     }
-    const [s, e] = [selection.start!, selection.end!];
+    const [s, e] = [currentSelection.start, currentSelection.end];
     const start = Math.min(s, e, index);
     const end = Math.max(s, e, index);
-    setSelection({ start, end });
+    const range = { start, end };
+    selectionRef.current = range;
+    setSelection(range);
   };
 
   const performUndo = () => {
@@ -1111,18 +1123,20 @@ export const TokenEditor: React.FC<{
         dispatch({ type: "REDO" });
         return;
       }
+      const currentSelection = selectionRef.current;
+      const hasSelectionNow = currentSelection.start !== null && currentSelection.end !== null;
       if (event.key === "Delete" || event.key === "Backspace") {
-        if (hasSelection) {
+        if (hasSelectionNow) {
           event.preventDefault();
-          const [s, e] = [selection.start!, selection.end!];
+          const [s, e] = [currentSelection.start!, currentSelection.end!];
           dispatch({ type: "DELETE_SELECTED_TOKENS", range: [Math.min(s, e), Math.max(s, e)] });
           setSelection({ start: null, end: null });
         }
       }
       if (event.key === "Insert") {
-        if (!hasSelection) return;
+        if (!hasSelectionNow) return;
         event.preventDefault();
-        const [s, e] = [selection.start!, selection.end!];
+        const [s, e] = [currentSelection.start!, currentSelection.end!];
         const start = Math.min(s, e);
         const end = Math.max(s, e);
         dispatch({ type: "INSERT_TOKEN_AFTER_SELECTED", range: [start, end] });
@@ -1135,7 +1149,7 @@ export const TokenEditor: React.FC<{
       if (event.key === "Escape") {
         setSelection({ start: null, end: null });
       }
-      if (event.key === "Enter" && hasSelection) {
+      if (event.key === "Enter" && hasSelectionNow) {
         event.preventDefault();
         beginEdit(undefined, editText.length);
       }
@@ -1886,13 +1900,17 @@ export const TokenEditor: React.FC<{
                 {toolbarButton(t("tokenEditor.redo"), performRedo, history.future.length === 0, "Ctrl+Y", "↻")}
                 {toolbarButton(t("tokenEditor.delete"), () => {
                   if (!hasSelectionTokens) return;
-                  const [s, e] = [selection.start!, selection.end!];
+                  const currentSelection = selectionRef.current;
+                  if (currentSelection.start === null || currentSelection.end === null) return;
+                  const [s, e] = [currentSelection.start, currentSelection.end];
                   dispatch({ type: "DELETE_SELECTED_TOKENS", range: [Math.min(s, e), Math.max(s, e)] });
                   setSelection({ start: null, end: null });
                 }, !hasSelectionTokens, "Del", "🗑️")}
                 {toolbarButton(t("tokenEditor.insertBefore"), () => {
                   if (!hasSelectionTokens) return;
-                  const [s, e] = [selection.start!, selection.end!];
+                  const currentSelection = selectionRef.current;
+                  if (currentSelection.start === null || currentSelection.end === null) return;
+                  const [s, e] = [currentSelection.start, currentSelection.end];
                   const start = Math.min(s, e);
                   dispatch({ type: "INSERT_TOKEN_BEFORE_SELECTED", range: [start, Math.max(s, e)] });
                   // Immediately enter edit mode on the newly inserted token.
@@ -1910,7 +1928,9 @@ export const TokenEditor: React.FC<{
                 }, !hasSelectionTokens, undefined, "➕")}
                 {toolbarButton(t("tokenEditor.insertAfter"), () => {
                   if (!hasSelectionTokens) return;
-                  const [s, e] = [selection.start!, selection.end!];
+                  const currentSelection = selectionRef.current;
+                  if (currentSelection.start === null || currentSelection.end === null) return;
+                  const [s, e] = [currentSelection.start, currentSelection.end];
                   const start = Math.min(s, e);
                   const end = Math.max(s, e);
                   dispatch({ type: "INSERT_TOKEN_AFTER_SELECTED", range: [start, end] });

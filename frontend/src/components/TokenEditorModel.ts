@@ -757,6 +757,28 @@ const tokenReducer = (state: EditorHistoryState, action: Action): EditorHistoryS
       let [start, end] = action.range;
       if (start < 0 || end < start || start >= state.present.tokens.length) return state;
       const tokens = cloneTokens(state.present.tokens);
+      const selectionHasHistoryPlaceholder = tokens
+        .slice(start, end + 1)
+        .some((tok) => tok.kind === "empty" && tok.previousTokens && tok.previousTokens.length);
+      // If selection already includes a deleted placeholder, include its adjacent history placeholders too.
+      if (selectionHasHistoryPlaceholder) {
+        while (
+          start > 0 &&
+          tokens[start - 1]?.kind === "empty" &&
+          tokens[start - 1]?.previousTokens &&
+          tokens[start - 1]!.previousTokens!.length
+        ) {
+          start -= 1;
+        }
+        while (
+          end + 1 < tokens.length &&
+          tokens[end + 1]?.kind === "empty" &&
+          tokens[end + 1]?.previousTokens &&
+          tokens[end + 1]!.previousTokens!.length
+        ) {
+          end += 1;
+        }
+      }
       // Expand selection to include the whole inserted group if selection intersects it.
       let expanded = true;
       while (expanded) {
@@ -833,14 +855,22 @@ const tokenReducer = (state: EditorHistoryState, action: Action): EditorHistoryS
       // If selection contains a correction cluster (e.g., split) with history, restore the original tokens instead of adding ⬚.
       const anchorWithHistory = removed.find((t) => t.previousTokens && t.previousTokens.length);
       if (anchorWithHistory) {
-        const restore = dedupeTokens(unwindToOriginal(cloneTokens(anchorWithHistory.previousTokens!))).map((tok) => ({
-          ...tok,
-          previousTokens: undefined,
-          selected: false,
-          origin: tok.origin,
-          moveId: undefined,
-        }));
-        tokens.splice(start, removed.length, ...restore);
+        const replacement: Token[] = [];
+        removed.forEach((tok) => {
+          if (tok.previousTokens && tok.previousTokens.length) {
+            const restore = dedupeTokens(unwindToOriginal(cloneTokens(tok.previousTokens))).map((restored) => ({
+              ...restored,
+              previousTokens: undefined,
+              selected: false,
+              origin: restored.origin,
+              moveId: undefined,
+            }));
+            replacement.push(...restore);
+          } else {
+            replacement.push({ ...tok, selected: false });
+          }
+        });
+        tokens.splice(start, removed.length, ...replacement);
         const cleanedTokens = dropRedundantEmpties(tokens);
         const next: EditorPresentState = { ...state.present, tokens: cleanedTokens };
         return pushPresent(state, next);
