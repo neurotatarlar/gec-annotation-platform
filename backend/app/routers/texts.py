@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import PlainTextResponse
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm.exc import StaleDataError
 from pydantic import BaseModel
 
 from ..models import (
@@ -432,9 +433,6 @@ def save_annotations(
             )
         text_hash = _sha256_text(text.content)
 
-        existing_by_id = {annotation.id: annotation for annotation in existing}
-        existing_by_span = {(annotation.start_token, annotation.end_token): annotation for annotation in existing}
-
         def _ensure_payload_dict(raw: BaseModel | dict | None) -> dict:
             if isinstance(raw, BaseModel):
                 return raw.model_dump()
@@ -466,19 +464,33 @@ def save_annotations(
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="before_tokens must be a list")
 
         saved: list[Annotation] = []
+        deleted_ids = set(request.deleted_ids or [])
         # Process deletions first
-        if request.deleted_ids:
+        if deleted_ids:
             (
                 db.query(Annotation)
                 .filter(
                     Annotation.text_id == text_id,
                     Annotation.author_id == current_user.id,
-                    Annotation.id.in_(request.deleted_ids),
+                    Annotation.id.in_(deleted_ids),
                 )
                 .delete(synchronize_session=False)
             )
+            existing = [ann for ann in existing if ann.id not in deleted_ids]
+
+        # Refresh mappings after deletions so we don't upsert against removed rows.
+        if deleted_ids:
+            existing = (
+                db.query(Annotation)
+                .filter(Annotation.text_id == text_id, Annotation.author_id == current_user.id)
+                .all()
+            )
+        existing_by_id = {annotation.id: annotation for annotation in existing}
+        existing_by_span = {(annotation.start_token, annotation.end_token): annotation for annotation in existing}
 
         for item in request.annotations:
+            if item.id and item.id in deleted_ids:
+                continue
             payload = _ensure_payload_dict(item.payload)
             _validate_payload(payload)
 
@@ -562,6 +574,22 @@ def save_annotations(
 
         db.commit()
         return saved
+    except StaleDataError:
+        db.rollback()
+        logger.warning(
+            "Annotation save conflict",
+            extra={
+                "text_id": text_id,
+                "user_id": str(getattr(current_user, "id", "")),
+                "client_version": request.client_version,
+                "count": len(request.annotations),
+                "summary": _summarize_annotations(request.annotations),
+            },
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Annotations changed on the server. Reload and try again.",
+        )
     except HTTPException as exc:
         if exc.status_code in {400, 409, 422}:
             logger.warning(

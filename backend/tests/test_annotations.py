@@ -452,6 +452,132 @@ def test_save_annotations_deletes_by_id(client):
         assert len(remaining) == 0
 
 
+def test_save_annotations_skips_deleted_ids_in_payload(client):
+    text_id, et_id = get_seed_ids()
+    with db.SessionLocal() as session:
+        ann1 = Annotation(
+            text_id=text_id,
+            author_id=TEST_USER_ID,
+            start_token=0,
+            end_token=0,
+            replacement="old-one",
+            payload={"operation": "replace", "before_tokens": ["base-0"], "after_tokens": []},
+            error_type_id=et_id,
+        )
+        ann2 = Annotation(
+            text_id=text_id,
+            author_id=TEST_USER_ID,
+            start_token=1,
+            end_token=1,
+            replacement="old-two",
+            payload={"operation": "replace", "before_tokens": ["base-1"], "after_tokens": []},
+            error_type_id=et_id,
+        )
+        session.add_all([ann1, ann2])
+        session.commit()
+        session.refresh(ann1)
+        session.refresh(ann2)
+
+    payload = {
+        "annotations": [
+            {
+                "id": ann1.id,
+                "start_token": 0,
+                "end_token": 0,
+                "replacement": "updated-one",
+                "error_type_id": et_id,
+                "payload": {
+                    "operation": "replace",
+                    "before_tokens": ["base-0"],
+                    "after_tokens": [{"id": "base-0", "text": "updated-one", "origin": "base"}],
+                    "text_sha256": sha256("hello world"),
+                },
+            },
+            {
+                "id": ann2.id,
+                "start_token": 1,
+                "end_token": 1,
+                "replacement": "updated-two",
+                "error_type_id": et_id,
+                "payload": {
+                    "operation": "replace",
+                    "before_tokens": ["base-1"],
+                    "after_tokens": [{"id": "base-1", "text": "updated-two", "origin": "base"}],
+                    "text_sha256": sha256("hello world"),
+                },
+            },
+        ],
+        "client_version": 0,
+        "deleted_ids": [ann2.id],
+    }
+    resp = client.post(f"/api/texts/{text_id}/annotations", json=payload)
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert len(data) == 1
+    assert data[0]["id"] == ann1.id
+    assert data[0]["replacement"] == "updated-one"
+    with db.SessionLocal() as session:
+        remaining = (
+            session.query(Annotation)
+            .filter_by(text_id=text_id, author_id=TEST_USER_ID)
+            .order_by(Annotation.id)
+            .all()
+        )
+        assert [ann.id for ann in remaining] == [ann1.id]
+
+
+def test_save_annotations_recreates_span_after_deletion(client):
+    text_id, et_id = get_seed_ids()
+    with db.SessionLocal() as session:
+        ann = Annotation(
+            text_id=text_id,
+            author_id=TEST_USER_ID,
+            start_token=0,
+            end_token=0,
+            replacement="old",
+            payload={"operation": "replace", "before_tokens": ["base-0"], "after_tokens": []},
+            error_type_id=et_id,
+        )
+        session.add(ann)
+        session.commit()
+        session.refresh(ann)
+        ann_id = ann.id
+
+    payload = {
+        "annotations": [
+            {
+                "start_token": 0,
+                "end_token": 0,
+                "replacement": "new",
+                "error_type_id": et_id,
+                "payload": {
+                    "operation": "replace",
+                    "before_tokens": ["base-0"],
+                    "after_tokens": [{"id": "base-0", "text": "new", "origin": "base"}],
+                    "text_sha256": sha256("hello world"),
+                },
+            }
+        ],
+        "client_version": 0,
+        "deleted_ids": [ann_id],
+    }
+    resp = client.post(f"/api/texts/{text_id}/annotations", json=payload)
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert len(data) == 1
+    assert data[0]["replacement"] == "new"
+    assert data[0]["id"] != ann_id
+    with db.SessionLocal() as session:
+        remaining = (
+            session.query(Annotation)
+            .filter_by(text_id=text_id, author_id=TEST_USER_ID)
+            .order_by(Annotation.id)
+            .all()
+        )
+        assert len(remaining) == 1
+        assert remaining[0].id != ann_id
+
+
 def test_save_annotations_populates_token_snapshot_when_missing(client):
     text_id, et_id = get_seed_ids()
     payload = {

@@ -193,6 +193,7 @@ export const TokenEditor: React.FC<{
   const tokenRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const groupRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const selectionRef = useRef(selection);
+  const lastClickedIndexRef = useRef<number | null>(null);
   const dragStateRef = useRef<{ start: number; end: number } | null>(null);
   const measureCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const measureTextWidth = useCallback(
@@ -1045,6 +1046,7 @@ export const TokenEditor: React.FC<{
   // Selection click logic with contiguous Ctrl-select.
   const handleTokenClick = (index: number, ctrlKey: boolean) => {
     if (tokens[index]?.kind === "special") return;
+    lastClickedIndexRef.current = index;
     const currentSelection = selectionRef.current;
     if (!ctrlKey) {
       const range = { start: index, end: index };
@@ -1065,6 +1067,31 @@ export const TokenEditor: React.FC<{
     selectionRef.current = range;
     setSelection(range);
   };
+
+  const getDeleteRange = useCallback((): { range: [number, number]; anchorIndex?: number } | null => {
+    const currentSelection = selectionRef.current;
+    if (currentSelection.start === null || currentSelection.end === null) return null;
+    const [start, end] = [Math.min(currentSelection.start, currentSelection.end), Math.max(currentSelection.start, currentSelection.end)];
+    if (start === end) return { range: [start, end], anchorIndex: start };
+    const clickedIndex = lastClickedIndexRef.current;
+    if (clickedIndex !== null && clickedIndex >= start && clickedIndex <= end) {
+      const token = tokens[clickedIndex];
+      if (token?.kind === "empty" && token.previousTokens?.length) {
+        return { range: [clickedIndex, clickedIndex], anchorIndex: clickedIndex };
+      }
+    }
+    const activeEl = document.activeElement as HTMLElement | null;
+    const activeIndexAttr = activeEl?.getAttribute?.("data-token-index");
+    const activeIndex = activeIndexAttr ? Number(activeIndexAttr) : null;
+    if (activeIndex !== null && !Number.isNaN(activeIndex)) {
+      const token = tokens[activeIndex];
+      if (activeIndex >= start && activeIndex <= end && token?.kind === "empty" && token.previousTokens?.length) {
+        return { range: [activeIndex, activeIndex], anchorIndex: activeIndex };
+      }
+    }
+    const anchorIndex = clickedIndex !== null && clickedIndex >= start && clickedIndex <= end ? clickedIndex : undefined;
+    return { range: [start, end], anchorIndex };
+  }, [tokens]);
 
   const performUndo = () => {
     if (editingRange) {
@@ -1144,9 +1171,11 @@ export const TokenEditor: React.FC<{
       if (event.key === "Delete" || event.key === "Backspace") {
         if (hasSelectionNow) {
           event.preventDefault();
-          const [s, e] = [currentSelection.start!, currentSelection.end!];
-          dispatch({ type: "DELETE_SELECTED_TOKENS", range: [Math.min(s, e), Math.max(s, e)] });
-          setSelection({ start: null, end: null });
+          const ctx = getDeleteRange();
+          if (ctx) {
+            dispatch({ type: "DELETE_SELECTED_TOKENS", range: ctx.range, anchorIndex: ctx.anchorIndex });
+            setSelection({ start: null, end: null });
+          }
         }
       }
       if (event.key === "Insert") {
@@ -1172,7 +1201,16 @@ export const TokenEditor: React.FC<{
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [editingRange, hasSelection, selection, showClearConfirm, pendingAction, cancelFlag, closeClearConfirm]);
+  }, [
+    editingRange,
+    hasSelection,
+    selection,
+    showClearConfirm,
+    pendingAction,
+    cancelFlag,
+    closeClearConfirm,
+    getDeleteRange,
+  ]);
 
   const renderToken = (token: Token, index: number, forceChanged = false) => {
     const isSelected = selectedSet.has(index);
@@ -1916,10 +1954,9 @@ export const TokenEditor: React.FC<{
                 {toolbarButton(t("tokenEditor.redo"), performRedo, history.future.length === 0, "Ctrl+Y", "↻")}
                 {toolbarButton(t("tokenEditor.delete"), () => {
                   if (!hasSelectionTokens) return;
-                  const currentSelection = selectionRef.current;
-                  if (currentSelection.start === null || currentSelection.end === null) return;
-                  const [s, e] = [currentSelection.start, currentSelection.end];
-                  dispatch({ type: "DELETE_SELECTED_TOKENS", range: [Math.min(s, e), Math.max(s, e)] });
+                  const ctx = getDeleteRange();
+                  if (!ctx) return;
+                  dispatch({ type: "DELETE_SELECTED_TOKENS", range: ctx.range, anchorIndex: ctx.anchorIndex });
                   setSelection({ start: null, end: null });
                 }, !hasSelectionTokens, "Del", "🗑️")}
                 {toolbarButton(t("tokenEditor.insertBefore"), () => {

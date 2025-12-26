@@ -1371,6 +1371,37 @@ describe("revert clears selection", () => {
     });
   });
 
+  it("deleting one placeholder keeps adjacent deletion correction intact", async () => {
+    mockGet.mockReset();
+    mockPost.mockReset();
+    localStorage.clear();
+    await renderEditor("one two three four");
+    const user = userEvent.setup();
+
+    const two = await screen.findByRole("button", { name: "two" });
+    await user.click(two);
+    await user.keyboard("{Delete}");
+
+    const three = await screen.findByRole("button", { name: "three" });
+    await user.click(three);
+    await user.keyboard("{Delete}");
+
+    let placeholders = await screen.findAllByRole("button", { name: "⬚" });
+    expect(placeholders.length).toBe(2);
+
+    await user.click(placeholders[0]);
+    await waitFor(() => {
+      expect(placeholders[0]).toHaveAttribute("aria-pressed", "true");
+      expect(placeholders[1]).toHaveAttribute("aria-pressed", "false");
+    });
+    await user.keyboard("{Delete}");
+
+    placeholders = await screen.findAllByRole("button", { name: "⬚" });
+    expect(placeholders.length).toBe(1);
+    expect(screen.getByRole("button", { name: "two" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "three" })).toBeNull();
+  });
+
   it("selects the first deletion after clearing all corrections", async () => {
     mockGet.mockReset();
     mockPost.mockReset();

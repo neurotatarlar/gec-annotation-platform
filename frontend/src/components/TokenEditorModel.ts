@@ -65,7 +65,7 @@ export type CorrectionCardLite = {
 type Action =
   | { type: "INIT_FROM_TEXT"; text: string }
   | { type: "INIT_FROM_STATE"; state: EditorPresentState }
-  | { type: "DELETE_SELECTED_TOKENS"; range: [number, number] }
+  | { type: "DELETE_SELECTED_TOKENS"; range: [number, number]; anchorIndex?: number }
   | { type: "MOVE_SELECTED_TOKENS"; fromStart: number; fromEnd: number; toIndex: number }
   | { type: "INSERT_TOKEN_BEFORE_SELECTED"; range: [number, number] | null }
   | { type: "INSERT_TOKEN_AFTER_SELECTED"; range: [number, number] | null }
@@ -846,6 +846,37 @@ const tokenReducer = (state: EditorHistoryState, action: Action): EditorHistoryS
       }
       const leadingSpace = start === 0 ? false : tokens[start]?.spaceBefore !== false;
       const removed = tokens.slice(start, end + 1);
+      const anchorIndex =
+        typeof action.anchorIndex === "number" && action.anchorIndex >= start && action.anchorIndex <= end
+          ? action.anchorIndex - start
+          : null;
+      const isDeletionPlaceholder = (tok: Token) =>
+        tok.kind === "empty" && tok.previousTokens && tok.previousTokens.length > 0;
+      if (removed.length > 1 && removed.every(isDeletionPlaceholder) && anchorIndex !== null) {
+        const replacement: Token[] = [];
+        removed.forEach((tok, idx) => {
+          if (idx === anchorIndex) {
+            const restore = dedupeTokens(unwindToOriginal(cloneTokens(tok.previousTokens ?? []))).map((restored) => ({
+              ...restored,
+              previousTokens: undefined,
+              selected: false,
+              origin: restored.origin,
+              moveId: undefined,
+            }));
+            if (restore.length) {
+              replacement.push(...restore);
+            } else {
+              replacement.push({ ...makeEmptyPlaceholder([]), selected: false });
+            }
+          } else {
+            replacement.push({ ...tok, selected: false });
+          }
+        });
+        tokens.splice(start, removed.length, ...replacement);
+        const cleanedTokens = dropRedundantEmpties(tokens);
+        const next: EditorPresentState = { ...state.present, tokens: cleanedTokens };
+        return pushPresent(state, next);
+      }
       // If user deletes only inserted tokens, treat it as reverting that insertion (no placeholder).
       const allInserted = removed.every((t) => t.origin === "inserted");
       if (allInserted) {
