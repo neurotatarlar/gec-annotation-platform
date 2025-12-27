@@ -1643,6 +1643,29 @@ describe("revert clears selection", () => {
     await waitFor(() => expect(within(corrected).getByText("Punctuation")).toBeInTheDocument());
   });
 
+  it("keeps all tokens green after editing a moved token into multiple tokens", async () => {
+    localStorage.clear();
+    const base = initState("alpha beta gamma delta");
+    const moved = tokenEditorReducer(base, {
+      type: "MOVE_SELECTED_TOKENS",
+      fromStart: 2,
+      fromEnd: 2,
+      toIndex: 0,
+    });
+    const movedIndex = findIndexByText(moved, "gamma");
+    const edited = tokenEditorReducer(moved, {
+      type: "EDIT_SELECTED_RANGE_AS_TEXT",
+      range: [movedIndex, movedIndex],
+      newText: "gamma new",
+    });
+    localStorage.setItem("tokenEditorPrefs:state:1", JSON.stringify(edited.present));
+    await renderEditor("alpha beta gamma delta");
+    const gamma = await screen.findByRole("button", { name: "gamma" });
+    const newToken = await screen.findByRole("button", { name: "new" });
+    expect(gamma).toHaveStyle({ color: "#22c55e" });
+    expect(newToken).toHaveStyle({ color: "#22c55e" });
+  });
+
   it("auto-selects all tokens in a replaced group", async () => {
     const edited = tokenEditorReducer(initState("hello world"), {
       type: "EDIT_SELECTED_RANGE_AS_TEXT",

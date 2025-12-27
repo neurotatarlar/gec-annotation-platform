@@ -660,11 +660,47 @@ export const TokenEditor: React.FC<{
     const containerRect = tokenRowRef.current.getBoundingClientRect();
     const srcRect = sourceEl.getBoundingClientRect();
     const dstRect = destEl.getBoundingClientRect();
-    const rightward = dstRect.left >= srcRect.right;
-    const x1 = rightward ? srcRect.right - containerRect.left : srcRect.left - containerRect.left;
-    const x2 = rightward ? dstRect.left - containerRect.left : dstRect.right - containerRect.left;
-    const y1 = srcRect.top + srcRect.height / 2 - containerRect.top;
-    const y2 = dstRect.top + dstRect.height / 2 - containerRect.top;
+    const srcCenter = { x: srcRect.left + srcRect.width / 2, y: srcRect.top + srcRect.height / 2 };
+    const dstCenter = { x: dstRect.left + dstRect.width / 2, y: dstRect.top + dstRect.height / 2 };
+    const findEdgePoint = (from: { x: number; y: number }, to: { x: number; y: number }, rect: DOMRect) => {
+      const dx = to.x - from.x;
+      const dy = to.y - from.y;
+      if (dx === 0 && dy === 0) return from;
+      const candidates: Array<{ t: number; x: number; y: number }> = [];
+      if (dx !== 0) {
+        const tLeft = (rect.left - from.x) / dx;
+        const yLeft = from.y + tLeft * dy;
+        if (tLeft > 0 && tLeft < 1 && yLeft >= rect.top && yLeft <= rect.bottom) {
+          candidates.push({ t: tLeft, x: rect.left, y: yLeft });
+        }
+        const tRight = (rect.right - from.x) / dx;
+        const yRight = from.y + tRight * dy;
+        if (tRight > 0 && tRight < 1 && yRight >= rect.top && yRight <= rect.bottom) {
+          candidates.push({ t: tRight, x: rect.right, y: yRight });
+        }
+      }
+      if (dy !== 0) {
+        const tTop = (rect.top - from.y) / dy;
+        const xTop = from.x + tTop * dx;
+        if (tTop > 0 && tTop < 1 && xTop >= rect.left && xTop <= rect.right) {
+          candidates.push({ t: tTop, x: xTop, y: rect.top });
+        }
+        const tBottom = (rect.bottom - from.y) / dy;
+        const xBottom = from.x + tBottom * dx;
+        if (tBottom > 0 && tBottom < 1 && xBottom >= rect.left && xBottom <= rect.right) {
+          candidates.push({ t: tBottom, x: xBottom, y: rect.bottom });
+        }
+      }
+      if (!candidates.length) return from;
+      const closest = candidates.reduce((a, b) => (a.t < b.t ? a : b));
+      return { x: closest.x, y: closest.y };
+    };
+    const srcEdge = findEdgePoint(srcCenter, dstCenter, srcRect);
+    const dstEdge = findEdgePoint(dstCenter, srcCenter, dstRect);
+    const x1 = srcEdge.x - containerRect.left;
+    const y1 = srcEdge.y - containerRect.top;
+    const x2 = dstEdge.x - containerRect.left;
+    const y2 = dstEdge.y - containerRect.top;
     setMoveLine({ x1, y1, x2, y2 });
   }, [hoveredMoveId, moveMarkerById]);
   const correctionCards = useMemo(
@@ -1835,9 +1871,9 @@ export const TokenEditor: React.FC<{
                   pointerEvents: "none",
                   userSelect: "none",
                 };
-                nodes.push(
-                  <div
-                    key={`inner-gap-${group.start + i}`}
+              nodes.push(
+                <div
+                  key={`inner-gap-${group.start + i}`}
                     data-drop-index={group.start + i}
                     style={{
                       width: gapWidth,
@@ -1881,7 +1917,8 @@ export const TokenEditor: React.FC<{
                   </div>
                 );
               }
-              nodes.push(renderToken(tok, group.start + i, isMoveDestination));
+              const forceChanged = (isMoveDestination || hasHistory) && tok.kind !== "empty";
+              nodes.push(renderToken(tok, group.start + i, forceChanged));
               return nodes;
             })}
           </div>
