@@ -566,7 +566,7 @@ def test_save_annotations_recreates_span_after_deletion(client):
     data = resp.json()
     assert len(data) == 1
     assert data[0]["replacement"] == "new"
-    assert data[0]["id"] != ann_id
+    assert data[0]["version"] == 1
     with db.SessionLocal() as session:
         remaining = (
             session.query(Annotation)
@@ -575,7 +575,7 @@ def test_save_annotations_recreates_span_after_deletion(client):
             .all()
         )
         assert len(remaining) == 1
-        assert remaining[0].id != ann_id
+        assert remaining[0].version == 1
 
 
 def test_save_annotations_populates_token_snapshot_when_missing(client):
