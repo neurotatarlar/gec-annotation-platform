@@ -238,6 +238,18 @@ export const TokenEditor: React.FC<{
   const selectionRef = useRef(selection);
   const lastClickedIndexRef = useRef<number | null>(null);
   const dragStateRef = useRef<{ start: number; end: number } | null>(null);
+  const lastDragPointRef = useRef<{ x: number; y: number } | null>(null);
+  const gapLayoutRef = useRef<{
+    left: number;
+    top: number;
+    positions: Array<{ index: number; midX: number; midY: number }>;
+  }>({
+    left: 0,
+    top: 0,
+    positions: [],
+  });
+  const pendingDropIndexRef = useRef<number | null>(null);
+  const dropRafRef = useRef<number | null>(null);
   const measureCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const measureTextWidth = useCallback(
     (text: string, size?: number) => {
@@ -263,6 +275,28 @@ export const TokenEditor: React.FC<{
   const [isTrashing, setIsTrashing] = useState(false);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+
+  const updateGapPositions = useCallback(() => {
+    const row = tokenRowRef.current;
+    if (!row) {
+      gapLayoutRef.current = { left: 0, top: 0, positions: [] };
+      return;
+    }
+    const containerRect = row.getBoundingClientRect();
+    const gaps = row.querySelectorAll<HTMLElement>("[data-drop-index]");
+    const positions: Array<{ index: number; midX: number; midY: number }> = [];
+    gaps.forEach((gap) => {
+      const rect = gap.getBoundingClientRect();
+      const idx = Number(gap.dataset.dropIndex);
+      if (Number.isNaN(idx)) return;
+      positions.push({
+        index: idx,
+        midX: rect.left - containerRect.left + rect.width / 2,
+        midY: rect.top - containerRect.top + rect.height / 2,
+      });
+    });
+    gapLayoutRef.current = { left: containerRect.left, top: containerRect.top, positions };
+  }, []);
 
   useEffect(() => {
     selectionRef.current = selection;
@@ -331,6 +365,14 @@ export const TokenEditor: React.FC<{
     });
     return starts;
   }, [tokens, lineBreaks, lineBreakSet]);
+  useEffect(() => {
+    updateGapPositions();
+  }, [tokens, tokenGap, tokenFontSize, lineBreaks, updateGapPositions]);
+  useEffect(() => {
+    const handleResize = () => updateGapPositions();
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, [updateGapPositions]);
   const baseTokenMap = useMemo(() => {
     const map = new Map<string, Token>();
     originalTokens.forEach((tok) => {
@@ -1101,6 +1143,8 @@ export const TokenEditor: React.FC<{
         event.preventDefault();
         return;
       }
+      updateGapPositions();
+      lastDragPointRef.current = null;
       dragStateRef.current = range;
       setDropIndex(null);
       event.dataTransfer.setData("text/plain", "move");
@@ -1121,94 +1165,162 @@ export const TokenEditor: React.FC<{
         document.body.removeChild(preview);
       }, 0);
     },
-    [editingRange, expandRangeToGroups, hasSelection, selection, setSelection, tokens]
+    [editingRange, expandRangeToGroups, hasSelection, selection, setSelection, tokens, updateGapPositions]
   );
+
+  const resolveClientPoint = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+    const x = Number.isFinite(event.clientX) ? event.clientX : 0;
+    const y = Number.isFinite(event.clientY) ? event.clientY : 0;
+    if (!(x === 0 && y === 0)) return { x, y };
+    const native = event.nativeEvent as MouseEvent | undefined;
+    if (native && typeof native.offsetX === "number" && typeof native.offsetY === "number") {
+      const rect = event.currentTarget.getBoundingClientRect();
+      return { x: rect.left + native.offsetX, y: rect.top + native.offsetY };
+    }
+    return { x, y };
+  }, []);
+
+  const applyDropIndex = useCallback((index: number) => {
+    pendingDropIndexRef.current = index;
+    setDropIndex((prev) => (prev === index ? prev : index));
+    if (dropRafRef.current === null) {
+      dropRafRef.current = requestAnimationFrame(() => {
+        dropRafRef.current = null;
+        setDropIndex((prev) => (prev === pendingDropIndexRef.current ? prev : pendingDropIndexRef.current));
+      });
+    }
+  }, []);
 
   const handleDragOverToken = useCallback(
     (index: number, event: React.DragEvent<HTMLDivElement>) => {
-      if (!dragStateRef.current) return;
+      if (!dragStateRef.current) {
+        const range = expandRangeToGroups(index, index);
+        dragStateRef.current = range;
+        setSelection(range);
+      }
       event.preventDefault();
+      lastDragPointRef.current = resolveClientPoint(event);
       const rect = event.currentTarget.getBoundingClientRect();
       const isAfter = (event.clientX - rect.left) / Math.max(1, rect.width) > 0.5;
       const nextIndex = isAfter ? index + 1 : index;
-      setDropIndex(nextIndex);
+      applyDropIndex(nextIndex);
     },
-    []
+    [applyDropIndex, expandRangeToGroups, resolveClientPoint, setSelection]
   );
 
-  const handleDragOverGap = useCallback((index: number, event: React.DragEvent<HTMLDivElement>) => {
-    if (!dragStateRef.current) return;
-    event.preventDefault();
-    setDropIndex(index);
-  }, []);
+  const handleDragOverGap = useCallback(
+    (index: number, event: React.DragEvent<HTMLDivElement>) => {
+      if (!dragStateRef.current) return;
+      event.preventDefault();
+      lastDragPointRef.current = resolveClientPoint(event);
+      applyDropIndex(index);
+    },
+    [applyDropIndex, resolveClientPoint]
+  );
+
+  const resolveDragRange = useCallback(() => {
+    if (dragStateRef.current) return dragStateRef.current;
+    const currentSelection = selectionRef.current;
+    if (currentSelection.start === null || currentSelection.end === null) return null;
+    return expandRangeToGroups(
+      Math.min(currentSelection.start, currentSelection.end),
+      Math.max(currentSelection.start, currentSelection.end)
+    );
+  }, [expandRangeToGroups]);
 
   const handleDropAt = useCallback(
     (index: number) => {
-      const drag = dragStateRef.current;
+      const drag = resolveDragRange();
       dragStateRef.current = null;
       setDropIndex(null);
       if (!drag) return;
       dispatch({ type: "MOVE_SELECTED_TOKENS", fromStart: drag.start, fromEnd: drag.end, toIndex: index });
       setSelection({ start: null, end: null });
     },
-    [setSelection]
+    [resolveDragRange, setSelection]
   );
 
-  const getClosestDropIndex = useCallback((container: HTMLElement, clientX: number) => {
-    const gaps = container.querySelectorAll<HTMLElement>("[data-drop-index]");
-    if (!gaps.length) return null;
-    let closestIndex: number | null = null;
-    let closestDistance = Number.POSITIVE_INFINITY;
-    gaps.forEach((gap) => {
-      const rect = gap.getBoundingClientRect();
-      const mid = rect.left + rect.width / 2;
-      const dist = Math.abs(clientX - mid);
-      if (dist < closestDistance) {
-        closestDistance = dist;
-        const idx = Number(gap.dataset.dropIndex);
-        if (!Number.isNaN(idx)) {
-          closestIndex = idx;
+  const getClosestDropIndex = useCallback(
+    (clientX: number, clientY: number) => {
+      if (!gapLayoutRef.current.positions.length) {
+        updateGapPositions();
+      }
+      const { left, top, positions } = gapLayoutRef.current;
+      if (!positions.length) return null;
+      const x = clientX - left;
+      const y = clientY - top;
+      let closestIndex: number | null = null;
+      let closestScore = Number.POSITIVE_INFINITY;
+      positions.forEach((pos) => {
+        const dx = x - pos.midX;
+        const dy = y - pos.midY;
+        const score = dx * dx + dy * dy * 4;
+        if (score < closestScore) {
+          closestScore = score;
+          closestIndex = pos.index;
         }
+      });
+      return closestIndex;
+    },
+    [updateGapPositions]
+  );
+
+  const getDropIndexFromTarget = useCallback((target: HTMLDivElement, point: { x: number; y: number }) => {
+    const gaps = target.querySelectorAll<HTMLElement>("[data-drop-index]");
+    let closestIndex: number | null = null;
+    let closestScore = Number.POSITIVE_INFINITY;
+    gaps.forEach((gap) => {
+      const idx = Number(gap.dataset.dropIndex);
+      if (Number.isNaN(idx)) return;
+      const rect = gap.getBoundingClientRect();
+      const midX = rect.left + rect.width / 2;
+      const midY = rect.top + rect.height / 2;
+      const dx = point.x - midX;
+      const dy = point.y - midY;
+      const score = dx * dx + dy * dy * 4;
+      if (score < closestScore) {
+        closestScore = score;
+        closestIndex = idx;
       }
     });
     return closestIndex;
-  }, []);
-
-  const resolveClientX = useCallback((event: React.DragEvent<HTMLDivElement>) => {
-    if (Number.isFinite(event.clientX) && event.clientX !== 0) return event.clientX;
-    const native = event.nativeEvent as MouseEvent | undefined;
-    if (native && typeof native.offsetX === "number") {
-      const rect = event.currentTarget.getBoundingClientRect();
-      return rect.left + native.offsetX;
-    }
-    return event.clientX;
   }, []);
 
   const handleRowDragOver = useCallback(
     (event: React.DragEvent<HTMLDivElement>) => {
       if (!dragStateRef.current) return;
       event.preventDefault();
-      const nextIndex = getClosestDropIndex(event.currentTarget, resolveClientX(event));
+      const point = resolveClientPoint(event);
+      lastDragPointRef.current = point;
+      const nextIndex = getClosestDropIndex(point.x, point.y);
       if (nextIndex !== null) {
-        setDropIndex(nextIndex);
+        applyDropIndex(nextIndex);
       }
     },
-    [getClosestDropIndex, resolveClientX]
+    [applyDropIndex, getClosestDropIndex, resolveClientPoint]
   );
 
   const handleRowDrop = useCallback(
     (event: React.DragEvent<HTMLDivElement>) => {
       if (!dragStateRef.current) return;
       event.preventDefault();
-      const nextIndex = dropIndex ?? getClosestDropIndex(event.currentTarget, resolveClientX(event));
+      const point = resolveClientPoint(event);
+      const fallbackPoint = lastDragPointRef.current ?? point;
+      const computedIndex = getDropIndexFromTarget(event.currentTarget, fallbackPoint);
+      const nextIndex =
+        dropIndex ??
+        pendingDropIndexRef.current ??
+        computedIndex ??
+        getClosestDropIndex(fallbackPoint.x, fallbackPoint.y);
       if (nextIndex === null) return;
       handleDropAt(nextIndex);
     },
-    [dropIndex, getClosestDropIndex, handleDropAt, resolveClientX]
+    [dropIndex, getClosestDropIndex, getDropIndexFromTarget, handleDropAt, resolveClientPoint]
   );
 
   const handleDragEnd = useCallback(() => {
     dragStateRef.current = null;
+    lastDragPointRef.current = null;
     setDropIndex(null);
   }, []);
 

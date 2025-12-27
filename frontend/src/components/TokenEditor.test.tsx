@@ -604,8 +604,8 @@ describe("tokenEditorReducer core flows", () => {
       effectAllowed: "",
     };
     fireEvent.dragStart(alpha, { dataTransfer });
-    fireEvent.dragOver(gamma, { dataTransfer, clientX: 100 });
-    fireEvent.drop(panel, { dataTransfer });
+    fireEvent.dragOver(gamma, { dataTransfer, clientX: 100, clientY: 5 });
+    fireEvent.drop(gamma, { dataTransfer, clientX: 100, clientY: 5 });
 
     const tokens = within(panel)
       .getAllByRole("button")
@@ -631,8 +631,8 @@ describe("tokenEditorReducer core flows", () => {
     if (!gap) {
       throw new Error("Expected drop gap for index 3");
     }
-    fireEvent.dragOver(gap, { dataTransfer });
-    fireEvent.drop(panel, { dataTransfer, clientX: 65 });
+    fireEvent.dragOver(gap, { dataTransfer, clientX: 65, clientY: 5 });
+    fireEvent.drop(gap, { dataTransfer, clientX: 65, clientY: 5 });
 
     const tokens = within(panel)
       .getAllByRole("button")
