@@ -14,6 +14,15 @@ import {
   getErrorTypeSuperLabel,
 } from "../utils/errorTypes";
 import {
+  detectCapitalizationEdit,
+  detectSingleWhitespaceEdit,
+  detectSpellingEdit,
+  isPlainWordToken,
+} from "./TokenEditorAutopick";
+import { TokenGap } from "./TokenEditorGap";
+import { TokenEditorGroup } from "./TokenEditorGroup";
+import { buildTokenGroups } from "./TokenEditorGrouping";
+import {
   EditorPresentState,
   HotkeySpec,
   MoveMarker,
@@ -37,6 +46,7 @@ import {
   tokenEditorReducer,
   unwindToOriginal,
 } from "./TokenEditorModel";
+import { createGapCalculator, SpaceMarker } from "./TokenEditorSpacing";
 
 export * from "./TokenEditorModel";
 
@@ -49,7 +59,6 @@ const MIN_TOKEN_GAP = 0;
 const MAX_TOKEN_GAP = 40;
 const DEFAULT_TOKEN_GAP = Math.round((MIN_TOKEN_GAP + MAX_TOKEN_GAP) / 2);
 const DEFAULT_TOKEN_FONT_SIZE = 24;
-type SpaceMarker = "dot" | "box" | "none";
 
 const buildTokensFromFragments = (
   fragments: TokenFragmentPayload[],
@@ -793,6 +802,18 @@ export const TokenEditor: React.FC<{
     );
     return match?.id ?? null;
   }, [errorTypes]);
+  const capitalLowerTypeId = useMemo(() => {
+    const match = errorTypes.find(
+      (type) => type.en_name?.trim().toLowerCase() === "capitallowerletter"
+    );
+    return match?.id ?? null;
+  }, [errorTypes]);
+  const spellingTypeId = useMemo(() => {
+    const match = errorTypes.find(
+      (type) => type.en_name?.trim().toLowerCase() === "spelling"
+    );
+    return match?.id ?? null;
+  }, [errorTypes]);
   const correctionCardById = useMemo(() => {
     const map = new Map<string, CorrectionCardLite>();
     correctionCards.forEach((card) => map.set(card.id, card));
@@ -888,36 +909,6 @@ export const TokenEditor: React.FC<{
     },
     [correctionCardById, moveCardIds, tokens]
   );
-  const detectSingleWhitespaceEdit = useCallback((beforeText: string, afterText: string) => {
-    if (beforeText === afterText) return null;
-    const isSingleSpaceInsert = (base: string, updated: string) => {
-      if (updated.length !== base.length + 1) return false;
-      let i = 0;
-      let j = 0;
-      let inserted = false;
-      while (i < base.length && j < updated.length) {
-        if (base[i] === updated[j]) {
-          i += 1;
-          j += 1;
-          continue;
-        }
-        if (!inserted && updated[j] === " ") {
-          inserted = true;
-          j += 1;
-          continue;
-        }
-        return false;
-      }
-      if (!inserted && j === updated.length - 1 && updated[j] === " ") {
-        inserted = true;
-        j += 1;
-      }
-      return inserted && i === base.length && j === updated.length;
-    };
-    if (isSingleSpaceInsert(beforeText, afterText)) return "split";
-    if (isSingleSpaceInsert(afterText, beforeText)) return "merge";
-    return null;
-  }, []);
   const getWhitespaceCorrection = useCallback(
     (cardId: string) => {
       if (moveCardIds.has(cardId)) return null;
@@ -934,7 +925,26 @@ export const TokenEditor: React.FC<{
       const afterText = buildEditableTextFromTokens(currentNonEmpty);
       return detectSingleWhitespaceEdit(beforeText, afterText);
     },
-    [correctionCardById, detectSingleWhitespaceEdit, moveCardIds, tokens]
+    [correctionCardById, moveCardIds, tokens]
+  );
+  const getSingleWordEdit = useCallback(
+    (cardId: string) => {
+      if (moveCardIds.has(cardId)) return null;
+      const card = correctionCardById.get(cardId);
+      if (!card) return null;
+      const slice = tokens.slice(card.rangeStart, card.rangeEnd + 1);
+      if (!slice.length) return null;
+      const anchor = slice.find((tok) => tok.previousTokens?.length);
+      const historyTokens = anchor?.previousTokens ?? [];
+      const historyNonEmpty = historyTokens.filter((tok) => tok.kind !== "empty");
+      const currentNonEmpty = slice.filter((tok) => tok.kind !== "empty");
+      if (historyNonEmpty.length !== 1 || currentNonEmpty.length !== 1) return null;
+      const beforeText = historyNonEmpty[0].text;
+      const afterText = currentNonEmpty[0].text;
+      if (!isPlainWordToken(beforeText) || !isPlainWordToken(afterText)) return null;
+      return { beforeText, afterText };
+    },
+    [correctionCardById, moveCardIds, tokens]
   );
   const defaultTypeForCard = useCallback(
     (cardId: string) => {
@@ -944,9 +954,24 @@ export const TokenEditor: React.FC<{
       if (whitespaceChange === "merge" && mergeTypeId) return mergeTypeId;
       if (hyphenTypeId && isHyphenCorrection(cardId)) return hyphenTypeId;
       if (punctuationTypeId && isPunctuationCorrection(cardId)) return punctuationTypeId;
+      const wordEdit = getSingleWordEdit(cardId);
+      if (wordEdit && capitalLowerTypeId) {
+        if (detectCapitalizationEdit(wordEdit.beforeText, wordEdit.afterText, locale)) {
+          return capitalLowerTypeId;
+        }
+      }
+      if (wordEdit && spellingTypeId) {
+        if (detectSpellingEdit(wordEdit.beforeText, wordEdit.afterText)) {
+          return spellingTypeId;
+        }
+      }
       return null;
     },
     [
+      capitalLowerTypeId,
+      detectCapitalizationEdit,
+      detectSpellingEdit,
+      getSingleWordEdit,
       getWhitespaceCorrection,
       hyphenTypeId,
       isHyphenCorrection,
@@ -954,8 +979,10 @@ export const TokenEditor: React.FC<{
       mergeTypeId,
       moveCardIds,
       punctuationTypeId,
+      spellingTypeId,
       splitTypeId,
       wordOrderTypeId,
+      locale,
     ]
   );
 
@@ -1794,112 +1821,32 @@ export const TokenEditor: React.FC<{
 
   // Render tokens grouped by groupId so corrected clusters share one border and centered history.
   const renderTokenGroups = (tokenList: Token[]) => {
-    const spaceMarkerToUse: SpaceMarker = editingRange ? "none" : spaceMarker;
-    const baseGap = Math.max(0, tokenGap);
-    const minSpaceWidth = Math.max(2, tokenFontSize * 0.16);
-    const normalGap = Math.max(baseGap, minSpaceWidth);
-    const compactGap = Math.max(1, normalGap * 0.25);
-    const punctGap = Math.max(1, normalGap * 0.1);
-    const resolveExplicitSpace = (tok: Token | undefined, isLineStart: boolean) => {
-      if (!tok || isLineStart) return false;
-      if (tok.spaceBefore === true) return true;
-      if (tok.spaceBefore === false) return false;
-      return tok.kind !== "punct";
-    };
-    const getGapMetrics = (prevTok: Token | null, nextTok: Token | undefined, isLineStart: boolean) => {
-      if (!nextTok || isLineStart) {
-        return { width: 0, markerChar: null as string | null };
-      }
-      const explicitSpace = resolveExplicitSpace(nextTok, false);
-      const isPunctAdjacent = nextTok.kind === "punct" || prevTok?.kind === "punct";
-      const width = explicitSpace ? normalGap : isPunctAdjacent ? punctGap : compactGap;
-      const markerChar: string | null =
-        explicitSpace && spaceMarkerToUse !== "none" && !editingRange
-          ? spaceMarkerToUse === "dot"
-            ? "·"
-            : spaceMarkerToUse === "box"
-              ? "␣"
-              : null
-          : null;
-      return { width, markerChar };
-    };
-    const groups: { tokens: Token[]; start: number; end: number }[] = [];
+    const { getGapMetrics, markerStyle } = createGapCalculator({
+      tokenGap,
+      tokenFontSize,
+      spaceMarker,
+      isEditing: Boolean(editingRange),
+    });
+    const groups = buildTokenGroups(tokenList);
     let visibleCount = 0;
-    let idx = 0;
-    while (idx < tokenList.length) {
-      const current = tokenList[idx];
-      if (current.groupId) {
-        let end = idx;
-        while (end + 1 < tokenList.length && tokenList[end + 1].groupId === current.groupId) {
-          end += 1;
-        }
-        groups.push({ tokens: tokenList.slice(idx, end + 1), start: idx, end });
-        idx = end + 1;
-      } else {
-        groups.push({ tokens: [current], start: idx, end: idx });
-        idx += 1;
-      }
-    }
 
     const renderGap = (idx: number) => {
       const nextTok = tokens[idx];
       const prevTok = idx > 0 ? tokens[idx - 1] : null;
       const isLineStart = lineStartIndices.has(idx);
       const { width: gapWidth, markerChar } = getGapMetrics(prevTok, nextTok, isLineStart);
-      const markerShift = Math.max(0, tokenFontSize * 0.08);
-      const markerStyle: React.CSSProperties = {
-        fontSize: Math.max(8, tokenFontSize * 0.45),
-        color: "rgba(148,163,184,0.6)",
-        lineHeight: 1,
-        pointerEvents: "none",
-        userSelect: "none",
-        position: "absolute",
-        top: "50%",
-        transform: `translateY(calc(-50% + ${markerShift}px))`,
-      };
       return (
-        <div
+        <TokenGap
           key={`gap-${idx}`}
-          data-drop-index={idx}
-          style={{
-            width: gapWidth,
-            height: Math.max(28, tokenFontSize * 1.2),
-            display: "flex",
-            alignItems: "flex-end",
-            justifyContent: "center",
-            position: "relative",
-          }}
-          onDragOver={(e) => handleDragOverGap(idx, e)}
-          onDrop={(e) => {
-            e.preventDefault();
-            handleDropAt(idx);
-          }}
-        >
-          {dropIndex === idx && (
-            <span
-              aria-hidden="true"
-              style={{
-                position: "absolute",
-                left: "50%",
-                top: -6,
-                bottom: -6,
-                width: 2,
-                background: "rgba(94,234,212,0.85)",
-                boxShadow: "0 0 0 1px rgba(94,234,212,0.5)",
-                transform: "translateX(-50%)",
-              }}
-            />
-          )}
-          {markerChar && (
-            <span
-              aria-hidden="true"
-              data-testid="space-marker"
-              style={markerStyle}
-            >
-              {markerChar}
-            </span>
-          )}
-        </div>
+          index={idx}
+          width={gapWidth}
+          height={Math.max(28, tokenFontSize * 1.2)}
+          markerChar={markerChar}
+          markerStyle={markerStyle}
+          isActive={dropIndex === idx}
+          onDragOver={(event) => handleDragOverGap(idx, event)}
+          onDrop={() => handleDropAt(idx)}
+        />
       );
     };
 
@@ -1926,10 +1873,6 @@ export const TokenEditor: React.FC<{
       const badgePaddingY = Math.max(0.5, tokenFontSize * 0.07);
       const badgePaddingX = Math.max(2, tokenFontSize * 0.18);
       const badgeRadius = Math.max(6, tokenFontSize * 0.45);
-      const badgeTextWidth = badgeText ? measureTextWidth(badgeText, badgeFontSize) : 0;
-      const badgeWidth = badgeText
-        ? badgeTextWidth + badgePaddingX * 2 + 10
-        : 0;
       const isPurePunctGroup = group.tokens.every((t) => t.kind === "punct");
       // Update visible counter for line breaks (count only rendered tokens).
       group.tokens.forEach((tok) => {
@@ -1941,54 +1884,8 @@ export const TokenEditor: React.FC<{
       const isMoveHover = Boolean(moveId && hoveredMoveId === moveId);
       const isMoveSource = isMoveGroup && !isMoveDestination;
 
-      const groupPadY = 0;
       const groupPadX = isMoveSource ? 0 : isPurePunctGroup ? 0 : 1;
       const movePlaceholderHeight = Math.max(14, Math.round(tokenFontSize * 1.1));
-      const paddingTop = groupPadY;
-      const verticalGap = Math.max(0, tokenFontSize * (isMoveSource ? 0 : 0.02));
-      const displayTextForToken = (tok: Token) => {
-        if (tok.kind === "empty") return "⬚";
-        if (tok.kind === "special" && tok.text.length > 32) {
-          return `${tok.text.slice(0, 18)}…${tok.text.slice(-10)}`;
-        }
-        return tok.text;
-      };
-      const correctedWidth = group.tokens.reduce((acc, tok, i) => {
-        const display = displayTextForToken(tok);
-        const tokenWidth =
-          tok.kind === "empty"
-            ? tok.moveId
-              ? Math.max(2, Math.round(tokenFontSize * 0.12))
-              : tok.previousTokens?.length
-                ? Math.max(measureTextWidth("⬚", Math.max(8, Math.round(tokenFontSize * 0.75))), tokenFontSize * 0.45)
-                : Math.max(2, Math.round(tokenFontSize * 0.12))
-            : Math.max(measureTextWidth(display), tokenFontSize * 0.6);
-        const gapWidth = i === 0 ? 0 : getGapMetrics(group.tokens[i - 1], tok, false).width;
-        return acc + tokenWidth + gapWidth;
-      }, 0);
-      const historyWidth = historyTokens.reduce((acc, prev, i) => {
-        const width = Math.max(measureTextWidth(prev.text, badgeFontSize), badgeFontSize * 0.8);
-        return acc + width + (i ? 6 : 0);
-      }, 0);
-      const baseContentWidth = isMoveGroup && !isMoveDestination
-        ? correctedWidth
-        : Math.max(correctedWidth, historyWidth, badgeWidth);
-      const minWidth = isMoveSource
-        ? Math.max(correctedWidth + groupPadX * 2, tokenFontSize * 0.6)
-        : isPurePunctGroup && !hasHistory && !typeObj
-          ? Math.max(badgeWidth, baseContentWidth, tokenFontSize * 0.7 * group.tokens.length) + groupPadX * 2
-          : Math.max(24 + groupPadX * 2, baseContentWidth + groupPadX * 2);
-      const groupRadius = isMoveSource ? 10 : 14;
-      const groupShadow = showBorder
-        ? isMoveSource
-          ? isMoveHover
-            ? "0 0 0 1px rgba(94,234,212,0.5)"
-            : "none"
-          : isMoveHover
-            ? "0 0 0 1px rgba(94,234,212,0.5)"
-            : "0 0 0 1px rgba(148,163,184,0.25)"
-        : "none";
-
       const groupKey = `range:${group.start}-${group.end}`;
       const isPlainGroup = !hasHistory && !isMoveGroup && !typeObj;
 
@@ -2014,193 +1911,60 @@ export const TokenEditor: React.FC<{
         return;
       }
 
-      const groupNode = (
-        <div
-          key={`group-${groupIndex}-${group.tokens[0].id}`}
-          style={{
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "center",
-            gap: verticalGap,
-            padding: `${paddingTop}px ${groupPadX}px ${groupPadY}px ${groupPadX}px`,
-            borderRadius: groupRadius,
-            border: showBorder
-              ? isMoveHover
-                ? "1px solid rgba(94,234,212,0.85)"
-                : isMoveSource
-                  ? "1px solid transparent"
-                  : "1px solid rgba(148,163,184,0.35)"
-              : "1px solid transparent",
-            background: "transparent",
-            boxShadow: groupShadow,
-            flex: "0 0 auto",
-            minWidth,
-            height: isMoveSource ? movePlaceholderHeight : undefined,
-            minHeight: isMoveSource ? movePlaceholderHeight : undefined,
-            alignSelf: isMoveDestination ? "flex-start" : undefined,
-            position: "relative",
+      result.push(
+        <TokenEditorGroup
+          key={groupKey}
+          group={group}
+          groupIndex={groupIndex}
+          tokenFontSize={tokenFontSize}
+          t={t}
+          historyTokens={historyTokens}
+          hasHistory={hasHistory}
+          moveId={moveId ?? null}
+          isMoveGroup={isMoveGroup}
+          isMoveDestination={isMoveDestination}
+          isMoveSource={isMoveSource}
+          isMoveHover={isMoveHover}
+          showBorder={showBorder}
+          showHistoryTokens={showHistoryTokens}
+          showUndo={showUndo}
+          isPurePunctGroup={isPurePunctGroup}
+          typeObj={typeObj}
+          badgeText={badgeText}
+          badgeColor={badgeColor}
+          badgeFontSize={badgeFontSize}
+          badgePaddingY={badgePaddingY}
+          badgePaddingX={badgePaddingX}
+          badgeRadius={badgeRadius}
+          groupPadX={groupPadX}
+          movePlaceholderHeight={movePlaceholderHeight}
+          dropIndex={dropIndex}
+          markerStyle={markerStyle}
+          previousTokenStyle={chipStyles.previous}
+          previousTokenFontStyle={chipStyles.previous.fontStyle as string | undefined}
+          measureTextWidth={measureTextWidth}
+          getGapMetrics={getGapMetrics}
+          renderToken={renderToken}
+          onHandleDragOverGap={handleDragOverGap}
+          onHandleDropAt={handleDropAt}
+          onHandleRevert={(start, end) => {
+            handleRevert(start, end);
+            setSelection({ start: null, end: null });
+            endEdit();
           }}
-          ref={(el) => {
-            groupRefs.current[groupKey] = el;
-          }}
-          onClick={() => {
-            if (!showBorder) return;
-            const range = { start: group.start, end: group.end };
+          onRevertMove={revertMove}
+          onSelectRange={(range) => {
             selectionRef.current = range;
-            lastClickedIndexRef.current = group.start;
+            lastClickedIndexRef.current = range.start;
             setSelection(range);
           }}
-          onMouseEnter={() => {
-            if (moveId) setHoveredMoveId(moveId);
+          onMoveEnter={(id) => setHoveredMoveId(id)}
+          onMoveLeave={(id) => setHoveredMoveId((prev) => (prev === id ? null : prev))}
+          setGroupRef={(el) => {
+            groupRefs.current[groupKey] = el;
           }}
-          onMouseLeave={() => {
-            if (moveId) setHoveredMoveId((prev) => (prev === moveId ? null : prev));
-          }}
-        >
-          <div
-            style={{
-              display: "flex",
-              gap: 0,
-              flexWrap: "wrap",
-              justifyContent: "flex-start",
-              alignItems: "center",
-              marginBottom: isMoveSource ? 0 : Math.max(0, tokenFontSize * 0.03),
-            }}
-          >
-            {showUndo && (
-              <button
-                style={groupUndoButtonStyle}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (isMoveDestination && moveId) {
-                    revertMove(moveId);
-                  } else {
-                    handleRevert(group.start, group.end);
-                    setSelection({ start: null, end: null });
-                    endEdit();
-                  }
-                }}
-                title={t("tokenEditor.undo")}
-              >
-                ↺
-              </button>
-            )}
-            {group.tokens.map((tok, i) => {
-              const nodes: React.ReactNode[] = [];
-              if (i > 0) {
-                const { width: gapWidth, markerChar } = getGapMetrics(group.tokens[i - 1], tok, false);
-      const markerShift = Math.max(0, tokenFontSize * 0.08);
-      const markerStyle: React.CSSProperties = {
-        fontSize: Math.max(8, tokenFontSize * 0.45),
-        color: "rgba(148,163,184,0.6)",
-        lineHeight: 1,
-        pointerEvents: "none",
-        userSelect: "none",
-        position: "absolute",
-        top: "50%",
-        transform: `translateY(calc(-50% + ${markerShift}px))`,
-      };
-                nodes.push(
-                  <div
-                    key={`inner-gap-${group.start + i}`}
-                    data-drop-index={group.start + i}
-                    style={{
-                      width: gapWidth,
-                      height: Math.max(28, tokenFontSize * 1.2),
-                      display: "flex",
-                      alignItems: "flex-end",
-                      justifyContent: "center",
-                      flex: "0 0 auto",
-                      position: "relative",
-                    }}
-                    onDragOver={(e) => handleDragOverGap(group.start + i, e)}
-                    onDrop={(e) => {
-                      e.preventDefault();
-                      handleDropAt(group.start + i);
-                    }}
-                  >
-                    {dropIndex === group.start + i && (
-                      <span
-                        aria-hidden="true"
-                        style={{
-                          position: "absolute",
-                          left: "50%",
-                          top: -6,
-                          bottom: -6,
-                          width: 2,
-                          background: "rgba(94,234,212,0.85)",
-                          boxShadow: "0 0 0 1px rgba(94,234,212,0.5)",
-                          transform: "translateX(-50%)",
-                        }}
-                      />
-                    )}
-                    {markerChar && (
-                      <span
-                        aria-hidden="true"
-                        data-testid="space-marker"
-                        style={markerStyle}
-                      >
-                        {markerChar}
-                      </span>
-                    )}
-                  </div>
-                );
-              }
-              const forceChanged = (isMoveDestination || hasHistory) && tok.kind !== "empty";
-              nodes.push(renderToken(tok, group.start + i, forceChanged));
-              return nodes;
-            })}
-          </div>
-          {showHistoryTokens && historyTokens.length > 0 && (
-            <div
-              style={{
-                display: "flex",
-                gap: 6,
-                flexWrap: "wrap",
-                justifyContent: "center",
-                textAlign: "center",
-                marginBottom: 0,
-              }}
-            >
-              {historyTokens.map((prev) => (
-                <span
-                  key={`${groupIndex}-prev-${prev.id}`}
-                  style={{
-                    ...chipStyles.previous,
-                    fontSize: Math.max(8, tokenFontSize * 0.6),
-                    fontStyle: prev.kind === "empty" || prev.text === "⬚" ? "normal" : chipStyles.previous.fontStyle,
-                    padding: `${Math.max(0, tokenFontSize * 0.08)}px ${Math.max(1, tokenFontSize * 0.2)}px`,
-                  }}
-                >
-                  {prev.text}
-                </span>
-              ))}
-            </div>
-          )}
-          {typeObj && (
-            <div
-              style={{
-                padding: `${badgePaddingY}px ${badgePaddingX}px`,
-                borderRadius: badgeRadius,
-                background: badgeColor,
-                border: "1px solid rgba(0,0,0,0.25)",
-                boxShadow: "0 2px 6px rgba(0,0,0,0.25)",
-                color: "#0b1120",
-                fontSize: badgeFontSize,
-                fontWeight: 700,
-                pointerEvents: "none",
-                whiteSpace: "nowrap",
-                alignSelf: "center",
-                marginTop: 0,
-              }}
-              title={getErrorTypeLabel(typeObj, locale)}
-            >
-              {getErrorTypeLabel(typeObj, locale)}
-            </div>
-          )}
-        </div>
+        />
       );
-      result.push(groupNode);
       const lineBreakHeight = Math.max(4, Math.round(tokenFontSize * 0.45));
       const breakCount = lineBreakCountMap.get(visibleCount) ?? 0;
       if (breakCount > 0) {
@@ -3172,20 +2936,4 @@ const modalContentStyle: React.CSSProperties = {
   padding: 16,
   maxWidth: 360,
   width: "100%",
-};
-
-const groupUndoButtonStyle: React.CSSProperties = {
-  position: "absolute",
-  top: -10,
-  right: -10,
-  width: 20,
-  height: 20,
-  borderRadius: "50%",
-  border: "1px solid rgba(148,163,184,0.5)",
-  background: "rgba(15,23,42,0.8)",
-  color: "#e2e8f0",
-  fontSize: 12,
-  cursor: "pointer",
-  zIndex: 2,
-  pointerEvents: "auto",
 };

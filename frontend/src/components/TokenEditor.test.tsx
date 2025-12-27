@@ -1738,6 +1738,58 @@ describe("revert clears selection", () => {
     await waitFor(() => expect(within(corrected).getByText("Merge")).toBeInTheDocument());
   });
 
+  it("auto-assigns CapitalLowerLetter when capitalizing the first letter", async () => {
+    localStorage.clear();
+    const base = initState("hello");
+    const edited = tokenEditorReducer(base, {
+      type: "EDIT_SELECTED_RANGE_AS_TEXT",
+      range: [0, 0],
+      newText: "Hello",
+    });
+    localStorage.setItem("tokenEditorPrefs:state:1", JSON.stringify(edited.present));
+    await renderEditor("hello", {
+      getImpl: (url: string) => {
+        if (url.includes("/api/error-types")) {
+          return Promise.resolve({
+            data: [
+              { id: 40, en_name: "CapitalLowerLetter", tt_name: "CapitalLowerLetter", is_active: true, default_color: "#f97316" },
+              { id: 41, en_name: "Spelling", tt_name: "Spelling", is_active: true, default_color: "#38bdf8" },
+            ],
+          });
+        }
+        if (url.includes("/annotations")) return Promise.resolve({ data: [] });
+        return Promise.resolve({ data: {} });
+      },
+    });
+    const corrected = await screen.findByTestId("corrected-panel");
+    await waitFor(() => expect(within(corrected).getByText("CapitalLowerLetter")).toBeInTheDocument());
+    expect(within(corrected).queryByText("Spelling")).not.toBeInTheDocument();
+  });
+
+  it("auto-assigns Spelling when changing up to two letters in a word", async () => {
+    localStorage.clear();
+    const base = initState("hello");
+    const edited = tokenEditorReducer(base, {
+      type: "EDIT_SELECTED_RANGE_AS_TEXT",
+      range: [0, 0],
+      newText: "hallo",
+    });
+    localStorage.setItem("tokenEditorPrefs:state:1", JSON.stringify(edited.present));
+    await renderEditor("hello", {
+      getImpl: (url: string) => {
+        if (url.includes("/api/error-types")) {
+          return Promise.resolve({
+            data: [{ id: 42, en_name: "Spelling", tt_name: "Spelling", is_active: true, default_color: "#38bdf8" }],
+          });
+        }
+        if (url.includes("/annotations")) return Promise.resolve({ data: [] });
+        return Promise.resolve({ data: {} });
+      },
+    });
+    const corrected = await screen.findByTestId("corrected-panel");
+    await waitFor(() => expect(within(corrected).getByText("Spelling")).toBeInTheDocument());
+  });
+
   it("keeps all tokens styled as corrected after editing a moved token into multiple tokens", async () => {
     localStorage.clear();
     const base = initState("alpha beta gamma delta");
