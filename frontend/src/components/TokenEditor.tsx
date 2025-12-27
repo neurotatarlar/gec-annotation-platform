@@ -1271,6 +1271,21 @@ export const TokenEditor: React.FC<{
         padding: "2px 6px",
         cursor: "pointer",
       });
+      if (isMovePlaceholder) {
+        const markerWidth = Math.max(2, Math.round(tokenFontSize * 0.12));
+        const markerHeight = Math.max(14, Math.round(tokenFontSize * 1.1));
+        Object.assign(style, {
+          border: "none",
+          background: "rgba(148,163,184,0.5)",
+          padding: 0,
+          width: markerWidth,
+          minWidth: markerWidth,
+          height: markerHeight,
+          borderRadius: 2,
+          color: "transparent",
+          fontSize: 0,
+        });
+      }
     }
     if (isSelected) {
       Object.assign(
@@ -1542,13 +1557,14 @@ export const TokenEditor: React.FC<{
       const showHistoryTokens = hasHistory && !isMoveGroup;
       const showUndo = (hasHistory && !isMoveGroup) || (isMoveDestination && moveId);
       const isMoveHover = Boolean(moveId && hoveredMoveId === moveId);
+      const isMoveSource = isMoveGroup && !isMoveDestination;
 
       const groupPadY = 0;
-      const groupPadX = isPurePunctGroup ? 0 : 1;
-      const paddingTop = Math.max(groupPadY, tokenFontSize * 0.12);
+      const groupPadX = isMoveSource ? 0 : isPurePunctGroup ? 0 : 1;
+      const paddingTop = Math.max(groupPadY, tokenFontSize * (isMoveSource ? 0.04 : 0.12));
       const minSpaceWidth = Math.max(2, tokenFontSize * 0.16);
       const innerGap = Math.max(Math.max(0, tokenGap), minSpaceWidth);
-      const verticalGap = Math.max(0, tokenFontSize * 0.02);
+      const verticalGap = Math.max(0, tokenFontSize * (isMoveSource ? 0 : 0.02));
       const displayTextForToken = (tok: Token) => {
         if (tok.kind === "empty") return "⬚";
         if (tok.kind === "special" && tok.text.length > 32) {
@@ -1558,7 +1574,10 @@ export const TokenEditor: React.FC<{
       };
       const correctedWidth = group.tokens.reduce((acc, tok, i) => {
         const display = displayTextForToken(tok);
-        const tokenWidth = Math.max(measureTextWidth(display), tokenFontSize * 0.6);
+        const tokenWidth =
+          isMoveSource && tok.kind === "empty"
+            ? Math.max(2, Math.round(tokenFontSize * 0.12))
+            : Math.max(measureTextWidth(display), tokenFontSize * 0.6);
         const gapWidth = i === 0 ? 0 : innerGap;
         return acc + tokenWidth + gapWidth;
       }, 0);
@@ -1569,10 +1588,19 @@ export const TokenEditor: React.FC<{
       const baseContentWidth = isMoveGroup && !isMoveDestination
         ? correctedWidth
         : Math.max(correctedWidth, historyWidth, badgeWidth);
-      const minWidth =
-        isPurePunctGroup && !hasHistory && !typeObj
+      const minWidth = isMoveSource
+        ? Math.max(correctedWidth + groupPadX * 2, tokenFontSize * 0.6)
+        : isPurePunctGroup && !hasHistory && !typeObj
           ? Math.max(badgeWidth, baseContentWidth, tokenFontSize * 0.7 * group.tokens.length) + groupPadX * 2
           : Math.max(24 + groupPadX * 2, baseContentWidth + groupPadX * 2);
+      const groupRadius = isMoveSource ? 10 : 14;
+      const groupShadow = showBorder
+        ? isMoveSource
+          ? "none"
+          : isMoveHover
+            ? "0 0 0 1px rgba(94,234,212,0.5)"
+            : "0 0 0 1px rgba(148,163,184,0.25)"
+        : "none";
 
       const groupKey = `range:${group.start}-${group.end}`;
       const groupNode = (
@@ -1584,18 +1612,14 @@ export const TokenEditor: React.FC<{
             alignItems: "center",
             gap: verticalGap,
             padding: `${paddingTop}px ${groupPadX}px ${groupPadY}px ${groupPadX}px`,
-            borderRadius: 14,
+            borderRadius: groupRadius,
             border: showBorder
               ? isMoveHover
                 ? "1px solid rgba(94,234,212,0.85)"
                 : "1px solid rgba(148,163,184,0.35)"
               : "1px solid transparent",
             background: "transparent",
-            boxShadow: showBorder
-              ? isMoveHover
-                ? "0 0 0 1px rgba(94,234,212,0.5)"
-                : "0 0 0 1px rgba(148,163,184,0.25)"
-              : "none",
+            boxShadow: groupShadow,
             flex: "0 0 auto",
             minWidth,
             position: "relative",
