@@ -1076,7 +1076,11 @@ export const TokenEditor: React.FC<{
       try {
         const response = await get("/api/error-types/");
         if (!cancelled) {
-          setErrorTypes(response.data as ErrorType[]);
+          const raw = response.data as ErrorType[];
+          const filtered = raw.filter(
+            (item) => (item.en_name ?? "").trim().toLowerCase() !== "noop"
+          );
+          setErrorTypes(filtered);
         }
       } catch (error: any) {
         if (!cancelled) {

@@ -17,8 +17,10 @@ const getMock = vi.fn((url: string) => {
   return Promise.resolve({ data: {} });
 });
 
+const logoutMock = vi.fn();
+
 vi.mock("../context/AuthContext", () => ({
-  useAuth: () => ({ token: "token", logout: vi.fn() }),
+  useAuth: () => ({ token: "token", logout: logoutMock }),
 }));
 
 vi.mock("../context/I18nContext", () => ({
@@ -87,5 +89,26 @@ describe("AppHeader save status indicator", () => {
     const exportBtn = screen.getAllByText("export.open")[0];
     fireEvent.click(exportBtn);
     expect(await screen.findByText("export.title")).toBeInTheDocument();
+  });
+
+  it("shows logout confirmation modal and closes on Escape", async () => {
+    renderHeader("/dashboard");
+    await screen.findAllByText("Alice");
+    const logoutBtn = screen.getAllByText("common.logout")[0];
+    fireEvent.click(logoutBtn);
+    expect(await screen.findByText("common.logoutConfirmTitle")).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByText("common.logoutConfirmTitle")).not.toBeInTheDocument();
+  });
+
+  it("calls logout on confirmation", async () => {
+    logoutMock.mockClear();
+    renderHeader("/dashboard");
+    await screen.findAllByText("Alice");
+    const logoutBtn = screen.getAllByText("common.logout")[0];
+    fireEvent.click(logoutBtn);
+    const confirm = await screen.findAllByText("common.logout");
+    fireEvent.click(confirm[1]);
+    expect(logoutMock).toHaveBeenCalledTimes(1);
   });
 });

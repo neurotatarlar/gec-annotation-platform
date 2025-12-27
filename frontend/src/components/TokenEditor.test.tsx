@@ -1671,6 +1671,25 @@ describe("revert clears selection", () => {
     await waitFor(() => expect(within(corrected).getByText("Punctuation")).toBeInTheDocument());
   });
 
+  it("hides noop error type from the picker", async () => {
+    localStorage.clear();
+    await renderEditor("hello world", {
+      getImpl: (url: string) => {
+        if (url.includes("/api/error-types")) {
+          return Promise.resolve({
+            data: [
+              { id: 1, en_name: "noop", tt_name: "noop", is_active: true, default_color: "#94a3b8" },
+              { id: 2, en_name: "Punctuation", tt_name: "Punctuation", is_active: true, default_color: "#38bdf8" },
+            ],
+          });
+        }
+        return Promise.resolve({ data: {} });
+      },
+    });
+    await screen.findByText("Punctuation");
+    expect(screen.queryByText("noop")).not.toBeInTheDocument();
+  });
+
   it("auto-assigns Split when adding a single whitespace", async () => {
     localStorage.clear();
     const base = initState("foobar");

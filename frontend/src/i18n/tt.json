@@ -77,6 +77,8 @@
     "error": "Хата",
     "loading": "Иңлим",
     "logout": "Чык",
+    "logoutConfirmTitle": "Чыгаргамы?",
+    "logoutConfirmMessage": "Дәвам итү өчен яңадан керергә кирәк булачак.",
     "orderAsc": "Башта искеләр",
     "orderDesc": "Башта яңалар",
     "save": "Сакла",
