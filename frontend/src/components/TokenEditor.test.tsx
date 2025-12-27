@@ -139,12 +139,7 @@ const initState = (text = "hello world"): EditorHistoryState =>
   tokenEditorReducer(createInitialHistoryState(), { type: "INIT_FROM_TEXT", text });
 
 const tokensToDisplay = (tokens: Array<{ kind?: string; text: string; moveId?: string; previousTokens?: unknown[] }>) =>
-  tokens.map((tok) => {
-    if (tok.kind !== "empty") return tok.text;
-    if (tok.moveId) return "⬚";
-    if (tok.previousTokens && tok.previousTokens.length) return "∅";
-    return "⬚";
-  });
+  tokens.map((tok) => (tok.kind === "empty" ? "⬚" : tok.text));
 
 const findGroupContainer = (node: HTMLElement | null) => {
   let current: HTMLElement | null = node;
@@ -1188,7 +1183,7 @@ describe("empty placeholder selection", () => {
       .filter((c) => c.getAttribute("data-token-index") !== null)
       .map((c) => c.textContent?.trim())
       .filter(Boolean);
-    expect(texts.join(" ")).toBe("∅ ∅ gamma");
+    expect(texts.join(" ")).toBe("⬚ ⬚ gamma");
   }, 12000);
 });
 
@@ -1782,7 +1777,7 @@ describe("TokenEditor view toggles", () => {
       },
     });
     const corrected = await screen.findByTestId("corrected-panel");
-    await waitFor(() => expect(within(corrected).getByText("∅")).toBeInTheDocument());
+    await waitFor(() => expect(within(corrected).getByText("⬚")).toBeInTheDocument());
     expect(within(corrected).getByText("gamma")).toBeInTheDocument();
     expect(within(corrected).queryByRole("button", { name: "alpha" })).not.toBeInTheDocument();
     expect(within(corrected).queryByRole("button", { name: "beta" })).not.toBeInTheDocument();
@@ -1821,7 +1816,7 @@ describe("TokenEditor view toggles", () => {
       .getAllByRole("button")
       .map((c) => c.textContent?.trim())
       .filter((t) => t && t !== "↺") as string[];
-    expect(chips.join(" ")).toBe("∅ beta");
+    expect(chips.join(" ")).toBe("⬚ beta");
   });
 
   it("hydrates server insertions from another annotator", async () => {
@@ -2011,7 +2006,6 @@ describe("TokenEditor view toggles", () => {
       .filter((t) => t && t !== "↺") as string[];
     expect(chips.join(" ")).toBe("alpha beta gamma");
     expect(within(corrected).queryByText("⬚")).toBeNull();
-    expect(within(corrected).queryByText("∅")).toBeNull();
   });
 
   it("only shows the error badge on move destination, not on source placeholder", async () => {
@@ -2339,7 +2333,7 @@ describe("TokenEditor view toggles", () => {
         .getAllByRole("button")
         .filter((el) => el.getAttribute("aria-pressed") !== null)
         .map((el) => el.textContent);
-      expect(tokens.join(" ")).toBe("beta alpha ∅ gamma");
+      expect(tokens.join(" ")).toBe("beta alpha ⬚ gamma");
     });
   });
 

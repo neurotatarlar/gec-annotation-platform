@@ -1354,7 +1354,7 @@ export const TokenEditor: React.FC<{
     const isEmpty = token.kind === "empty";
     const displayText =
       isDeletionPlaceholder
-        ? "∅"
+        ? "⬚"
         : isEmpty
           ? "⬚"
         : isSpecial && token.text.length > 32
@@ -1401,23 +1401,18 @@ export const TokenEditor: React.FC<{
           fontSize: 0,
         });
       } else if (isDeletionPlaceholder) {
-        const voidWidth = Math.max(10, Math.round(tokenFontSize * 0.6));
-        const voidHeight = Math.max(14, Math.round(tokenFontSize * 1.1));
-        const dotSize = Math.max(3, Math.round(tokenFontSize * 0.25));
+        const ghostSize = Math.max(8, Math.round(tokenFontSize * 0.75));
+        const ghostHeight = Math.max(14, Math.round(tokenFontSize * 1.05));
         Object.assign(style, {
           border: "none",
           background: "transparent",
-          padding: 0,
-          width: voidWidth,
-          minWidth: voidWidth,
-          height: voidHeight,
-          minHeight: voidHeight,
-          borderRadius: 2,
-          color: "rgba(148,163,184,0.45)",
-          fontSize: dotSize,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
+          padding: "0 2px",
+          borderRadius: 4,
+          color: "rgba(148,163,184,0.3)",
+          fontSize: ghostSize,
+          lineHeight: `${ghostHeight}px`,
+          height: ghostHeight,
+          minHeight: ghostHeight,
         });
       }
     }
@@ -1714,7 +1709,7 @@ export const TokenEditor: React.FC<{
             ? tok.moveId
               ? Math.max(2, Math.round(tokenFontSize * 0.12))
               : tok.previousTokens?.length
-                ? Math.max(10, Math.round(tokenFontSize * 0.6))
+                ? Math.max(measureTextWidth("⬚", Math.max(8, Math.round(tokenFontSize * 0.75))), tokenFontSize * 0.45)
                 : Math.max(2, Math.round(tokenFontSize * 0.12))
             : Math.max(measureTextWidth(display), tokenFontSize * 0.6);
         const gapWidth = i === 0 ? 0 : innerGap;
