@@ -8,7 +8,9 @@ import { useCorrectionSelection } from "../hooks/useCorrectionSelection";
 import { useCorrectionTypes } from "../hooks/useCorrectionTypes";
 import { useEditorUIState } from "../hooks/useEditorUIState";
 import { useSaveController } from "../hooks/useSaveController";
+import { useErrorTypes } from "../hooks/useErrorTypes";
 import { useTokenDragDrop } from "../hooks/useTokenDragDrop";
+import { useTokenDeleteRange } from "../hooks/useTokenDeleteRange";
 import { useTokenSelectionHandlers } from "../hooks/useTokenSelectionHandlers";
 import {
   colorWithAlpha,
@@ -351,9 +353,6 @@ export const TokenEditor: React.FC<{
   const [lastDecision, setLastDecision] = useState<"skip" | "trash" | "submit" | null>(
     prefs.lastTextId === textId ? prefs.lastDecision ?? null : null
   );
-  const [errorTypes, setErrorTypes] = useState<ErrorType[]>([]);
-  const [isLoadingErrorTypes, setIsLoadingErrorTypes] = useState(false);
-  const [errorTypesError, setErrorTypesError] = useState<string | null>(null);
   const [serverAnnotationVersion, setServerAnnotationVersion] = useState(0);
   const annotationIdMap = useRef<Map<string, number>>(new Map());
   const pendingLocalStateRef = useRef<EditorPresentState | null>(null);
@@ -657,6 +656,14 @@ export const TokenEditor: React.FC<{
       // ignore
     }
   }, [location.pathname]);
+
+  const { errorTypes, isLoadingErrorTypes, errorTypesError } = useErrorTypes({
+    enabled: true,
+    loadErrorTypes: async () => {
+      const response = await get("/api/error-types/");
+      return response.data as ErrorType[];
+    },
+  });
 
   // Update selection highlight by toggling selected flag (not stored in history).
   const selectedSet = useMemo(() => new Set(selectedIndices), [selectedIndices]);
@@ -1092,36 +1099,6 @@ export const TokenEditor: React.FC<{
     return false;
   }, [get, post, categoryId, navigate, t, textId]);
 
-  useEffect(() => {
-    let cancelled = false;
-    const loadErrorTypes = async () => {
-      setIsLoadingErrorTypes(true);
-      setErrorTypesError(null);
-      try {
-        const response = await get("/api/error-types/");
-        if (!cancelled) {
-          const raw = response.data as ErrorType[];
-          const filtered = raw.filter(
-            (item) => (item.en_name ?? "").trim().toLowerCase() !== "noop"
-          );
-          setErrorTypes(filtered);
-        }
-      } catch (error: any) {
-        if (!cancelled) {
-          setErrorTypesError(formatError(error));
-        }
-      } finally {
-        if (!cancelled) {
-          setIsLoadingErrorTypes(false);
-        }
-      }
-    };
-    loadErrorTypes();
-    return () => {
-      cancelled = true;
-    };
-  }, [get, formatError]);
-
   const handleFlag = useCallback((flagType: "skip" | "trash") => {
     setActionError(null);
     setActionMessage(null);
@@ -1261,30 +1238,11 @@ export const TokenEditor: React.FC<{
     setSelection,
   });
 
-  const getDeleteRange = useCallback((): { range: [number, number]; anchorIndex?: number } | null => {
-    const currentSelection = selectionRef.current;
-    if (currentSelection.start === null || currentSelection.end === null) return null;
-    const [start, end] = [Math.min(currentSelection.start, currentSelection.end), Math.max(currentSelection.start, currentSelection.end)];
-    if (start === end) return { range: [start, end], anchorIndex: start };
-    const clickedIndex = lastClickedIndexRef.current;
-    if (clickedIndex !== null && clickedIndex >= start && clickedIndex <= end) {
-      const token = tokens[clickedIndex];
-      if (token?.kind === "empty" && token.previousTokens?.length) {
-        return { range: [clickedIndex, clickedIndex], anchorIndex: clickedIndex };
-      }
-    }
-    const activeEl = document.activeElement as HTMLElement | null;
-    const activeIndexAttr = activeEl?.getAttribute?.("data-token-index");
-    const activeIndex = activeIndexAttr ? Number(activeIndexAttr) : null;
-    if (activeIndex !== null && !Number.isNaN(activeIndex)) {
-      const token = tokens[activeIndex];
-      if (activeIndex >= start && activeIndex <= end && token?.kind === "empty" && token.previousTokens?.length) {
-        return { range: [activeIndex, activeIndex], anchorIndex: activeIndex };
-      }
-    }
-    const anchorIndex = clickedIndex !== null && clickedIndex >= start && clickedIndex <= end ? clickedIndex : undefined;
-    return { range: [start, end], anchorIndex };
-  }, [tokens]);
+  const { getDeleteRange } = useTokenDeleteRange({
+    tokens,
+    selectionRef,
+    lastClickedIndexRef,
+  });
 
   const performUndo = () => {
     if (editingRange) {
