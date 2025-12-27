@@ -54,4 +54,18 @@ describe("useCorrectionTypes defaults", () => {
       expect(screen.getByTestId("map").textContent).toContain("\"move-1\":7");
     });
   });
+
+  it("replaces a null assignment when a default becomes available", async () => {
+    const cards = [{ id: "c1", rangeStart: 0, rangeEnd: 1 }];
+    const { rerender } = render(
+      <TestComponent textId={3} correctionCards={cards} defaultTypeForCard={() => null} />
+    );
+    await waitFor(() => {
+      expect(screen.getByTestId("map").textContent).toContain("\"c1\":null");
+    });
+    rerender(<TestComponent textId={3} correctionCards={cards} defaultTypeForCard={() => 9} />);
+    await waitFor(() => {
+      expect(screen.getByTestId("map").textContent).toContain("\"c1\":9");
+    });
+  });
 });

@@ -138,8 +138,25 @@ const stubTokenRects = (container: HTMLElement) => {
 const initState = (text = "hello world"): EditorHistoryState =>
   tokenEditorReducer(createInitialHistoryState(), { type: "INIT_FROM_TEXT", text });
 
-const tokensToDisplay = (tokens: Array<{ kind?: string; text: string }>) =>
-  tokens.map((tok) => (tok.kind === "empty" ? "⬚" : tok.text));
+const tokensToDisplay = (tokens: Array<{ kind?: string; text: string; moveId?: string; previousTokens?: unknown[] }>) =>
+  tokens.map((tok) => {
+    if (tok.kind !== "empty") return tok.text;
+    if (tok.moveId) return "⬚";
+    if (tok.previousTokens && tok.previousTokens.length) return "∅";
+    return "⬚";
+  });
+
+const findGroupContainer = (node: HTMLElement | null) => {
+  let current: HTMLElement | null = node;
+  while (current) {
+    const radius = current.style.borderRadius;
+    if (radius === "14px" || radius === "10px") {
+      return current;
+    }
+    current = current.parentElement;
+  }
+  return null;
+};
 
 const findIndexByText = (state: EditorHistoryState, text: string) => {
   const idx = state.present.tokens.findIndex((tok) => tok.kind !== "empty" && tok.text === text);
@@ -1171,7 +1188,7 @@ describe("empty placeholder selection", () => {
       .filter((c) => c.getAttribute("data-token-index") !== null)
       .map((c) => c.textContent?.trim())
       .filter(Boolean);
-    expect(texts.join(" ")).toBe("⬚ ⬚ gamma");
+    expect(texts.join(" ")).toBe("∅ ∅ gamma");
   }, 12000);
 });
 
@@ -1403,13 +1420,180 @@ describe("revert clears selection", () => {
     await renderEditor("placeholder");
     const user = userEvent.setup();
     const chip = await screen.findByRole("button", { name: "hi" });
-    let groupDiv: HTMLElement | null = chip;
-    while (groupDiv && groupDiv.style.borderRadius !== "14px") {
-      groupDiv = groupDiv.parentElement;
-    }
+    const groupDiv = findGroupContainer(chip);
     const initialBg = groupDiv?.style.background;
     await user.click(chip);
     expect(groupDiv?.style.background).toBe(initialBg);
+  });
+
+  it("selects the full correction group when clicking its container", async () => {
+    mockGet.mockReset();
+    mockPost.mockReset();
+    localStorage.clear();
+    const correctedGroup = {
+      originalTokens: [
+        { id: "o1", text: "hello", kind: "word", selected: false },
+        { id: "o2", text: "world", kind: "word", selected: false },
+      ],
+      tokens: [
+        {
+          id: "t1",
+          text: "foo",
+          kind: "word",
+          selected: false,
+          groupId: "g1",
+          previousTokens: [{ id: "o1", text: "hello", kind: "word", selected: false }],
+        },
+        {
+          id: "t2",
+          text: "bar",
+          kind: "word",
+          selected: false,
+          groupId: "g1",
+        },
+        { id: "t3", text: "baz", kind: "word", selected: false },
+      ],
+    };
+    localStorage.setItem("tokenEditorPrefs:state:1", JSON.stringify(correctedGroup));
+    await renderEditor("placeholder");
+    const user = userEvent.setup();
+    const foo = await screen.findByRole("button", { name: "foo" });
+    const groupDiv = findGroupContainer(foo);
+    if (!groupDiv) {
+      throw new Error("Expected correction group container");
+    }
+    await user.click(groupDiv);
+    const bar = await screen.findByRole("button", { name: "bar" });
+    const baz = await screen.findByRole("button", { name: "baz" });
+    expect(foo).toHaveAttribute("aria-pressed", "true");
+    expect(bar).toHaveAttribute("aria-pressed", "true");
+    expect(baz).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("selects the move destination group when clicking its container", async () => {
+    mockGet.mockReset();
+    mockPost.mockReset();
+    localStorage.clear();
+    const base = initState("alpha beta gamma");
+    const moved = tokenEditorReducer(base, {
+      type: "MOVE_SELECTED_TOKENS",
+      fromStart: 2,
+      fromEnd: 2,
+      toIndex: 0,
+    });
+    localStorage.setItem("tokenEditorPrefs:state:1", JSON.stringify(moved.present));
+    await renderEditor("alpha beta gamma");
+    const user = userEvent.setup();
+    const gamma = await screen.findByRole("button", { name: "gamma" });
+    const groupDiv = findGroupContainer(gamma);
+    if (!groupDiv) {
+      throw new Error("Expected move destination container");
+    }
+    await user.click(groupDiv);
+    const alpha = await screen.findByRole("button", { name: "alpha" });
+    const beta = await screen.findByRole("button", { name: "beta" });
+    expect(gamma).toHaveAttribute("aria-pressed", "true");
+    expect(alpha).toHaveAttribute("aria-pressed", "false");
+    expect(beta).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("selects the move source placeholder when clicking its container", async () => {
+    mockGet.mockReset();
+    mockPost.mockReset();
+    localStorage.clear();
+    const base = initState("alpha beta gamma");
+    const moved = tokenEditorReducer(base, {
+      type: "MOVE_SELECTED_TOKENS",
+      fromStart: 0,
+      fromEnd: 0,
+      toIndex: 3,
+    });
+    localStorage.setItem("tokenEditorPrefs:state:1", JSON.stringify(moved.present));
+    await renderEditor("alpha beta gamma");
+    const user = userEvent.setup();
+    const placeholder = await screen.findByRole("button", { name: "⬚" });
+    const groupDiv = findGroupContainer(placeholder);
+    if (!groupDiv) {
+      throw new Error("Expected move source container");
+    }
+    await user.click(groupDiv);
+    expect(placeholder).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("auto-assigns Hyphen when deleting a hyphen token", async () => {
+    localStorage.clear();
+    const base = initState("foo - bar");
+    const hyphenIndex = findIndexByText(base, "-");
+    const deleted = tokenEditorReducer(base, {
+      type: "DELETE_SELECTED_TOKENS",
+      range: [hyphenIndex, hyphenIndex],
+    });
+    localStorage.setItem("tokenEditorPrefs:state:1", JSON.stringify(deleted.present));
+    await renderEditor("foo - bar", {
+      getImpl: (url: string) => {
+        if (url.includes("/api/error-types")) {
+          return Promise.resolve({
+            data: [{ id: 11, en_name: "Hyphen", tt_name: "Hyphen", is_active: true, default_color: "#fbbf24" }],
+          });
+        }
+        if (url.includes("/annotations")) return Promise.resolve({ data: [] });
+        return Promise.resolve({ data: {} });
+      },
+    });
+    const corrected = await screen.findByTestId("corrected-panel");
+    await waitFor(() => expect(within(corrected).getByText("Hyphen")).toBeInTheDocument());
+  });
+
+  it("auto-assigns Hyphen when inserting a single hyphen", async () => {
+    localStorage.clear();
+    let state = initState("foo bar");
+    state = tokenEditorReducer(state, {
+      type: "INSERT_TOKEN_AFTER_SELECTED",
+      range: [0, 0],
+    });
+    state = tokenEditorReducer(state, {
+      type: "EDIT_SELECTED_RANGE_AS_TEXT",
+      range: [1, 1],
+      newText: "-",
+    });
+    localStorage.setItem("tokenEditorPrefs:state:1", JSON.stringify(state.present));
+    await renderEditor("foo bar", {
+      getImpl: (url: string) => {
+        if (url.includes("/api/error-types")) {
+          return Promise.resolve({
+            data: [{ id: 12, en_name: "Hyphen", tt_name: "Hyphen", is_active: true, default_color: "#fbbf24" }],
+          });
+        }
+        if (url.includes("/annotations")) return Promise.resolve({ data: [] });
+        return Promise.resolve({ data: {} });
+      },
+    });
+    const corrected = await screen.findByTestId("corrected-panel");
+    await waitFor(() => expect(within(corrected).getByText("Hyphen")).toBeInTheDocument());
+  });
+
+  it("auto-assigns Hyphen when adding a single hyphen inside a word", async () => {
+    localStorage.clear();
+    const base = initState("foobar");
+    const edited = tokenEditorReducer(base, {
+      type: "EDIT_SELECTED_RANGE_AS_TEXT",
+      range: [0, 0],
+      newText: "foo-bar",
+    });
+    localStorage.setItem("tokenEditorPrefs:state:1", JSON.stringify(edited.present));
+    await renderEditor("foobar", {
+      getImpl: (url: string) => {
+        if (url.includes("/api/error-types")) {
+          return Promise.resolve({
+            data: [{ id: 13, en_name: "Hyphen", tt_name: "Hyphen", is_active: true, default_color: "#fbbf24" }],
+          });
+        }
+        if (url.includes("/annotations")) return Promise.resolve({ data: [] });
+        return Promise.resolve({ data: {} });
+      },
+    });
+    const corrected = await screen.findByTestId("corrected-panel");
+    await waitFor(() => expect(within(corrected).getByText("Hyphen")).toBeInTheDocument());
   });
 
   it("auto-selects all tokens in a replaced group", async () => {
@@ -1546,7 +1730,7 @@ describe("TokenEditor view toggles", () => {
       },
     });
     const corrected = await screen.findByTestId("corrected-panel");
-    await waitFor(() => expect(within(corrected).getByText("⬚")).toBeInTheDocument());
+    await waitFor(() => expect(within(corrected).getByText("∅")).toBeInTheDocument());
     expect(within(corrected).getByText("gamma")).toBeInTheDocument();
     expect(within(corrected).queryByRole("button", { name: "alpha" })).not.toBeInTheDocument();
     expect(within(corrected).queryByRole("button", { name: "beta" })).not.toBeInTheDocument();
@@ -1585,7 +1769,7 @@ describe("TokenEditor view toggles", () => {
       .getAllByRole("button")
       .map((c) => c.textContent?.trim())
       .filter((t) => t && t !== "↺") as string[];
-    expect(chips.join(" ")).toBe("⬚ beta");
+    expect(chips.join(" ")).toBe("∅ beta");
   });
 
   it("hydrates server insertions from another annotator", async () => {
@@ -1775,6 +1959,7 @@ describe("TokenEditor view toggles", () => {
       .filter((t) => t && t !== "↺") as string[];
     expect(chips.join(" ")).toBe("alpha beta gamma");
     expect(within(corrected).queryByText("⬚")).toBeNull();
+    expect(within(corrected).queryByText("∅")).toBeNull();
   });
 
   it("only shows the error badge on move destination, not on source placeholder", async () => {
@@ -2102,7 +2287,7 @@ describe("TokenEditor view toggles", () => {
         .getAllByRole("button")
         .filter((el) => el.getAttribute("aria-pressed") !== null)
         .map((el) => el.textContent);
-      expect(tokens.join(" ")).toBe("beta alpha ⬚ gamma");
+      expect(tokens.join(" ")).toBe("beta alpha ∅ gamma");
     });
   });
 

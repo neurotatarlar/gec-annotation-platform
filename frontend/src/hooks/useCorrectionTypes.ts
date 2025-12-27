@@ -56,9 +56,17 @@ export const useCorrectionTypes = ({ textId, correctionCards, defaultTypeForCard
       const next: Record<string, number | null> = {};
       correctionCards.forEach((card) => {
         const defaultType = defaultTypeForCard ? defaultTypeForCard(card.id) : null;
-        next[card.id] = Object.prototype.hasOwnProperty.call(prev, card.id)
-          ? prev[card.id]
-          : defaultType ?? activeErrorTypeId;
+        const hasPrev = Object.prototype.hasOwnProperty.call(prev, card.id);
+        const prevValue = hasPrev ? prev[card.id] : undefined;
+        if (!hasPrev) {
+          next[card.id] = defaultType ?? activeErrorTypeId ?? null;
+          return;
+        }
+        if (prevValue === null && defaultType !== null && defaultType !== undefined) {
+          next[card.id] = defaultType;
+          return;
+        }
+        next[card.id] = prevValue ?? null;
       });
       const unchanged =
         correctionCards.length === Object.keys(prev).length &&

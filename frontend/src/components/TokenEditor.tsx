@@ -681,9 +681,81 @@ export const TokenEditor: React.FC<{
     );
     return match?.id ?? null;
   }, [errorTypes]);
+  const hyphenTypeId = useMemo(() => {
+    const match = errorTypes.find(
+      (type) => type.en_name?.trim().toLowerCase() === "hyphen"
+    );
+    return match?.id ?? null;
+  }, [errorTypes]);
+  const correctionCardById = useMemo(() => {
+    const map = new Map<string, CorrectionCardLite>();
+    correctionCards.forEach((card) => map.set(card.id, card));
+    return map;
+  }, [correctionCards]);
+  const isSingleHyphenEdit = useCallback((beforeText: string, afterText: string) => {
+    if (beforeText === afterText) return false;
+    const countHyphen = (value: string) => (value.match(/-/g) ?? []).length;
+    const hasSingleHyphen = (value: string) => countHyphen(value) === 1;
+    const isWordChar = (ch: string) => /[\p{L}\p{N}]/u.test(ch);
+    const isHyphenBetweenWordChars = (value: string) => {
+      const idx = value.indexOf("-");
+      if (idx <= 0 || idx >= value.length - 1) return false;
+      return isWordChar(value[idx - 1]) && isWordChar(value[idx + 1]);
+    };
+    const beforeHas = hasSingleHyphen(beforeText);
+    const afterHas = hasSingleHyphen(afterText);
+    if (beforeHas === afterHas) return false;
+    if (beforeHas && !afterText.includes("-")) {
+      if (beforeText.replace("-", "") !== afterText) return false;
+      return isHyphenBetweenWordChars(beforeText);
+    }
+    if (afterHas && !beforeText.includes("-")) {
+      if (afterText.replace("-", "") !== beforeText) return false;
+      return isHyphenBetweenWordChars(afterText);
+    }
+    return false;
+  }, []);
+  const isHyphenCorrection = useCallback(
+    (cardId: string) => {
+      if (moveCardIds.has(cardId)) return false;
+      const card = correctionCardById.get(cardId);
+      if (!card) return false;
+      const slice = tokens.slice(card.rangeStart, card.rangeEnd + 1);
+      if (!slice.length) return false;
+      const anchor = slice.find((tok) => tok.previousTokens?.length);
+      const historyTokens = anchor?.previousTokens ?? [];
+      const historyNonEmpty = historyTokens.filter((tok) => tok.kind !== "empty");
+      const currentNonEmpty = slice.filter((tok) => tok.kind !== "empty");
+      if (
+        slice.length === 1 &&
+        slice[0].kind === "empty" &&
+        historyNonEmpty.length === 1 &&
+        historyNonEmpty[0].text === "-"
+      ) {
+        return true;
+      }
+      if (
+        currentNonEmpty.length === 1 &&
+        currentNonEmpty[0].text === "-" &&
+        historyTokens.length > 0 &&
+        historyTokens.every((tok) => tok.kind === "empty")
+      ) {
+        return true;
+      }
+      if (!historyNonEmpty.length || !currentNonEmpty.length) return false;
+      const beforeText = buildEditableTextFromTokens(historyNonEmpty);
+      const afterText = buildEditableTextFromTokens(currentNonEmpty);
+      return isSingleHyphenEdit(beforeText, afterText);
+    },
+    [correctionCardById, isSingleHyphenEdit, moveCardIds, tokens]
+  );
   const defaultTypeForCard = useCallback(
-    (cardId: string) => (wordOrderTypeId && moveCardIds.has(cardId) ? wordOrderTypeId : null),
-    [moveCardIds, wordOrderTypeId]
+    (cardId: string) => {
+      if (wordOrderTypeId && moveCardIds.has(cardId)) return wordOrderTypeId;
+      if (hyphenTypeId && isHyphenCorrection(cardId)) return hyphenTypeId;
+      return null;
+    },
+    [hyphenTypeId, isHyphenCorrection, moveCardIds, wordOrderTypeId]
   );
 
   const correctionByIndex = useMemo(
@@ -1236,12 +1308,15 @@ export const TokenEditor: React.FC<{
   const renderToken = (token: Token, index: number, forceChanged = false) => {
     const isSelected = selectedSet.has(index);
     const isMovePlaceholder = Boolean(token.moveId && token.kind === "empty");
+    const isDeletionPlaceholder = Boolean(token.kind === "empty" && !token.moveId && token.previousTokens?.length);
     const hasHistory = forceChanged || (Boolean(token.previousTokens?.length) && !isMovePlaceholder);
     const isSpecial = token.kind === "special";
     const isEmpty = token.kind === "empty";
     const displayText =
-      isEmpty
-        ? "⬚"
+      isDeletionPlaceholder
+        ? "∅"
+        : isEmpty
+          ? "⬚"
         : isSpecial && token.text.length > 32
           ? `${token.text.slice(0, 18)}…${token.text.slice(-10)}`
           : token.text;
@@ -1284,6 +1359,25 @@ export const TokenEditor: React.FC<{
           borderRadius: 2,
           color: "transparent",
           fontSize: 0,
+        });
+      } else if (isDeletionPlaceholder) {
+        const voidWidth = Math.max(10, Math.round(tokenFontSize * 0.6));
+        const voidHeight = Math.max(14, Math.round(tokenFontSize * 1.1));
+        const dotSize = Math.max(3, Math.round(tokenFontSize * 0.25));
+        Object.assign(style, {
+          border: "none",
+          background: "transparent",
+          padding: 0,
+          width: voidWidth,
+          minWidth: voidWidth,
+          height: voidHeight,
+          minHeight: voidHeight,
+          borderRadius: 2,
+          color: "rgba(148,163,184,0.45)",
+          fontSize: dotSize,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
         });
       }
     }
@@ -1416,6 +1510,7 @@ export const TokenEditor: React.FC<{
         }}
         title={token.kind === "empty" ? "Empty placeholder" : token.text}
         role="button"
+        aria-label={isEmpty ? "⬚" : undefined}
         tabIndex={isSpecial ? -1 : 0}
         ref={(el) => {
           tokenRefs.current[token.id] = el;
@@ -1575,8 +1670,12 @@ export const TokenEditor: React.FC<{
       const correctedWidth = group.tokens.reduce((acc, tok, i) => {
         const display = displayTextForToken(tok);
         const tokenWidth =
-          isMoveSource && tok.kind === "empty"
-            ? Math.max(2, Math.round(tokenFontSize * 0.12))
+          tok.kind === "empty"
+            ? tok.moveId
+              ? Math.max(2, Math.round(tokenFontSize * 0.12))
+              : tok.previousTokens?.length
+                ? Math.max(10, Math.round(tokenFontSize * 0.6))
+                : Math.max(2, Math.round(tokenFontSize * 0.12))
             : Math.max(measureTextWidth(display), tokenFontSize * 0.6);
         const gapWidth = i === 0 ? 0 : innerGap;
         return acc + tokenWidth + gapWidth;
@@ -1626,6 +1725,13 @@ export const TokenEditor: React.FC<{
           }}
           ref={(el) => {
             groupRefs.current[groupKey] = el;
+          }}
+          onClick={() => {
+            if (!showBorder) return;
+            const range = { start: group.start, end: group.end };
+            selectionRef.current = range;
+            lastClickedIndexRef.current = group.start;
+            setSelection(range);
           }}
           onMouseEnter={() => {
             if (moveId) setHoveredMoveId(moveId);
