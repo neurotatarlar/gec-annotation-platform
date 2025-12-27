@@ -1691,7 +1691,8 @@ export const TokenEditor: React.FC<{
 
       const groupPadY = 0;
       const groupPadX = isMoveSource ? 0 : isPurePunctGroup ? 0 : 1;
-      const paddingTop = Math.max(groupPadY, tokenFontSize * (isMoveSource ? 0.04 : 0.12));
+      const movePlaceholderHeight = Math.max(14, Math.round(tokenFontSize * 1.1));
+      const paddingTop = Math.max(groupPadY, tokenFontSize * (isMoveSource ? 0 : 0.12));
       const minSpaceWidth = Math.max(2, tokenFontSize * 0.16);
       const innerGap = Math.max(Math.max(0, tokenGap), minSpaceWidth);
       const verticalGap = Math.max(0, tokenFontSize * (isMoveSource ? 0 : 0.02));
@@ -1730,7 +1731,9 @@ export const TokenEditor: React.FC<{
       const groupRadius = isMoveSource ? 10 : 14;
       const groupShadow = showBorder
         ? isMoveSource
-          ? "none"
+          ? isMoveHover
+            ? "0 0 0 1px rgba(94,234,212,0.5)"
+            : "none"
           : isMoveHover
             ? "0 0 0 1px rgba(94,234,212,0.5)"
             : "0 0 0 1px rgba(148,163,184,0.25)"
@@ -1750,12 +1753,17 @@ export const TokenEditor: React.FC<{
             border: showBorder
               ? isMoveHover
                 ? "1px solid rgba(94,234,212,0.85)"
-                : "1px solid rgba(148,163,184,0.35)"
+                : isMoveSource
+                  ? "1px solid transparent"
+                  : "1px solid rgba(148,163,184,0.35)"
               : "1px solid transparent",
             background: "transparent",
             boxShadow: groupShadow,
             flex: "0 0 auto",
             minWidth,
+            height: isMoveSource ? movePlaceholderHeight : undefined,
+            minHeight: isMoveSource ? movePlaceholderHeight : undefined,
+            alignSelf: isMoveDestination ? "flex-start" : undefined,
             position: "relative",
           }}
           ref={(el) => {
@@ -1782,7 +1790,7 @@ export const TokenEditor: React.FC<{
               flexWrap: "wrap",
               justifyContent: "flex-start",
               alignItems: "center",
-              marginBottom: Math.max(0, tokenFontSize * 0.03),
+              marginBottom: isMoveSource ? 0 : Math.max(0, tokenFontSize * 0.03),
             }}
           >
             {showUndo && (
