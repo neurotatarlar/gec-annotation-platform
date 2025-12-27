@@ -34,9 +34,10 @@ const persistCorrectionTypes = (
 type UseCorrectionTypesArgs = {
   textId: number;
   correctionCards: CorrectionCardLite[];
+  defaultTypeForCard?: (cardId: string) => number | null;
 };
 
-export const useCorrectionTypes = ({ textId, correctionCards }: UseCorrectionTypesArgs) => {
+export const useCorrectionTypes = ({ textId, correctionCards, defaultTypeForCard }: UseCorrectionTypesArgs) => {
   const [activeErrorTypeId, setActiveErrorTypeId] = useState<number | null>(null);
   const [correctionTypeMap, setCorrectionTypeMap] = useState<Record<string, number | null>>({});
   const [hasLoadedTypeState, setHasLoadedTypeState] = useState(false);
@@ -54,16 +55,17 @@ export const useCorrectionTypes = ({ textId, correctionCards }: UseCorrectionTyp
     setCorrectionTypeMap((prev) => {
       const next: Record<string, number | null> = {};
       correctionCards.forEach((card) => {
+        const defaultType = defaultTypeForCard ? defaultTypeForCard(card.id) : null;
         next[card.id] = Object.prototype.hasOwnProperty.call(prev, card.id)
           ? prev[card.id]
-          : activeErrorTypeId;
+          : defaultType ?? activeErrorTypeId;
       });
       const unchanged =
         correctionCards.length === Object.keys(prev).length &&
         correctionCards.every((c) => prev[c.id] === next[c.id]);
       return unchanged ? prev : next;
     });
-  }, [correctionCards, activeErrorTypeId, hasLoadedTypeState]);
+  }, [correctionCards, activeErrorTypeId, hasLoadedTypeState, defaultTypeForCard]);
 
   useEffect(() => {
     if (!hasLoadedTypeState) return;

@@ -671,6 +671,20 @@ export const TokenEditor: React.FC<{
     () => deriveCorrectionCards(tokens, moveMarkers),
     [tokens, moveMarkers]
   );
+  const moveCardIds = useMemo(
+    () => new Set(moveMarkers.map((marker) => marker.id)),
+    [moveMarkers]
+  );
+  const wordOrderTypeId = useMemo(() => {
+    const match = errorTypes.find(
+      (type) => type.en_name?.trim().toLowerCase() === "wordorder"
+    );
+    return match?.id ?? null;
+  }, [errorTypes]);
+  const defaultTypeForCard = useCallback(
+    (cardId: string) => (wordOrderTypeId && moveCardIds.has(cardId) ? wordOrderTypeId : null),
+    [moveCardIds, wordOrderTypeId]
+  );
 
   const correctionByIndex = useMemo(
     () => deriveCorrectionByIndex(correctionCards, moveMarkers),
@@ -682,7 +696,7 @@ export const TokenEditor: React.FC<{
     correctionTypeMap,
     applyTypeToCorrections,
     seedCorrectionTypes,
-  } = useCorrectionTypes({ textId, correctionCards });
+  } = useCorrectionTypes({ textId, correctionCards, defaultTypeForCard });
 
   const { markSkipAutoSelect, setPendingSelectIndex } = useCorrectionSelection({
     correctionCards,
