@@ -575,6 +575,18 @@ describe("tokenEditorReducer core flows", () => {
     });
   });
 
+  it("positions space markers slightly below center", async () => {
+    localStorage.clear();
+    await renderEditor("hello world");
+    const user = userEvent.setup();
+    const select = await screen.findByLabelText(/tokeneditor\.spaceMark/i);
+    await user.selectOptions(select, "box");
+    const marker = await screen.findByTestId("space-marker");
+    expect(marker.style.position).toBe("absolute");
+    expect(marker.style.top).toBe("50%");
+    expect(marker.style.transform).toContain("calc(-50% +");
+  });
+
   it("hides space markers while an edit field is open and restores them after committing", async () => {
     localStorage.clear();
     await renderEditor("hello world");

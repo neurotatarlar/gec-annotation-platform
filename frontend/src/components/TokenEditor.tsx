@@ -1765,14 +1765,16 @@ export const TokenEditor: React.FC<{
       const prevTok = idx > 0 ? tokens[idx - 1] : null;
       const isLineStart = lineStartIndices.has(idx);
       const { width: gapWidth, markerChar } = getGapMetrics(prevTok, nextTok, isLineStart);
-      const markerShift = Math.max(0, tokenFontSize * 0.05);
+      const markerShift = Math.max(0, tokenFontSize * 0.08);
       const markerStyle: React.CSSProperties = {
         fontSize: Math.max(8, tokenFontSize * 0.45),
         color: "rgba(148,163,184,0.6)",
         lineHeight: 1,
-        transform: `translateY(${markerShift}px)`,
         pointerEvents: "none",
         userSelect: "none",
+        position: "absolute",
+        top: "50%",
+        transform: `translateY(calc(-50% + ${markerShift}px))`,
       };
       return (
         <div
@@ -2006,15 +2008,17 @@ export const TokenEditor: React.FC<{
               const nodes: React.ReactNode[] = [];
               if (i > 0) {
                 const { width: gapWidth, markerChar } = getGapMetrics(group.tokens[i - 1], tok, false);
-                const markerShift = Math.max(0, tokenFontSize * 0.05);
-                const markerStyle: React.CSSProperties = {
-                  fontSize: Math.max(8, tokenFontSize * 0.45),
-                  color: "rgba(148,163,184,0.6)",
-                  lineHeight: 1,
-                  transform: `translateY(${markerShift}px)`,
-                  pointerEvents: "none",
-                  userSelect: "none",
-                };
+      const markerShift = Math.max(0, tokenFontSize * 0.08);
+      const markerStyle: React.CSSProperties = {
+        fontSize: Math.max(8, tokenFontSize * 0.45),
+        color: "rgba(148,163,184,0.6)",
+        lineHeight: 1,
+        pointerEvents: "none",
+        userSelect: "none",
+        position: "absolute",
+        top: "50%",
+        transform: `translateY(calc(-50% + ${markerShift}px))`,
+      };
                 nodes.push(
                   <div
                     key={`inner-gap-${group.start + i}`}
