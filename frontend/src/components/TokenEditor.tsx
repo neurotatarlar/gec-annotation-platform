@@ -45,7 +45,9 @@ export * from "./TokenEditorModel";
 // ---------------------------
 
 const PREFS_KEY = "tokenEditorPrefs";
-const DEFAULT_TOKEN_GAP = 2;
+const MIN_TOKEN_GAP = 0;
+const MAX_TOKEN_GAP = 40;
+const DEFAULT_TOKEN_GAP = Math.round((MIN_TOKEN_GAP + MAX_TOKEN_GAP) / 2);
 const DEFAULT_TOKEN_FONT_SIZE = 24;
 type SpaceMarker = "dot" | "box" | "none";
 
@@ -235,7 +237,9 @@ export const TokenEditor: React.FC<{
   const flagError = ui.flagError;
   const showClearConfirm = ui.overlay === "clear";
   const prefs = useMemo(() => loadPrefs(), []);
-  const [tokenGap, setTokenGap] = useState(Math.max(0, prefs.tokenGap ?? DEFAULT_TOKEN_GAP));
+  const [tokenGap, setTokenGap] = useState(
+    Math.max(MIN_TOKEN_GAP, prefs.tokenGap ?? DEFAULT_TOKEN_GAP)
+  );
   const [tokenFontSize, setTokenFontSize] = useState(prefs.tokenFontSize ?? DEFAULT_TOKEN_FONT_SIZE);
   const [spaceMarker, setSpaceMarker] = useState<SpaceMarker>(normalizeSpaceMarker(prefs.spaceMarker));
   const editInputRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
@@ -2445,7 +2449,7 @@ export const TokenEditor: React.FC<{
                 <span style={{ color: "#94a3b8", fontSize: 12 }}>{t("tokenEditor.spacing")}</span>
                 <button
                   style={miniNeutralButton}
-                  onClick={() => setTokenGap((g) => Math.max(0, g - 3))}
+                  onClick={() => setTokenGap((g) => Math.max(MIN_TOKEN_GAP, g - 3))}
                   title="Decrease spacing"
                 >
                   –
@@ -2463,7 +2467,7 @@ export const TokenEditor: React.FC<{
                 </button>
                 <button
                   style={miniNeutralButton}
-                  onClick={() => setTokenGap((g) => Math.min(40, g + 3))}
+                  onClick={() => setTokenGap((g) => Math.min(MAX_TOKEN_GAP, g + 3))}
                   title="Increase spacing"
                 >
                   +
