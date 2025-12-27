@@ -1913,7 +1913,7 @@ export const TokenEditor: React.FC<{
 
       if (isPlainGroup && group.tokens.length === 1) {
         result.push(renderToken(group.tokens[0], group.start));
-        const lineBreakHeight = Math.max(4, Math.round(tokenFontSize * 0.2));
+        const lineBreakHeight = Math.max(4, Math.round(tokenFontSize * 0.45));
         const breakCount = lineBreakCountMap.get(visibleCount) ?? 0;
         if (breakCount > 0) {
           for (let i = 0; i < breakCount; i += 1) {
@@ -2120,7 +2120,7 @@ export const TokenEditor: React.FC<{
         </div>
       );
       result.push(groupNode);
-      const lineBreakHeight = Math.max(4, Math.round(tokenFontSize * 0.2));
+      const lineBreakHeight = Math.max(4, Math.round(tokenFontSize * 0.45));
       const breakCount = lineBreakCountMap.get(visibleCount) ?? 0;
       if (breakCount > 0) {
         for (let i = 0; i < breakCount; i += 1) {
