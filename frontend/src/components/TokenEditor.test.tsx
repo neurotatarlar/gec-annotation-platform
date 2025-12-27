@@ -1346,6 +1346,7 @@ describe("revert clears selection", () => {
     expect(corrected).toHaveAttribute("aria-pressed", "true");
 
     const inlineUndo = await screen.findByTitle("tokenEditor.undo");
+    expect(inlineUndo).toHaveStyle({ zIndex: "2" });
     await user.click(inlineUndo);
 
     await waitFor(() => {
@@ -1668,6 +1669,54 @@ describe("revert clears selection", () => {
     });
     const corrected = await screen.findByTestId("corrected-panel");
     await waitFor(() => expect(within(corrected).getByText("Punctuation")).toBeInTheDocument());
+  });
+
+  it("auto-assigns Split when adding a single whitespace", async () => {
+    localStorage.clear();
+    const base = initState("foobar");
+    const edited = tokenEditorReducer(base, {
+      type: "EDIT_SELECTED_RANGE_AS_TEXT",
+      range: [0, 0],
+      newText: "foo bar",
+    });
+    localStorage.setItem("tokenEditorPrefs:state:1", JSON.stringify(edited.present));
+    await renderEditor("foobar", {
+      getImpl: (url: string) => {
+        if (url.includes("/api/error-types")) {
+          return Promise.resolve({
+            data: [{ id: 30, en_name: "Split", tt_name: "Split", is_active: true, default_color: "#38bdf8" }],
+          });
+        }
+        if (url.includes("/annotations")) return Promise.resolve({ data: [] });
+        return Promise.resolve({ data: {} });
+      },
+    });
+    const corrected = await screen.findByTestId("corrected-panel");
+    await waitFor(() => expect(within(corrected).getByText("Split")).toBeInTheDocument());
+  });
+
+  it("auto-assigns Merge when removing a single whitespace", async () => {
+    localStorage.clear();
+    const base = initState("foo bar");
+    const edited = tokenEditorReducer(base, {
+      type: "EDIT_SELECTED_RANGE_AS_TEXT",
+      range: [0, 1],
+      newText: "foobar",
+    });
+    localStorage.setItem("tokenEditorPrefs:state:1", JSON.stringify(edited.present));
+    await renderEditor("foo bar", {
+      getImpl: (url: string) => {
+        if (url.includes("/api/error-types")) {
+          return Promise.resolve({
+            data: [{ id: 31, en_name: "Merge", tt_name: "Merge", is_active: true, default_color: "#fbbf24" }],
+          });
+        }
+        if (url.includes("/annotations")) return Promise.resolve({ data: [] });
+        return Promise.resolve({ data: {} });
+      },
+    });
+    const corrected = await screen.findByTestId("corrected-panel");
+    await waitFor(() => expect(within(corrected).getByText("Merge")).toBeInTheDocument());
   });
 
   it("keeps all tokens styled as corrected after editing a moved token into multiple tokens", async () => {

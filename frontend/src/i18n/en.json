@@ -77,6 +77,8 @@
     "error": "Something went wrong",
     "loading": "Loading…",
     "logout": "Log out",
+    "logoutConfirmTitle": "Log out?",
+    "logoutConfirmMessage": "You will need to sign in again to continue.",
     "orderAsc": "Oldest first",
     "orderDesc": "Newest first",
     "save": "Save",

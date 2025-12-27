@@ -781,6 +781,18 @@ export const TokenEditor: React.FC<{
     );
     return match?.id ?? null;
   }, [errorTypes]);
+  const splitTypeId = useMemo(() => {
+    const match = errorTypes.find(
+      (type) => type.en_name?.trim().toLowerCase() === "split"
+    );
+    return match?.id ?? null;
+  }, [errorTypes]);
+  const mergeTypeId = useMemo(() => {
+    const match = errorTypes.find(
+      (type) => type.en_name?.trim().toLowerCase() === "merge"
+    );
+    return match?.id ?? null;
+  }, [errorTypes]);
   const correctionCardById = useMemo(() => {
     const map = new Map<string, CorrectionCardLite>();
     correctionCards.forEach((card) => map.set(card.id, card));
@@ -876,14 +888,75 @@ export const TokenEditor: React.FC<{
     },
     [correctionCardById, moveCardIds, tokens]
   );
+  const detectSingleWhitespaceEdit = useCallback((beforeText: string, afterText: string) => {
+    if (beforeText === afterText) return null;
+    const isSingleSpaceInsert = (base: string, updated: string) => {
+      if (updated.length !== base.length + 1) return false;
+      let i = 0;
+      let j = 0;
+      let inserted = false;
+      while (i < base.length && j < updated.length) {
+        if (base[i] === updated[j]) {
+          i += 1;
+          j += 1;
+          continue;
+        }
+        if (!inserted && updated[j] === " ") {
+          inserted = true;
+          j += 1;
+          continue;
+        }
+        return false;
+      }
+      if (!inserted && j === updated.length - 1 && updated[j] === " ") {
+        inserted = true;
+        j += 1;
+      }
+      return inserted && i === base.length && j === updated.length;
+    };
+    if (isSingleSpaceInsert(beforeText, afterText)) return "split";
+    if (isSingleSpaceInsert(afterText, beforeText)) return "merge";
+    return null;
+  }, []);
+  const getWhitespaceCorrection = useCallback(
+    (cardId: string) => {
+      if (moveCardIds.has(cardId)) return null;
+      const card = correctionCardById.get(cardId);
+      if (!card) return null;
+      const slice = tokens.slice(card.rangeStart, card.rangeEnd + 1);
+      if (!slice.length) return null;
+      const anchor = slice.find((tok) => tok.previousTokens?.length);
+      const historyTokens = anchor?.previousTokens ?? [];
+      const historyNonEmpty = historyTokens.filter((tok) => tok.kind !== "empty");
+      const currentNonEmpty = slice.filter((tok) => tok.kind !== "empty");
+      if (!historyNonEmpty.length || !currentNonEmpty.length) return null;
+      const beforeText = buildEditableTextFromTokens(historyNonEmpty);
+      const afterText = buildEditableTextFromTokens(currentNonEmpty);
+      return detectSingleWhitespaceEdit(beforeText, afterText);
+    },
+    [correctionCardById, detectSingleWhitespaceEdit, moveCardIds, tokens]
+  );
   const defaultTypeForCard = useCallback(
     (cardId: string) => {
       if (wordOrderTypeId && moveCardIds.has(cardId)) return wordOrderTypeId;
+      const whitespaceChange = getWhitespaceCorrection(cardId);
+      if (whitespaceChange === "split" && splitTypeId) return splitTypeId;
+      if (whitespaceChange === "merge" && mergeTypeId) return mergeTypeId;
       if (hyphenTypeId && isHyphenCorrection(cardId)) return hyphenTypeId;
       if (punctuationTypeId && isPunctuationCorrection(cardId)) return punctuationTypeId;
       return null;
     },
-    [hyphenTypeId, isHyphenCorrection, isPunctuationCorrection, moveCardIds, punctuationTypeId, wordOrderTypeId]
+    [
+      getWhitespaceCorrection,
+      hyphenTypeId,
+      isHyphenCorrection,
+      isPunctuationCorrection,
+      mergeTypeId,
+      moveCardIds,
+      punctuationTypeId,
+      splitTypeId,
+      wordOrderTypeId,
+    ]
   );
 
   const correctionByIndex = useMemo(
@@ -3109,4 +3182,6 @@ const groupUndoButtonStyle: React.CSSProperties = {
   color: "#e2e8f0",
   fontSize: 12,
   cursor: "pointer",
+  zIndex: 2,
+  pointerEvents: "auto",
 };

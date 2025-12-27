@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { useAuthedApi } from "../api/client";
 import { useAuth } from "../context/AuthContext";
@@ -29,6 +29,18 @@ export const AppHeader = () => {
   const [endDate, setEndDate] = useState("");
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
+
+  useEffect(() => {
+    if (!showLogoutConfirm) return;
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setShowLogoutConfirm(false);
+      }
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [showLogoutConfirm]);
 
   const { data: profile } = useQuery<Profile>({
     queryKey: ["me"],
@@ -173,11 +185,40 @@ export const AppHeader = () => {
         </button>
         <button
           className="rounded-lg border border-rose-500/60 px-4 py-2 text-sm font-semibold text-rose-100 hover:bg-rose-500/20"
-          onClick={logout}
+          onClick={() => setShowLogoutConfirm(true)}
         >
           {t("common.logout")}
         </button>
       </div>
+      {showLogoutConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-md rounded-2xl border border-slate-800 bg-slate-950/90 p-6 shadow-2xl">
+            <div className="space-y-2">
+              <h3 className="text-lg font-semibold text-slate-100">
+                {t("common.logoutConfirmTitle")}
+              </h3>
+              <p className="text-sm text-slate-400">{t("common.logoutConfirmMessage")}</p>
+            </div>
+            <div className="mt-6 flex flex-wrap justify-end gap-2">
+              <button
+                className="rounded-lg border border-slate-700 px-4 py-2 text-sm text-slate-100"
+                onClick={() => setShowLogoutConfirm(false)}
+              >
+                {t("common.cancel")}
+              </button>
+              <button
+                className="rounded-lg border border-rose-500/60 px-4 py-2 text-sm font-semibold text-rose-100 hover:bg-rose-500/20"
+                onClick={() => {
+                  setShowLogoutConfirm(false);
+                  logout();
+                }}
+              >
+                {t("common.logout")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {showExport && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
           <div className="w-full max-w-3xl rounded-2xl border border-slate-800 bg-slate-950/90 p-6 shadow-2xl">
