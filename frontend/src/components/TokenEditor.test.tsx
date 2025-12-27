@@ -1596,6 +1596,58 @@ describe("revert clears selection", () => {
     await waitFor(() => expect(within(corrected).getByText("Hyphen")).toBeInTheDocument());
   });
 
+  it("auto-assigns Punctuation when deleting a punctuation token", async () => {
+    localStorage.clear();
+    const base = initState("foo, bar");
+    const commaIndex = findIndexByText(base, ",");
+    const deleted = tokenEditorReducer(base, {
+      type: "DELETE_SELECTED_TOKENS",
+      range: [commaIndex, commaIndex],
+    });
+    localStorage.setItem("tokenEditorPrefs:state:1", JSON.stringify(deleted.present));
+    await renderEditor("foo, bar", {
+      getImpl: (url: string) => {
+        if (url.includes("/api/error-types")) {
+          return Promise.resolve({
+            data: [{ id: 21, en_name: "Punctuation", tt_name: "Punctuation", is_active: true, default_color: "#38bdf8" }],
+          });
+        }
+        if (url.includes("/annotations")) return Promise.resolve({ data: [] });
+        return Promise.resolve({ data: {} });
+      },
+    });
+    const corrected = await screen.findByTestId("corrected-panel");
+    await waitFor(() => expect(within(corrected).getByText("Punctuation")).toBeInTheDocument());
+  });
+
+  it("auto-assigns Punctuation when inserting a punctuation token", async () => {
+    localStorage.clear();
+    let state = initState("foo bar");
+    state = tokenEditorReducer(state, {
+      type: "INSERT_TOKEN_AFTER_SELECTED",
+      range: [0, 0],
+    });
+    state = tokenEditorReducer(state, {
+      type: "EDIT_SELECTED_RANGE_AS_TEXT",
+      range: [1, 1],
+      newText: "!",
+    });
+    localStorage.setItem("tokenEditorPrefs:state:1", JSON.stringify(state.present));
+    await renderEditor("foo bar", {
+      getImpl: (url: string) => {
+        if (url.includes("/api/error-types")) {
+          return Promise.resolve({
+            data: [{ id: 22, en_name: "Punctuation", tt_name: "Punctuation", is_active: true, default_color: "#38bdf8" }],
+          });
+        }
+        if (url.includes("/annotations")) return Promise.resolve({ data: [] });
+        return Promise.resolve({ data: {} });
+      },
+    });
+    const corrected = await screen.findByTestId("corrected-panel");
+    await waitFor(() => expect(within(corrected).getByText("Punctuation")).toBeInTheDocument());
+  });
+
   it("auto-selects all tokens in a replaced group", async () => {
     const edited = tokenEditorReducer(initState("hello world"), {
       type: "EDIT_SELECTED_RANGE_AS_TEXT",

@@ -687,6 +687,12 @@ export const TokenEditor: React.FC<{
     );
     return match?.id ?? null;
   }, [errorTypes]);
+  const punctuationTypeId = useMemo(() => {
+    const match = errorTypes.find(
+      (type) => type.en_name?.trim().toLowerCase() === "punctuation"
+    );
+    return match?.id ?? null;
+  }, [errorTypes]);
   const correctionCardById = useMemo(() => {
     const map = new Map<string, CorrectionCardLite>();
     correctionCards.forEach((card) => map.set(card.id, card));
@@ -749,13 +755,47 @@ export const TokenEditor: React.FC<{
     },
     [correctionCardById, isSingleHyphenEdit, moveCardIds, tokens]
   );
+  const isPunctuationCorrection = useCallback(
+    (cardId: string) => {
+      if (moveCardIds.has(cardId)) return false;
+      const card = correctionCardById.get(cardId);
+      if (!card) return false;
+      const slice = tokens.slice(card.rangeStart, card.rangeEnd + 1);
+      if (!slice.length) return false;
+      const anchor = slice.find((tok) => tok.previousTokens?.length);
+      const historyTokens = anchor?.previousTokens ?? [];
+      const historyNonEmpty = historyTokens.filter((tok) => tok.kind !== "empty");
+      const currentNonEmpty = slice.filter((tok) => tok.kind !== "empty");
+      if (
+        slice.length === 1 &&
+        slice[0].kind === "empty" &&
+        historyNonEmpty.length === 1 &&
+        historyNonEmpty[0].kind === "punct" &&
+        historyNonEmpty[0].text !== "-"
+      ) {
+        return true;
+      }
+      if (
+        currentNonEmpty.length === 1 &&
+        currentNonEmpty[0].kind === "punct" &&
+        currentNonEmpty[0].text !== "-" &&
+        historyTokens.length > 0 &&
+        historyTokens.every((tok) => tok.kind === "empty")
+      ) {
+        return true;
+      }
+      return false;
+    },
+    [correctionCardById, moveCardIds, tokens]
+  );
   const defaultTypeForCard = useCallback(
     (cardId: string) => {
       if (wordOrderTypeId && moveCardIds.has(cardId)) return wordOrderTypeId;
       if (hyphenTypeId && isHyphenCorrection(cardId)) return hyphenTypeId;
+      if (punctuationTypeId && isPunctuationCorrection(cardId)) return punctuationTypeId;
       return null;
     },
-    [hyphenTypeId, isHyphenCorrection, moveCardIds, wordOrderTypeId]
+    [hyphenTypeId, isHyphenCorrection, isPunctuationCorrection, moveCardIds, punctuationTypeId, wordOrderTypeId]
   );
 
   const correctionByIndex = useMemo(
