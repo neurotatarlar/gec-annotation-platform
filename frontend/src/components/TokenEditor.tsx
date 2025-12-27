@@ -115,8 +115,14 @@ const chipStyles: Record<string, React.CSSProperties> = {
   },
   special: { ...chipBase, color: "#cbd5e1", borderBottom: "1px dotted rgba(148,163,184,0.8)" },
   empty: { ...chipBase, color: "#cbd5e1" },
-  previous: { ...chipBase, color: "#ef4444", fontSize: 12 },
-  changed: { color: "#22c55e" },
+  previous: {
+    ...chipBase,
+    color: "#64748b",
+    fontSize: 12,
+    textShadow: "0 0 6px rgba(100,116,139,0.45)",
+    fontStyle: "italic",
+  },
+  changed: { color: "#e2e8f0" },
   selected: {
     background: "rgba(14,165,233,0.15)",
     border: "1px solid rgba(14,165,233,0.6)",
@@ -1556,7 +1562,7 @@ export const TokenEditor: React.FC<{
           background: "transparent",
           padding: "0 2px",
           borderRadius: 4,
-          color: "rgba(148,163,184,0.3)",
+          color: "#64748b",
           fontSize: ghostSize,
           lineHeight: `${ghostHeight}px`,
           height: ghostHeight,
@@ -2051,6 +2057,7 @@ export const TokenEditor: React.FC<{
                   style={{
                     ...chipStyles.previous,
                     fontSize: Math.max(8, tokenFontSize * 0.6),
+                    fontStyle: prev.kind === "empty" || prev.text === "⬚" ? "normal" : chipStyles.previous.fontStyle,
                     padding: `${Math.max(0, tokenFontSize * 0.08)}px ${Math.max(1, tokenFontSize * 0.2)}px`,
                   }}
                 >
