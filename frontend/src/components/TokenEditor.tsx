@@ -1006,6 +1006,59 @@ export const TokenEditor: React.FC<{
     [setSelection]
   );
 
+  const getClosestDropIndex = useCallback((container: HTMLElement, clientX: number) => {
+    const gaps = container.querySelectorAll<HTMLElement>("[data-drop-index]");
+    if (!gaps.length) return null;
+    let closestIndex: number | null = null;
+    let closestDistance = Number.POSITIVE_INFINITY;
+    gaps.forEach((gap) => {
+      const rect = gap.getBoundingClientRect();
+      const mid = rect.left + rect.width / 2;
+      const dist = Math.abs(clientX - mid);
+      if (dist < closestDistance) {
+        closestDistance = dist;
+        const idx = Number(gap.dataset.dropIndex);
+        if (!Number.isNaN(idx)) {
+          closestIndex = idx;
+        }
+      }
+    });
+    return closestIndex;
+  }, []);
+
+  const resolveClientX = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+    if (Number.isFinite(event.clientX) && event.clientX !== 0) return event.clientX;
+    const native = event.nativeEvent as MouseEvent | undefined;
+    if (native && typeof native.offsetX === "number") {
+      const rect = event.currentTarget.getBoundingClientRect();
+      return rect.left + native.offsetX;
+    }
+    return event.clientX;
+  }, []);
+
+  const handleRowDragOver = useCallback(
+    (event: React.DragEvent<HTMLDivElement>) => {
+      if (!dragStateRef.current) return;
+      event.preventDefault();
+      const nextIndex = getClosestDropIndex(event.currentTarget, resolveClientX(event));
+      if (nextIndex !== null) {
+        setDropIndex(nextIndex);
+      }
+    },
+    [getClosestDropIndex, resolveClientX]
+  );
+
+  const handleRowDrop = useCallback(
+    (event: React.DragEvent<HTMLDivElement>) => {
+      if (!dragStateRef.current) return;
+      event.preventDefault();
+      const nextIndex = dropIndex ?? getClosestDropIndex(event.currentTarget, resolveClientX(event));
+      if (nextIndex === null) return;
+      handleDropAt(nextIndex);
+    },
+    [dropIndex, getClosestDropIndex, handleDropAt, resolveClientX]
+  );
+
   const handleDragEnd = useCallback(() => {
     dragStateRef.current = null;
     setDropIndex(null);
@@ -2208,6 +2261,8 @@ export const TokenEditor: React.FC<{
           renderTokenGroups={renderTokenGroups}
           rowRef={tokenRowRef}
           moveLine={moveLine}
+          onDragOver={handleRowDragOver}
+          onDrop={handleRowDrop}
         />
         <ErrorTypePanel
           groupedErrorTypes={groupedErrorTypes}
@@ -2310,6 +2365,8 @@ type TokenRowProps = {
   renderTokenGroups: (tokens: Token[]) => React.ReactNode[];
   rowRef: React.RefObject<HTMLDivElement>;
   moveLine: { x1: number; y1: number; x2: number; y2: number } | null;
+  onDragOver?: (event: React.DragEvent<HTMLDivElement>) => void;
+  onDrop?: (event: React.DragEvent<HTMLDivElement>) => void;
 };
 
 const TokenRow: React.FC<TokenRowProps> = ({
@@ -2318,11 +2375,15 @@ const TokenRow: React.FC<TokenRowProps> = ({
   renderTokenGroups,
   rowRef,
   moveLine,
+  onDragOver,
+  onDrop,
 }) => (
   <div
     data-testid="corrected-panel"
     style={{ ...tokenRowStyleBase, gap: Math.max(0, tokenGap) }}
     ref={rowRef}
+    onDragOver={onDragOver}
+    onDrop={onDrop}
   >
     {moveLine && (
       <svg

@@ -117,6 +117,22 @@ const stubTokenRects = (container: HTMLElement) => {
         toJSON: () => ({}),
       }) as DOMRect;
   });
+  const gapNodes = Array.from(container.querySelectorAll("[data-drop-index]")) as HTMLElement[];
+  gapNodes.forEach((node) => {
+    const idx = Number(node.dataset.dropIndex ?? 0);
+    node.getBoundingClientRect = () =>
+      ({
+        left: idx * 20,
+        right: idx * 20 + 6,
+        top: 0,
+        bottom: 10,
+        width: 6,
+        height: 10,
+        x: idx * 20,
+        y: 0,
+        toJSON: () => ({}),
+      }) as DOMRect;
+  });
 };
 
 const initState = (text = "hello world"): EditorHistoryState =>
@@ -561,6 +577,56 @@ describe("tokenEditorReducer core flows", () => {
     const panel = await screen.findByTestId("corrected-panel");
     const markers = panel.querySelectorAll("[data-testid='space-marker']");
     expect(markers.length).toBe(2);
+  });
+
+  it("drops a move on the panel using the active caret position", async () => {
+    localStorage.clear();
+    await renderEditor("alpha beta gamma");
+    const panel = await screen.findByTestId("corrected-panel");
+    stubTokenRects(panel);
+    const alpha = within(panel).getByRole("button", { name: "alpha" });
+    const gamma = within(panel).getByRole("button", { name: "gamma" });
+    const dataTransfer = {
+      setData: () => {},
+      setDragImage: () => {},
+      effectAllowed: "",
+    };
+    fireEvent.dragStart(alpha, { dataTransfer });
+    fireEvent.dragOver(gamma, { dataTransfer, clientX: 100 });
+    fireEvent.drop(panel, { dataTransfer });
+
+    const tokens = within(panel)
+      .getAllByRole("button")
+      .filter((el) => el.getAttribute("data-token-index") !== null)
+      .map((el) => el.textContent);
+    expect(tokens.join(" ")).toBe("⬚ beta alpha gamma");
+  });
+
+  it("drops a move on the panel after hovering a gap", async () => {
+    localStorage.clear();
+    await renderEditor("alpha beta gamma");
+    const panel = await screen.findByTestId("corrected-panel");
+    stubTokenRects(panel);
+    const alpha = within(panel).getByRole("button", { name: "alpha" });
+    const dataTransfer = {
+      setData: () => {},
+      setDragImage: () => {},
+      effectAllowed: "",
+    };
+    fireEvent.dragStart(alpha, { dataTransfer });
+    stubTokenRects(panel);
+    const gap = panel.querySelector("[data-drop-index='3']") as HTMLElement | null;
+    if (!gap) {
+      throw new Error("Expected drop gap for index 3");
+    }
+    fireEvent.dragOver(gap, { dataTransfer });
+    fireEvent.drop(panel, { dataTransfer, clientX: 65 });
+
+    const tokens = within(panel)
+      .getAllByRole("button")
+      .filter((el) => el.getAttribute("data-token-index") !== null)
+      .map((el) => el.textContent);
+    expect(tokens.join(" ")).toBe("⬚ beta gamma alpha");
   });
 
   it("keeps space markers on the same vertical baseline", async () => {
