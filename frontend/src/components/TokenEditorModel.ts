@@ -472,7 +472,7 @@ const buildHistoryTokensForSpan = (originalTokens: Token[], start: number, end: 
   }));
 };
 
-const buildTokensFromFragments = (
+export const buildTokensFromFragments = (
   fragments: TokenFragmentPayload[],
   fallbackText: string,
   defaultFirstSpace?: boolean,

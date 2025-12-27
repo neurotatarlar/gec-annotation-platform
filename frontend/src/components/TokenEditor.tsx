@@ -34,6 +34,7 @@ import {
   buildAnnotationsPayloadStandalone,
   buildEditableTextFromTokens,
   buildHotkeyMap,
+  buildTokensFromFragments,
   buildTextFromTokensWithBreaks,
   cloneTokens,
   createId,
@@ -45,12 +46,43 @@ import {
   makeEmptyPlaceholder,
   normalizeHotkeySpec,
   rangeToArray,
-  tokenizeEditedText,
   tokenizeToTokens,
   tokenEditorReducer,
   unwindToOriginal,
 } from "./TokenEditorModel";
 import { createGapCalculator, SpaceMarker } from "./TokenEditorSpacing";
+import {
+  loadEditorState,
+  loadPrefs,
+  normalizeSpaceMarker,
+  persistPrefs,
+} from "./TokenEditorStorage";
+import {
+  actionBarStyle,
+  actionDividerStyle,
+  actionFeedbackStyle,
+  actionGroupStyle,
+  categoryChipStyle,
+  categoryColors,
+  categoryPanelStyle,
+  chipBase,
+  chipStyles,
+  dangerActionStyle,
+  mainColumnStyle,
+  miniNeutralButton,
+  miniOutlineButton,
+  modalContentStyle,
+  modalOverlayStyle,
+  pageStyle,
+  primaryActionStyle,
+  rowLabelStyle,
+  secondaryActionStyle,
+  spacingRowStyle,
+  tokenRowStyleBase,
+  toolbarRowStyle,
+  twoColumnLayoutStyle,
+  workspaceStyle,
+} from "./TokenEditorStyles";
 
 export * from "./TokenEditorModel";
 
@@ -58,148 +90,10 @@ export * from "./TokenEditorModel";
 // Component
 // ---------------------------
 
-const PREFS_KEY = "tokenEditorPrefs";
 const MIN_TOKEN_GAP = 0;
 const MAX_TOKEN_GAP = 40;
 const DEFAULT_TOKEN_GAP = Math.round((MIN_TOKEN_GAP + MAX_TOKEN_GAP) / 2);
 const DEFAULT_TOKEN_FONT_SIZE = 24;
-
-const buildTokensFromFragments = (
-  fragments: TokenFragmentPayload[],
-  fallbackText: string,
-  defaultFirstSpace?: boolean
-): Token[] => {
-  const built: Token[] = [];
-  const hasFragments = fragments.length > 0;
-  const baseFragments = hasFragments ? fragments : fallbackText ? [{ text: fallbackText }] : [];
-  baseFragments.forEach((frag, fragIndex) => {
-    const text = typeof frag?.text === "string" ? frag.text : "";
-    if (!text) return;
-    const origin = frag?.origin === "inserted" ? "inserted" : undefined;
-    const explicitSpace =
-      typeof frag?.space_before === "boolean"
-        ? frag.space_before
-        : typeof (frag as any)?.spaceBefore === "boolean"
-          ? (frag as any).spaceBefore
-          : undefined;
-    const baseTokens = tokenizeEditedText(text);
-    baseTokens.forEach((tok, idx) => {
-      let spaceBefore = tok.spaceBefore;
-      if (idx === 0) {
-        if (explicitSpace !== undefined) {
-          spaceBefore = explicitSpace;
-        } else if (fragIndex > 0) {
-          spaceBefore = tok.kind === "punct" ? false : true;
-        } else if (defaultFirstSpace !== undefined) {
-          spaceBefore = defaultFirstSpace;
-        }
-      }
-      if (idx === 0 && fragIndex > 0 && spaceBefore === false && tok.kind !== "punct") {
-        spaceBefore = true;
-      }
-      built.push({
-        ...tok,
-        id: createId(),
-        origin,
-        spaceBefore,
-      });
-    });
-  });
-  return built;
-};
-
-const chipBase: React.CSSProperties = {
-  padding: "0px",
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 0,
-  border: "none",
-  background: "transparent",
-  transition: "color 0.15s ease, text-decoration 0.15s ease",
-};
-
-const chipStyles: Record<string, React.CSSProperties> = {
-  word: { ...chipBase, color: "#e2e8f0", padding: "0px" },
-  punct: {
-    ...chipBase,
-    color: "#e2e8f0",
-    padding: 0,
-    gap: 0,
-    margin: 0,
-    justifyContent: "center",
-  },
-  special: { ...chipBase, color: "#cbd5e1", borderBottom: "1px dotted rgba(148,163,184,0.8)" },
-  empty: { ...chipBase, color: "#cbd5e1" },
-  previous: {
-    ...chipBase,
-    color: "#64748b",
-    fontSize: 12,
-    textShadow: "0 0 6px rgba(100,116,139,0.45)",
-    fontStyle: "italic",
-  },
-  changed: { color: "#e2e8f0" },
-  selected: {
-    background: "rgba(14,165,233,0.15)",
-    border: "1px solid rgba(14,165,233,0.6)",
-    borderRadius: 10,
-  },
-};
-
-const normalizeSpaceMarker = (value: unknown): SpaceMarker => {
-  return value === "dot" || value === "box" || value === "none" ? value : "box";
-};
-
-const loadPrefs = (): {
-  tokenGap?: number;
-  tokenFontSize?: number;
-  spaceMarker?: SpaceMarker;
-  lastDecision?: "skip" | "trash" | "submit" | null;
-  lastTextId?: number;
-  viewTab?: "original" | "corrected";
-  textPanelOpen?: boolean;
-} => {
-  try {
-    const raw = localStorage.getItem(PREFS_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === "object") {
-      if (parsed.spaceMarker) {
-        parsed.spaceMarker = normalizeSpaceMarker(parsed.spaceMarker);
-      }
-    }
-    return parsed;
-  } catch {
-    return {};
-  }
-};
-
-// Local token history is no longer persisted in production; in tests we still allow
-// loading/saving from localStorage to keep legacy test fixtures working.
-const loadEditorState = (textId: number): EditorPresentState | null => {
-  if (process.env.NODE_ENV !== "test") return null;
-  try {
-    const raw = localStorage.getItem(`${PREFS_KEY}:state:${textId}`);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (!parsed?.originalTokens || !parsed?.tokens) return null;
-    return {
-      originalTokens: parsed.originalTokens,
-      tokens: parsed.tokens,
-      operations: Array.isArray(parsed.operations) ? parsed.operations : [],
-    } as EditorPresentState;
-  } catch {
-    return null;
-  }
-};
-
-const persistEditorState = (textId: number, state: EditorPresentState) => {
-  if (process.env.NODE_ENV !== "test") return;
-  try {
-    localStorage.setItem(`${PREFS_KEY}:state:${textId}`, JSON.stringify(state));
-  } catch {
-    // ignore
-  }
-};
 
 export const TokenEditor: React.FC<{
   initialText: string;
@@ -1796,18 +1690,15 @@ export const TokenEditor: React.FC<{
   });
 
   useEffect(() => {
-    window.localStorage.setItem(
-      PREFS_KEY,
-      JSON.stringify({
-        tokenGap,
-        tokenFontSize,
-        spaceMarker,
-        lastDecision,
-        lastTextId: textId,
-        viewTab,
-        textPanelOpen: isTextPanelOpen,
-      }),
-    );
+    persistPrefs({
+      tokenGap,
+      tokenFontSize,
+      spaceMarker,
+      lastDecision,
+      lastTextId: textId,
+      viewTab,
+      textPanelOpen: isTextPanelOpen,
+    });
   }, [tokenGap, tokenFontSize, spaceMarker, lastDecision, textId, viewTab, isTextPanelOpen]);
 
   const handleSubmit = async () => {
@@ -2502,194 +2393,3 @@ const ErrorTypePanel: React.FC<ErrorTypePanelProps> = ({
 // ---------------------------
 // Styles
 // ---------------------------
-const pageStyle: React.CSSProperties = {
-  minHeight: "100vh",
-  background: "#0b1120",
-  color: "#e2e8f0",
-  padding: 16,
-  boxSizing: "border-box",
-  fontFamily: "Inter, system-ui, -apple-system, sans-serif",
-  display: "flex",
-  flexDirection: "column",
-  gap: 16,
-};
-
-const twoColumnLayoutStyle: React.CSSProperties = {
-  display: "flex",
-  alignItems: "flex-start",
-  gap: 8,
-  flexWrap: "wrap",
-};
-
-const mainColumnStyle: React.CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  gap: 8,
-  flex: 1,
-  minWidth: 0,
-};
-
-const workspaceStyle: React.CSSProperties = {
-  background: "rgba(15,23,42,0.9)",
-  borderRadius: 14,
-  padding: 8,
-  border: "1px solid rgba(51,65,85,0.7)",
-  display: "flex",
-  flexDirection: "column",
-  gap: 6,
-  position: "relative",
-};
-
-const rowLabelStyle: React.CSSProperties = {
-  color: "#cbd5e1",
-  fontSize: 12,
-  marginBottom: 8,
-};
-
-const tokenRowStyleBase: React.CSSProperties = {
-  display: "flex",
-  flexWrap: "wrap",
-  alignItems: "flex-start",
-  background: "rgba(15,23,42,0.6)",
-  padding: "8px 12px",
-  borderRadius: 12,
-  border: "1px solid rgba(51,65,85,0.6)",
-  position: "relative",
-};
-
-const actionBarStyle: React.CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  gap: 8,
-  padding: "6px 0",
-};
-
-const toolbarRowStyle: React.CSSProperties = {
-  display: "flex",
-  flexWrap: "wrap",
-  alignItems: "center",
-  gap: 10,
-};
-
-const actionGroupStyle: React.CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 10,
-  flexWrap: "wrap",
-  marginLeft: "auto",
-};
-
-const spacingRowStyle: React.CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 8,
-  flexWrap: "wrap",
-};
-
-const actionFeedbackStyle: React.CSSProperties = {
-  minHeight: 2,
-  marginTop: 2,
-  fontSize: 12,
-};
-
-const actionDividerStyle: React.CSSProperties = {
-  width: 1,
-  height: 28,
-  background: "rgba(148,163,184,0.35)",
-};
-
-const categoryPanelStyle: React.CSSProperties = {
-  background: "rgba(15,23,42,0.9)",
-  borderRadius: 14,
-  padding: 12,
-  border: "1px solid rgba(51,65,85,0.7)",
-};
-
-const categoryChipStyle: React.CSSProperties = {
-  padding: "8px 12px",
-  borderRadius: 10,
-  color: "#e2e8f0",
-  fontWeight: 600,
-  minWidth: 0,
-  width: "auto",
-  textAlign: "left",
-  display: "flex",
-  flexDirection: "column",
-  gap: 2,
-  lineHeight: 1.2,
-  cursor: "pointer",
-};
-
-const categoryColors = [
-  "rgba(120,53,15,0.35)",
-  "rgba(17,94,89,0.45)",
-  "rgba(37,99,235,0.35)",
-  "rgba(76,29,149,0.35)",
-  "rgba(30,64,175,0.35)",
-  "rgba(153,27,27,0.35)",
-];
-
-const miniOutlineButton: React.CSSProperties = {
-  padding: "6px 10px",
-  borderRadius: 10,
-  border: "1px solid rgba(236,72,153,0.5)",
-  color: "#f9a8d4",
-  background: "transparent",
-  cursor: "pointer",
-  fontSize: 12,
-};
-
-const miniNeutralButton: React.CSSProperties = {
-  padding: "6px 10px",
-  borderRadius: 10,
-  border: "1px solid rgba(148,163,184,0.6)",
-  color: "#e2e8f0",
-  background: "rgba(15,23,42,0.6)",
-  cursor: "pointer",
-  fontSize: 12,
-};
-
-const primaryActionStyle: React.CSSProperties = {
-  padding: "8px 14px",
-  borderRadius: 10,
-  border: "1px solid rgba(16,185,129,0.6)",
-  background: "rgba(16,185,129,0.2)",
-  color: "#a7f3d0",
-  fontWeight: 700,
-  cursor: "pointer",
-  fontSize: 13,
-};
-
-const secondaryActionStyle: React.CSSProperties = {
-  ...primaryActionStyle,
-  border: "1px solid rgba(148,163,184,0.6)",
-  background: "rgba(148,163,184,0.15)",
-  color: "#e2e8f0",
-};
-
-const dangerActionStyle: React.CSSProperties = {
-  ...primaryActionStyle,
-  border: "1px solid rgba(248,113,113,0.6)",
-  background: "rgba(248,113,113,0.15)",
-  color: "#fecdd3",
-};
-
-const modalOverlayStyle: React.CSSProperties = {
-  position: "fixed",
-  inset: 0,
-  background: "rgba(0,0,0,0.5)",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  padding: 16,
-  zIndex: 50,
-};
-
-const modalContentStyle: React.CSSProperties = {
-  background: "rgba(15,23,42,0.95)",
-  border: "1px solid rgba(51,65,85,0.8)",
-  borderRadius: 14,
-  padding: 16,
-  maxWidth: 360,
-  width: "100%",
-};
