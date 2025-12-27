@@ -42,19 +42,6 @@ describe("useCorrectionTypes defaults", () => {
     });
   });
 
-  it("falls back to activeErrorTypeId when no default applies", async () => {
-    localStorage.setItem(
-      "tokenEditorPrefs:types:2",
-      JSON.stringify({ activeErrorTypeId: 7, assignments: {} })
-    );
-    const cards = [{ id: "move-1", rangeStart: 0, rangeEnd: 1 }];
-    render(<TestComponent textId={2} correctionCards={cards} defaultTypeForCard={() => null} />);
-
-    await waitFor(() => {
-      expect(screen.getByTestId("map").textContent).toContain("\"move-1\":7");
-    });
-  });
-
   it("replaces a null assignment when a default becomes available", async () => {
     const cards = [{ id: "c1", rangeStart: 0, rangeEnd: 1 }];
     const { rerender } = render(

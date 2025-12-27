@@ -300,6 +300,18 @@ describe("tokenEditorReducer core flows", () => {
     expect(state3.present.tokens.map((t) => t.text)).toEqual(["foo", "bar"]);
   });
 
+  it("creates a correction when only spacing changes around punctuation", () => {
+    const base = initState(",foo");
+    const edited = tokenEditorReducer(base, {
+      type: "EDIT_SELECTED_RANGE_AS_TEXT",
+      range: [0, 1],
+      newText: ", foo",
+    });
+    const hasHistory = edited.present.tokens.some((tok) => (tok.previousTokens ?? []).length > 0);
+    expect(hasHistory).toBe(true);
+    expect(buildTextFromTokens(edited.present.tokens)).toBe(", foo");
+  });
+
   it("preserves explicit spaces before punctuation when re-editing a correction", async () => {
     const edited = tokenEditorReducer(initState("hello world"), {
       type: "EDIT_SELECTED_RANGE_AS_TEXT",
@@ -1109,6 +1121,56 @@ describe("insertion splitting", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "hi" })).toBeTruthy());
   });
 
+  it("cancels an in-place edit with Escape after a previous edit", async () => {
+    mockGet.mockReset();
+    mockPost.mockReset();
+    localStorage.clear();
+    await renderEditor("hello world");
+    const user = userEvent.setup();
+
+    const hello = await screen.findByRole("button", { name: "hello" });
+    await user.dblClick(hello);
+    const input = await screen.findByPlaceholderText("tokenEditor.editPlaceholder");
+    await user.clear(input);
+    await user.type(input, "hi");
+    fireEvent.blur(input);
+    await waitFor(() => expect(screen.getByRole("button", { name: "hi" })).toBeTruthy());
+
+    const hi = await screen.findByRole("button", { name: "hi" });
+    await user.dblClick(hi);
+    const editAgain = await screen.findByPlaceholderText("tokenEditor.editPlaceholder");
+    await user.clear(editAgain);
+    await user.type(editAgain, "hey");
+    await user.keyboard("{Escape}");
+
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "hey" })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "hi" })).toBeInTheDocument();
+    });
+  });
+
+  it("cancels an insertion edit with Escape", async () => {
+    mockGet.mockReset();
+    mockPost.mockReset();
+    localStorage.clear();
+    await renderEditor("hello world");
+    const user = userEvent.setup();
+
+    const hello = await screen.findByRole("button", { name: "hello" });
+    await user.click(hello);
+    const insertAfter = await screen.findByTitle("tokenEditor.insertAfter (Insert)");
+    await user.click(insertAfter);
+    const input = await screen.findByPlaceholderText("tokenEditor.editPlaceholder");
+    await user.type(input, "new");
+    await user.keyboard("{Escape}");
+
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "new" })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "hello" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "world" })).toBeInTheDocument();
+    });
+  });
+
   it("clears old selection after revert and selects new edit", async () => {
     mockGet.mockReset();
     mockPost.mockReset();
@@ -1223,9 +1285,12 @@ describe("revert clears selection", () => {
       newText: "hi",
     });
     localStorage.setItem("tokenEditorPrefs:state:1", JSON.stringify(edited.present));
+    const moveMarkers = deriveMoveMarkers(edited.present.tokens);
+    const correctionCards = deriveCorrectionCards(edited.present.tokens, moveMarkers);
+    const cardId = correctionCards[0]?.id;
     localStorage.setItem(
       "tokenEditorPrefs:types:1",
-      JSON.stringify({ activeErrorTypeId: 1, assignments: {} })
+      JSON.stringify({ assignments: cardId ? { [cardId]: 1 } : {} })
     );
   };
 
@@ -1669,6 +1734,57 @@ describe("revert clears selection", () => {
     });
     const corrected = await screen.findByTestId("corrected-panel");
     await waitFor(() => expect(within(corrected).getByText("Punctuation")).toBeInTheDocument());
+  });
+
+  it("loads error types only once across re-renders", async () => {
+    localStorage.clear();
+    const user = userEvent.setup();
+    let errorTypeCalls = 0;
+    renderEditor("hello world", {
+      getImpl: (url: string) => {
+        if (url.includes("/api/error-types")) {
+          errorTypeCalls += 1;
+          return Promise.resolve({ data: [] });
+        }
+        if (url.includes("/api/texts/")) {
+          return Promise.resolve({ data: [] });
+        }
+        return Promise.resolve({ data: {} });
+      },
+    });
+    await waitFor(() => expect(errorTypeCalls).toBe(1));
+    const token = await screen.findByText("hello");
+    await user.click(token);
+    await waitFor(() => expect(errorTypeCalls).toBe(1));
+  });
+
+  it("clears the active error type after applying to a selection", async () => {
+    localStorage.clear();
+    await renderEditor("hello world", {
+      getImpl: (url: string) => {
+        if (url.includes("/api/error-types")) {
+          return Promise.resolve({
+            data: [
+              { id: 10, en_name: "Spelling", tt_name: "Spelling", is_active: true, default_color: "#38bdf8" },
+            ],
+          });
+        }
+        if (url.includes("/annotations")) return Promise.resolve({ data: [] });
+        return Promise.resolve({ data: {} });
+      },
+    });
+    const user = userEvent.setup();
+    const hello = await screen.findByRole("button", { name: "hello" });
+    await user.dblClick(hello);
+    const input = await screen.findByPlaceholderText("tokenEditor.editPlaceholder");
+    await user.clear(input);
+    await user.type(input, "hullo");
+    fireEvent.blur(input);
+    await waitFor(() => expect(screen.getByRole("button", { name: "hullo" })).toBeTruthy());
+
+    const spelling = await screen.findByRole("button", { name: "Spelling" });
+    await user.click(spelling);
+    expect(spelling).toHaveStyle("border: 1px solid rgba(148,163,184,0.35)");
   });
 
   it("hides noop error type from the picker", async () => {

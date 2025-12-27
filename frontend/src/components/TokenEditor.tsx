@@ -43,6 +43,7 @@ import {
   deriveCorrectionCards,
   deriveMoveMarkers,
   deriveOperationsFromTokens,
+  isInsertPlaceholder,
   makeEmptyPlaceholder,
   normalizeHotkeySpec,
   rangeToArray,
@@ -150,6 +151,7 @@ export const TokenEditor: React.FC<{
   const [tokenFontSize, setTokenFontSize] = useState(prefs.tokenFontSize ?? DEFAULT_TOKEN_FONT_SIZE);
   const [spaceMarker, setSpaceMarker] = useState<SpaceMarker>(normalizeSpaceMarker(prefs.spaceMarker));
   const editInputRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
+  const suppressBlurCommitRef = useRef(false);
   const tokenRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const groupRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const selectionRef = useRef(selection);
@@ -551,12 +553,14 @@ export const TokenEditor: React.FC<{
     }
   }, [location.pathname]);
 
+  const loadErrorTypes = useCallback(async () => {
+    const response = await get("/api/error-types/");
+    return response.data as ErrorType[];
+  }, [get]);
+
   const { errorTypes, isLoadingErrorTypes, errorTypesError } = useErrorTypes({
     enabled: true,
-    loadErrorTypes: async () => {
-      const response = await get("/api/error-types/");
-      return response.data as ErrorType[];
-    },
+    loadErrorTypes,
   });
 
   // Update selection highlight by toggling selected flag (not stored in history).
@@ -889,8 +893,6 @@ export const TokenEditor: React.FC<{
     [correctionCards, moveMarkers]
   );
   const {
-    activeErrorTypeId,
-    setActiveErrorTypeId,
     correctionTypeMap,
     applyTypeToCorrections,
     seedCorrectionTypes,
@@ -1037,6 +1039,7 @@ export const TokenEditor: React.FC<{
       return;
     }
     const editValue = buildEditableTextFromTokens(slice);
+    suppressBlurCommitRef.current = false;
     startEdit(activeRange, editValue);
     const desiredCaret = typeof caretIndex === "number" ? caretIndex : editValue.length;
     setTimeout(() => {
@@ -1057,12 +1060,14 @@ export const TokenEditor: React.FC<{
     const { start, end } = editingRange;
     setPendingSelectIndex(start!);
     dispatch({ type: "EDIT_SELECTED_RANGE_AS_TEXT", range: [start!, end!], newText: editText });
+    suppressBlurCommitRef.current = false;
     endEdit();
     setSelection({ start, end });
   };
 
   // Cancel edit.
   const cancelEdit = () => {
+    suppressBlurCommitRef.current = true;
     if (editingRange) {
       const s = Math.min(editingRange.start!, editingRange.end!);
       const e = Math.max(editingRange.start!, editingRange.end!);
@@ -1233,6 +1238,7 @@ export const TokenEditor: React.FC<{
         // prepare to edit the new token
         const newIndex = end + 1;
         setSelection({ start: newIndex, end: newIndex });
+        suppressBlurCommitRef.current = false;
         startEdit({ start: newIndex, end: newIndex }, "");
         setTimeout(() => editInputRef.current?.focus(), 10);
       }
@@ -1393,7 +1399,13 @@ export const TokenEditor: React.FC<{
             }}
             value={editText}
             onChange={(e) => updateEditText(e.target.value)}
-            onBlur={commitEdit}
+            onBlur={() => {
+              if (suppressBlurCommitRef.current) {
+                suppressBlurCommitRef.current = false;
+                return;
+              }
+              commitEdit();
+            }}
             onKeyDown={(e) => {
               if (e.key === "Enter") {
                 e.preventDefault();
@@ -1743,25 +1755,25 @@ export const TokenEditor: React.FC<{
 
   const applyTypeToSelection = useCallback(
     (typeId: number | null) => {
-      if (!typeId) return;
-      if (!selectedIndices.length) return;
+      if (!typeId) return false;
+      if (!selectedIndices.length) return false;
       const affectedIds = new Set<string>();
       selectedIndices.forEach((idx) => {
         const cardId = correctionByIndex.get(idx);
         if (cardId) affectedIds.add(cardId);
       });
-      if (!affectedIds.size) return;
+      if (!affectedIds.size) return false;
       applyTypeToCorrections(affectedIds, typeId);
+      return true;
     },
     [applyTypeToCorrections, correctionByIndex, selectedIndices]
   );
 
   const handleTypePick = useCallback(
     (typeId: number) => {
-      setActiveErrorTypeId((prev) => (prev === typeId ? null : typeId));
       applyTypeToSelection(typeId);
     },
-    [applyTypeToSelection, setActiveErrorTypeId]
+    [applyTypeToSelection]
   );
 
   const hotkeyMap = useMemo(() => buildHotkeyMap(errorTypes), [errorTypes]);
@@ -1833,13 +1845,13 @@ export const TokenEditor: React.FC<{
                   if (currentSelection.start === null || currentSelection.end === null) return;
                   const [s, e] = [currentSelection.start, currentSelection.end];
                   const start = Math.min(s, e);
-                  dispatch({ type: "INSERT_TOKEN_BEFORE_SELECTED", range: [start, Math.max(s, e)] });
-                  // Immediately enter edit mode on the newly inserted token.
-                  setSelection({ start, end: start });
-                  startEdit({ start, end: start }, "");
-                  setActiveErrorTypeId((prev) => prev); // preserve current active error type for hotkeys
-                  setTimeout(() => {
-                    if (editInputRef.current) {
+                dispatch({ type: "INSERT_TOKEN_BEFORE_SELECTED", range: [start, Math.max(s, e)] });
+                // Immediately enter edit mode on the newly inserted token.
+                setSelection({ start, end: start });
+                suppressBlurCommitRef.current = false;
+                startEdit({ start, end: start }, "");
+                setTimeout(() => {
+                  if (editInputRef.current) {
                       editInputRef.current.focus();
                       if (typeof editInputRef.current.setSelectionRange === "function") {
                         editInputRef.current.setSelectionRange(0, 0);
@@ -1857,8 +1869,8 @@ export const TokenEditor: React.FC<{
                   dispatch({ type: "INSERT_TOKEN_AFTER_SELECTED", range: [start, end] });
                   const newIndex = end + 1;
                   setSelection({ start: newIndex, end: newIndex });
+                  suppressBlurCommitRef.current = false;
                   startEdit({ start: newIndex, end: newIndex }, "");
-                  setActiveErrorTypeId((prev) => prev); // preserve active type for hotkeys
                   setTimeout(() => {
                     if (editInputRef.current) {
                       editInputRef.current.focus();
@@ -2119,7 +2131,6 @@ export const TokenEditor: React.FC<{
           groupedErrorTypes={groupedErrorTypes}
           errorTypesError={errorTypesError}
           isLoadingErrorTypes={isLoadingErrorTypes}
-          activeErrorTypeId={activeErrorTypeId}
           locale={locale}
           onTypePick={handleTypePick}
           onOpenSettings={handleOpenSettings}
@@ -2283,7 +2294,6 @@ type ErrorTypePanelProps = {
   groupedErrorTypes: Array<{ label: string; items: ErrorType[] }>;
   errorTypesError: string | null;
   isLoadingErrorTypes: boolean;
-  activeErrorTypeId: number | null;
   locale: string;
   onTypePick: (typeId: number) => void;
   onOpenSettings: () => void;
@@ -2294,7 +2304,6 @@ const ErrorTypePanel: React.FC<ErrorTypePanelProps> = ({
   groupedErrorTypes,
   errorTypesError,
   isLoadingErrorTypes,
-  activeErrorTypeId,
   locale,
   onTypePick,
   onOpenSettings,
@@ -2340,7 +2349,6 @@ const ErrorTypePanel: React.FC<ErrorTypePanelProps> = ({
               const chipBg =
                 colorWithAlpha(type.default_color, 0.3) ??
                 categoryColors[(groupIdx + idx) % categoryColors.length];
-              const isActiveType = activeErrorTypeId === type.id;
               const hotkey = (type.default_hotkey ?? "").trim();
               return (
                 <div
@@ -2348,8 +2356,7 @@ const ErrorTypePanel: React.FC<ErrorTypePanelProps> = ({
                   style={{
                     ...categoryChipStyle,
                     background: chipBg,
-                    border: isActiveType ? "2px solid rgba(16,185,129,0.8)" : "1px solid rgba(148,163,184,0.35)",
-                    boxShadow: isActiveType ? "0 0 0 2px rgba(16,185,129,0.25)" : "none",
+                    border: "1px solid rgba(148,163,184,0.35)",
                   }}
                   title={type.description ?? undefined}
                   role="button"

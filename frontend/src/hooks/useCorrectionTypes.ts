@@ -4,26 +4,20 @@ import { CorrectionCardLite } from "../components/TokenEditorModel";
 
 const typeKey = (textId: number) => `tokenEditorPrefs:types:${textId}`;
 
-const loadCorrectionTypes = (
-  textId: number
-): { activeErrorTypeId: number | null; assignments: Record<string, number | null> } => {
+const loadCorrectionTypes = (textId: number): { assignments: Record<string, number | null> } => {
   try {
     const raw = localStorage.getItem(typeKey(textId));
-    if (!raw) return { activeErrorTypeId: null, assignments: {} };
+    if (!raw) return { assignments: {} };
     const parsed = JSON.parse(raw);
     return {
-      activeErrorTypeId: typeof parsed?.activeErrorTypeId === "number" ? parsed.activeErrorTypeId : null,
       assignments: typeof parsed?.assignments === "object" && parsed.assignments ? parsed.assignments : {},
     };
   } catch {
-    return { activeErrorTypeId: null, assignments: {} };
+    return { assignments: {} };
   }
 };
 
-const persistCorrectionTypes = (
-  textId: number,
-  payload: { activeErrorTypeId: number | null; assignments: Record<string, number | null> }
-) => {
+const persistCorrectionTypes = (textId: number, payload: { assignments: Record<string, number | null> }) => {
   try {
     localStorage.setItem(typeKey(textId), JSON.stringify(payload));
   } catch {
@@ -38,14 +32,12 @@ type UseCorrectionTypesArgs = {
 };
 
 export const useCorrectionTypes = ({ textId, correctionCards, defaultTypeForCard }: UseCorrectionTypesArgs) => {
-  const [activeErrorTypeId, setActiveErrorTypeId] = useState<number | null>(null);
   const [correctionTypeMap, setCorrectionTypeMap] = useState<Record<string, number | null>>({});
   const [hasLoadedTypeState, setHasLoadedTypeState] = useState(false);
 
   useEffect(() => {
     setHasLoadedTypeState(false);
     const typeState = loadCorrectionTypes(textId);
-    setActiveErrorTypeId(typeState.activeErrorTypeId);
     setCorrectionTypeMap(typeState.assignments);
     setHasLoadedTypeState(true);
   }, [textId]);
@@ -59,7 +51,7 @@ export const useCorrectionTypes = ({ textId, correctionCards, defaultTypeForCard
         const hasPrev = Object.prototype.hasOwnProperty.call(prev, card.id);
         const prevValue = hasPrev ? prev[card.id] : undefined;
         if (!hasPrev) {
-          next[card.id] = defaultType ?? activeErrorTypeId ?? null;
+          next[card.id] = defaultType ?? null;
           return;
         }
         if (prevValue === null && defaultType !== null && defaultType !== undefined) {
@@ -73,12 +65,12 @@ export const useCorrectionTypes = ({ textId, correctionCards, defaultTypeForCard
         correctionCards.every((c) => prev[c.id] === next[c.id]);
       return unchanged ? prev : next;
     });
-  }, [correctionCards, activeErrorTypeId, hasLoadedTypeState, defaultTypeForCard]);
+  }, [correctionCards, hasLoadedTypeState, defaultTypeForCard]);
 
   useEffect(() => {
     if (!hasLoadedTypeState) return;
-    persistCorrectionTypes(textId, { activeErrorTypeId, assignments: correctionTypeMap });
-  }, [textId, activeErrorTypeId, correctionTypeMap, hasLoadedTypeState]);
+    persistCorrectionTypes(textId, { assignments: correctionTypeMap });
+  }, [textId, correctionTypeMap, hasLoadedTypeState]);
 
   const updateCorrectionType = useCallback((cardId: string, typeId: number | null) => {
     setCorrectionTypeMap((prev) => ({ ...prev, [cardId]: typeId }));
@@ -99,8 +91,6 @@ export const useCorrectionTypes = ({ textId, correctionCards, defaultTypeForCard
   }, []);
 
   return {
-    activeErrorTypeId,
-    setActiveErrorTypeId,
     correctionTypeMap,
     updateCorrectionType,
     applyTypeToCorrections,
