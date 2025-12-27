@@ -543,6 +543,21 @@ describe("tokenEditorReducer core flows", () => {
     expect(width).toBeLessThan(21);
   });
 
+  it("renders smaller gaps around punctuation when there is no explicit space", async () => {
+    localStorage.clear();
+    localStorage.setItem("tokenEditorPrefs", JSON.stringify({ tokenGap: 20, spaceMarker: "none" }));
+    await renderEditor("foo, bar");
+    const panel = await screen.findByTestId("corrected-panel");
+    const gapBeforeComma = panel.querySelector("[data-drop-index='1']") as HTMLElement | null;
+    const gapAfterComma = panel.querySelector("[data-drop-index='2']") as HTMLElement | null;
+    if (!gapBeforeComma || !gapAfterComma) {
+      throw new Error("Expected punctuation gaps to render");
+    }
+    const beforeWidth = parseFloat(gapBeforeComma.style.width);
+    const afterWidth = parseFloat(gapAfterComma.style.width);
+    expect(beforeWidth).toBeLessThan(afterWidth);
+  });
+
   it("renders space markers between tokens inside and outside edited groups", async () => {
     localStorage.clear();
     await renderEditor("hello world");

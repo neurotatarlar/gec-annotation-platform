@@ -74,7 +74,7 @@ const buildTokensFromFragments = (
         if (explicitSpace !== undefined) {
           spaceBefore = explicitSpace;
         } else if (fragIndex > 0) {
-          spaceBefore = true;
+          spaceBefore = tok.kind === "punct" ? false : true;
         } else if (defaultFirstSpace !== undefined) {
           spaceBefore = defaultFirstSpace;
         }
@@ -1714,6 +1714,34 @@ export const TokenEditor: React.FC<{
   // Render tokens grouped by groupId so corrected clusters share one border and centered history.
   const renderTokenGroups = (tokenList: Token[]) => {
     const spaceMarkerToUse: SpaceMarker = editingRange ? "none" : spaceMarker;
+    const baseGap = Math.max(0, tokenGap);
+    const minSpaceWidth = Math.max(2, tokenFontSize * 0.16);
+    const normalGap = Math.max(baseGap, minSpaceWidth);
+    const compactGap = Math.max(1, normalGap * 0.25);
+    const punctGap = Math.max(1, normalGap * 0.1);
+    const resolveExplicitSpace = (tok: Token | undefined, isLineStart: boolean) => {
+      if (!tok || isLineStart) return false;
+      if (tok.spaceBefore === true) return true;
+      if (tok.spaceBefore === false) return false;
+      return tok.kind !== "punct";
+    };
+    const getGapMetrics = (prevTok: Token | null, nextTok: Token | undefined, isLineStart: boolean) => {
+      if (!nextTok || isLineStart) {
+        return { width: 0, markerChar: null as string | null };
+      }
+      const explicitSpace = resolveExplicitSpace(nextTok, false);
+      const isPunctAdjacent = nextTok.kind === "punct" || prevTok?.kind === "punct";
+      const width = explicitSpace ? normalGap : isPunctAdjacent ? punctGap : compactGap;
+      const markerChar: string | null =
+        explicitSpace && spaceMarkerToUse !== "none" && !editingRange
+          ? spaceMarkerToUse === "dot"
+            ? "·"
+            : spaceMarkerToUse === "box"
+              ? "␣"
+              : null
+          : null;
+      return { width, markerChar };
+    };
     const groups: { tokens: Token[]; start: number; end: number }[] = [];
     let visibleCount = 0;
     let idx = 0;
@@ -1733,23 +1761,10 @@ export const TokenEditor: React.FC<{
     }
 
     const renderGap = (idx: number) => {
-      const base = Math.max(0, tokenGap);
       const nextTok = tokens[idx];
+      const prevTok = idx > 0 ? tokens[idx - 1] : null;
       const isLineStart = lineStartIndices.has(idx);
-      const hasSpace = !isLineStart && nextTok?.spaceBefore !== false;
-      const isPunctAdjacent = nextTok?.kind === "punct";
-      const isEdge = idx === 0 || idx >= tokens.length || isLineStart;
-      const baseWidth = isEdge ? 0 : hasSpace ? base : Math.max(0, Math.floor(base * (isPunctAdjacent ? 0.2 : 0.25)));
-      const minSpaceWidth = Math.max(2, tokenFontSize * 0.16);
-      const gapWidth = hasSpace && !isEdge ? Math.max(baseWidth, minSpaceWidth) : baseWidth;
-      const markerChar: string | null =
-        !hasSpace || isEdge || editingRange || spaceMarkerToUse === "none"
-          ? null
-          : spaceMarkerToUse === "dot"
-            ? "·"
-            : spaceMarkerToUse === "box"
-              ? "␣"
-              : null;
+      const { width: gapWidth, markerChar } = getGapMetrics(prevTok, nextTok, isLineStart);
       const markerShift = Math.max(0, tokenFontSize * 0.05);
       const markerStyle: React.CSSProperties = {
         fontSize: Math.max(8, tokenFontSize * 0.45),
@@ -1846,9 +1861,7 @@ export const TokenEditor: React.FC<{
       const groupPadY = 0;
       const groupPadX = isMoveSource ? 0 : isPurePunctGroup ? 0 : 1;
       const movePlaceholderHeight = Math.max(14, Math.round(tokenFontSize * 1.1));
-      const paddingTop = Math.max(groupPadY, tokenFontSize * (isMoveSource ? 0 : 0.12));
-      const minSpaceWidth = Math.max(2, tokenFontSize * 0.16);
-      const innerGap = Math.max(Math.max(0, tokenGap), minSpaceWidth);
+      const paddingTop = groupPadY;
       const verticalGap = Math.max(0, tokenFontSize * (isMoveSource ? 0 : 0.02));
       const displayTextForToken = (tok: Token) => {
         if (tok.kind === "empty") return "⬚";
@@ -1867,7 +1880,7 @@ export const TokenEditor: React.FC<{
                 ? Math.max(measureTextWidth("⬚", Math.max(8, Math.round(tokenFontSize * 0.75))), tokenFontSize * 0.45)
                 : Math.max(2, Math.round(tokenFontSize * 0.12))
             : Math.max(measureTextWidth(display), tokenFontSize * 0.6);
-        const gapWidth = i === 0 ? 0 : innerGap;
+        const gapWidth = i === 0 ? 0 : getGapMetrics(group.tokens[i - 1], tok, false).width;
         return acc + tokenWidth + gapWidth;
       }, 0);
       const historyWidth = historyTokens.reduce((acc, prev, i) => {
@@ -1894,6 +1907,30 @@ export const TokenEditor: React.FC<{
         : "none";
 
       const groupKey = `range:${group.start}-${group.end}`;
+      const isPlainGroup = !hasHistory && !isMoveGroup && !typeObj;
+
+      if (isPlainGroup && group.tokens.length === 1) {
+        result.push(renderToken(group.tokens[0], group.start));
+        const lineBreakHeight = Math.max(4, Math.round(tokenFontSize * 0.2));
+        const breakCount = lineBreakCountMap.get(visibleCount) ?? 0;
+        if (breakCount > 0) {
+          for (let i = 0; i < breakCount; i += 1) {
+            result.push(
+              <div
+                key={`br-${visibleCount}-${i}`}
+                data-testid="line-break"
+                style={{
+                  width: "100%",
+                  height: lineBreakHeight,
+                }}
+              />
+            );
+          }
+        }
+        result.push(renderGap(group.end + 1));
+        return;
+      }
+
       const groupNode = (
         <div
           key={`group-${groupIndex}-${group.tokens[0].id}`}
@@ -1968,18 +2005,7 @@ export const TokenEditor: React.FC<{
             {group.tokens.map((tok, i) => {
               const nodes: React.ReactNode[] = [];
               if (i > 0) {
-                const isPunctAdjacent = tok.kind === "punct";
-                const hasSpace = tok.spaceBefore !== false;
-                const baseWidth = hasSpace ? innerGap : Math.max(0, Math.floor(innerGap * (isPunctAdjacent ? 0.2 : 0.25)));
-                const gapWidth = hasSpace ? Math.max(baseWidth, minSpaceWidth) : baseWidth;
-                const markerChar: string | null =
-                  !hasSpace || spaceMarkerToUse === "none"
-                    ? null
-                    : spaceMarkerToUse === "dot"
-                      ? "·"
-                      : spaceMarkerToUse === "box"
-                        ? "␣"
-                        : null;
+                const { width: gapWidth, markerChar } = getGapMetrics(group.tokens[i - 1], tok, false);
                 const markerShift = Math.max(0, tokenFontSize * 0.05);
                 const markerStyle: React.CSSProperties = {
                   fontSize: Math.max(8, tokenFontSize * 0.45),
@@ -1989,9 +2015,9 @@ export const TokenEditor: React.FC<{
                   pointerEvents: "none",
                   userSelect: "none",
                 };
-              nodes.push(
-                <div
-                  key={`inner-gap-${group.start + i}`}
+                nodes.push(
+                  <div
+                    key={`inner-gap-${group.start + i}`}
                     data-drop-index={group.start + i}
                     style={{
                       width: gapWidth,
@@ -2415,7 +2441,7 @@ export const TokenEditor: React.FC<{
                 <span style={{ color: "#94a3b8", fontSize: 12 }}>{t("tokenEditor.spacing")}</span>
                 <button
                   style={miniNeutralButton}
-                  onClick={() => setTokenGap((g) => Math.max(0, g - 1))}
+                  onClick={() => setTokenGap((g) => Math.max(0, g - 3))}
                   title="Decrease spacing"
                 >
                   –
@@ -2433,7 +2459,7 @@ export const TokenEditor: React.FC<{
                 </button>
                 <button
                   style={miniNeutralButton}
-                  onClick={() => setTokenGap((g) => Math.min(24, g + 1))}
+                  onClick={() => setTokenGap((g) => Math.min(40, g + 3))}
                   title="Increase spacing"
                 >
                   +
@@ -2709,7 +2735,7 @@ const TokenRow: React.FC<TokenRowProps> = ({
 }) => (
   <div
     data-testid="corrected-panel"
-    style={{ ...tokenRowStyleBase, gap: Math.max(0, tokenGap) }}
+    style={{ ...tokenRowStyleBase, gap: 0 }}
     ref={rowRef}
     onDragOver={onDragOver}
     onDrop={onDrop}
@@ -2918,6 +2944,7 @@ const rowLabelStyle: React.CSSProperties = {
 const tokenRowStyleBase: React.CSSProperties = {
   display: "flex",
   flexWrap: "wrap",
+  alignItems: "flex-start",
   background: "rgba(15,23,42,0.6)",
   padding: "8px 12px",
   borderRadius: 12,

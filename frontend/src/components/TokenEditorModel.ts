@@ -498,7 +498,7 @@ const buildTokensFromFragments = (
         if (explicitSpace !== undefined) {
           spaceBefore = explicitSpace;
         } else if (fragIndex > 0) {
-          spaceBefore = true;
+          spaceBefore = tok.kind === "punct" ? false : true;
         } else if (defaultFirstSpace !== undefined) {
           spaceBefore = defaultFirstSpace;
         }
