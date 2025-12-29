@@ -1366,7 +1366,7 @@ const tokenReducer = (state: EditorHistoryState, action: Action): EditorHistoryS
         (existingGroupId ? tokens.find((t) => t.groupId === existingGroupId && t.previousTokens && t.previousTokens.length) : undefined);
       const reuseHistory = Boolean(existingGroupId && anchorExistingHistory?.previousTokens?.length);
       const baseHistoryRaw = reuseHistory ? cloneTokens(anchorExistingHistory!.previousTokens!) : flattenedOld;
-      const baseHistory = unwindHistoryTokens(baseHistoryRaw);
+      const baseHistory = dedupeTokens(unwindToOriginal(baseHistoryRaw));
       const baseVisible = baseHistory.filter((t) => t.kind !== "empty");
 
       // If the new text matches the original visible tokens exactly, treat this as a full revert.
