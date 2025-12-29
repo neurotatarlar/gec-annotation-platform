@@ -1587,6 +1587,7 @@ type BuildPayloadInput = {
   correctionTypeMap: Record<string, number | null>;
   moveMarkers: MoveMarker[];
   annotationIdMap?: Map<string, number>;
+  annotationDeleteMap?: Map<string, number[]>;
   includeDeletedIds?: boolean;
 };
 
@@ -1598,6 +1599,7 @@ export const buildAnnotationsPayloadStandalone = async ({
   correctionTypeMap,
   moveMarkers,
   annotationIdMap,
+  annotationDeleteMap,
   includeDeletedIds = false,
 }: BuildPayloadInput): Promise<AnnotationDraft[]> => {
   const textHash = await computeSha256(initialText);
@@ -1805,12 +1807,25 @@ export const buildAnnotationsPayloadStandalone = async ({
     payloads.push(draft);
   });
 
-  if (includeDeletedIds && annotationIdMap) {
+  if (includeDeletedIds && (annotationDeleteMap || annotationIdMap)) {
     const spanKeys = new Set(payloads.map((p) => `${p.start_token}-${p.end_token}`));
-    const deletedIds = Array.from(annotationIdMap.entries())
-      .filter(([span]) => !spanKeys.has(span))
-      .map(([, id]) => id);
-    (payloads as any).deleted_ids = deletedIds;
+    const sourceMap = annotationDeleteMap ?? new Map<string, number[]>();
+    const deletedIds: number[] = [];
+    if (annotationDeleteMap) {
+      annotationDeleteMap.forEach((ids, span) => {
+        if (!spanKeys.has(span)) {
+          deletedIds.push(...ids);
+        }
+      });
+    }
+    if (!annotationDeleteMap && annotationIdMap) {
+      annotationIdMap.forEach((id, span) => {
+        if (!spanKeys.has(span)) {
+          deletedIds.push(id);
+        }
+      });
+    }
+    (payloads as any).deleted_ids = Array.from(new Set(deletedIds));
   }
 
   return payloads;

@@ -42,13 +42,17 @@ export const useSaveController = ({
 
   const saveAnnotations = useCallback(async () => {
     const annotations = await buildAnnotationsPayload();
+    const embeddedDeletedIds = Array.isArray((annotations as any).deleted_ids)
+      ? ((annotations as any).deleted_ids as number[])
+      : null;
     const spans = new Set(annotations.map((ann) => `${ann.start_token}-${ann.end_token}`));
     const deletedIds =
-      annotationIdMap.current
+      embeddedDeletedIds ??
+      (annotationIdMap.current
         ? Array.from(annotationIdMap.current.entries())
             .filter(([spanKey]) => !spans.has(spanKey))
             .map(([, id]) => id)
-        : [];
+        : []);
     const { skip, nextSignature } = shouldSkipSave(lastSavedSignatureRef.current, annotations);
     if (skip) {
       lastSavedSignatureRef.current = nextSignature;

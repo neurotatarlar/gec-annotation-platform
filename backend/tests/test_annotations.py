@@ -452,6 +452,179 @@ def test_save_annotations_deletes_by_id(client):
         assert len(remaining) == 0
 
 
+def test_save_annotations_deletes_other_author_annotations(client):
+    text_id, et_id = get_seed_ids()
+    other_id = uuid.uuid4()
+    with db.SessionLocal() as session:
+        ann = Annotation(
+            text_id=text_id,
+            author_id=other_id,
+            start_token=0,
+            end_token=0,
+            replacement="old",
+            payload={"operation": "replace", "before_tokens": ["base-0"], "after_tokens": []},
+            error_type_id=et_id,
+        )
+        session.add(ann)
+        session.commit()
+        session.refresh(ann)
+        ann_id = ann.id
+
+    payload = {
+        "annotations": [],
+        "client_version": 0,
+        "deleted_ids": [ann_id],
+    }
+    resp = client.post(f"/api/texts/{text_id}/annotations", json=payload)
+    assert resp.status_code == 200, resp.text
+    with db.SessionLocal() as session:
+        remaining = session.query(Annotation).filter_by(id=ann_id).one_or_none()
+        assert remaining is None
+
+
+def test_save_annotations_deletes_other_author_and_keeps_own(client):
+    text_id, et_id = get_seed_ids()
+    other_id = uuid.uuid4()
+    with db.SessionLocal() as session:
+        other_ann = Annotation(
+            text_id=text_id,
+            author_id=other_id,
+            start_token=0,
+            end_token=0,
+            replacement="old",
+            payload={"operation": "replace", "before_tokens": ["base-0"], "after_tokens": []},
+            error_type_id=et_id,
+        )
+        own_ann = Annotation(
+            text_id=text_id,
+            author_id=TEST_USER_ID,
+            start_token=1,
+            end_token=1,
+            replacement="keep",
+            payload={"operation": "replace", "before_tokens": ["base-1"], "after_tokens": []},
+            error_type_id=et_id,
+        )
+        session.add_all([other_ann, own_ann])
+        session.commit()
+        session.refresh(other_ann)
+        session.refresh(own_ann)
+
+    payload = {
+        "annotations": [
+            {
+                "id": own_ann.id,
+                "start_token": 1,
+                "end_token": 1,
+                "replacement": "keep",
+                "error_type_id": et_id,
+                "payload": {
+                    "operation": "replace",
+                    "before_tokens": ["base-1"],
+                    "after_tokens": [{"id": "base-1", "text": "keep", "origin": "base"}],
+                    "text_sha256": sha256("hello world"),
+                },
+            }
+        ],
+        "client_version": 0,
+        "deleted_ids": [other_ann.id],
+    }
+    resp = client.post(f"/api/texts/{text_id}/annotations", json=payload)
+    assert resp.status_code == 200, resp.text
+    with db.SessionLocal() as session:
+        assert session.query(Annotation).filter_by(id=other_ann.id).one_or_none() is None
+        kept = session.query(Annotation).filter_by(id=own_ann.id).one_or_none()
+        assert kept is not None
+        assert kept.replacement == "keep"
+
+
+def test_save_annotations_conflicts_on_stale_version(client):
+    text_id, et_id = get_seed_ids()
+    with db.SessionLocal() as session:
+        ann = Annotation(
+            text_id=text_id,
+            author_id=TEST_USER_ID,
+            start_token=0,
+            end_token=0,
+            replacement="old",
+            payload={"operation": "replace", "before_tokens": ["base-0"], "after_tokens": []},
+            error_type_id=et_id,
+            version=2,
+        )
+        session.add(ann)
+        session.commit()
+
+    payload = {
+        "annotations": [
+            {
+                "start_token": 0,
+                "end_token": 0,
+                "replacement": "new",
+                "error_type_id": et_id,
+                "payload": {
+                    "operation": "replace",
+                    "before_tokens": ["base-0"],
+                    "after_tokens": [{"id": "base-0", "text": "new", "origin": "base"}],
+                    "text_sha256": sha256("hello world"),
+                },
+            }
+        ],
+        "client_version": 1,
+    }
+    resp = client.post(f"/api/texts/{text_id}/annotations", json=payload)
+    assert resp.status_code == 409, resp.text
+
+
+def test_save_annotations_reuses_row_on_idempotent_save(client):
+    text_id, et_id = get_seed_ids()
+    payload = {
+        "annotations": [
+            {
+                "start_token": 0,
+                "end_token": 0,
+                "replacement": "hi",
+                "error_type_id": et_id,
+                "payload": {
+                    "operation": "replace",
+                    "before_tokens": ["base-0"],
+                    "after_tokens": [{"id": "base-0", "text": "hi", "origin": "base"}],
+                    "text_sha256": sha256("hello world"),
+                },
+            }
+        ],
+        "client_version": 0,
+    }
+    resp1 = client.post(f"/api/texts/{text_id}/annotations", json=payload)
+    assert resp1.status_code == 200, resp1.text
+    resp2 = client.post(f"/api/texts/{text_id}/annotations", json=payload)
+    assert resp2.status_code == 200, resp2.text
+    with db.SessionLocal() as session:
+        rows = session.query(Annotation).filter_by(text_id=text_id, author_id=TEST_USER_ID).all()
+        assert len(rows) == 1
+
+
+def test_save_annotations_rejects_text_hash_mismatch(client):
+    text_id, et_id = get_seed_ids()
+    payload = {
+        "annotations": [
+            {
+                "start_token": 0,
+                "end_token": 0,
+                "replacement": "hi",
+                "error_type_id": et_id,
+                "payload": {
+                    "operation": "replace",
+                    "before_tokens": ["base-0"],
+                    "after_tokens": [{"id": "base-0", "text": "hi", "origin": "base"}],
+                    "text_sha256": sha256("different text"),
+                },
+            }
+        ],
+        "client_version": 0,
+    }
+    resp = client.post(f"/api/texts/{text_id}/annotations", json=payload)
+    assert resp.status_code == 409, resp.text
+
+
 def test_save_annotations_skips_deleted_ids_in_payload(client):
     text_id, et_id = get_seed_ids()
     with db.SessionLocal() as session:

@@ -272,6 +272,7 @@ export const TokenEditor: React.FC<{
   );
   const [serverAnnotationVersion, setServerAnnotationVersion] = useState(0);
   const annotationIdMap = useRef<Map<string, number>>(new Map());
+  const annotationDeleteMap = useRef<Map<string, number[]>>(new Map());
   const pendingLocalStateRef = useRef<EditorPresentState | null>(null);
   const hydratedFromServerRef = useRef(false);
   const handleRevert = (rangeStart: number, rangeEnd: number) => {
@@ -941,6 +942,16 @@ export const TokenEditor: React.FC<{
         const res = await get(`/api/texts/${textId}/annotations`, { params: { all_authors: true } });
         if (cancelled) return;
         const items = Array.isArray(res.data) ? res.data : [];
+        const deleteMap = new Map<string, number[]>();
+        items.forEach((ann: any) => {
+          if (ann?.id == null) return;
+          if (typeof ann.start_token !== "number" || typeof ann.end_token !== "number") return;
+          const key = `${ann.start_token}-${ann.end_token}`;
+          const existing = deleteMap.get(key) ?? [];
+          existing.push(ann.id);
+          deleteMap.set(key, existing);
+        });
+        annotationDeleteMap.current = deleteMap;
         const maxVersion = items.reduce((acc: number, ann: any) => Math.max(acc, ann?.version ?? 0), 0);
         setServerAnnotationVersion(maxVersion);
         const hydrated = hydrateFromServerAnnotations(items);
@@ -968,6 +979,7 @@ export const TokenEditor: React.FC<{
         }
         if (!items.length) {
           annotationIdMap.current = new Map<string, number>();
+          annotationDeleteMap.current = new Map<string, number[]>();
         }
       } catch {
         // ignore load errors; optimistic saves will still work
@@ -1703,6 +1715,8 @@ export const TokenEditor: React.FC<{
         correctionTypeMap,
         moveMarkers,
         annotationIdMap: annotationIdMap.current,
+        annotationDeleteMap: annotationDeleteMap.current,
+        includeDeletedIds: true,
       }),
     [annotationIdMap, correctionCards, correctionTypeMap, initialText, moveMarkers, originalTokens, tokens]
   );

@@ -1,6 +1,7 @@
 import os
 import hashlib
 import uuid
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -11,7 +12,19 @@ os.environ.setdefault("SKIP_CREATE_ALL", "1")
 
 import app.database as db
 from app.main import app
-from app.models import Annotation, AnnotationTask, AnnotationVersion, Base, Category, CrossValidationResult, ErrorType, TextSample, User, SkippedText
+from app.models import (
+    Annotation,
+    AnnotationTask,
+    AnnotationVersion,
+    Base,
+    Category,
+    CrossValidationResult,
+    ErrorType,
+    SkippedText,
+    TextSample,
+    User,
+)
+from app.routers.texts import LOCK_DURATION
 from app.services.auth import get_current_user, get_db
 
 
@@ -138,6 +151,55 @@ def test_next_text_returns_existing_assignment_for_user(client):
         refreshed = session.get(TextSample, body["text"]["id"])
         assert refreshed.locked_by_id == TEST_USER_ID
         assert refreshed.state == "in_annotation"
+        assert refreshed.locked_at is not None
+
+
+def test_next_text_skips_existing_assignment_when_flagged_by_user(client):
+    with db.SessionLocal() as session:
+        text_a = session.query(TextSample).filter_by(content="text A").one()
+        session.add(AnnotationTask(text_id=text_a.id, annotator_id=TEST_USER_ID, status="in_progress"))
+        session.add(SkippedText(text_id=text_a.id, annotator_id=TEST_USER_ID, flag_type="skip"))
+        session.commit()
+
+    resp = client.post("/api/texts/assignments/next", params={"category_id": 1})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["text"]["content"] == "text B"
+
+
+def test_next_text_skips_locked_text_and_assigns_other(client):
+    other_id = uuid.uuid4()
+    with db.SessionLocal() as session:
+        text_a = session.query(TextSample).filter_by(content="text A").one()
+        text_a.locked_by_id = other_id
+        text_a.locked_at = datetime.now(timezone.utc)
+        text_a.state = "in_annotation"
+        session.commit()
+
+    resp = client.post("/api/texts/assignments/next", params={"category_id": 1})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["text"]["content"] == "text B"
+
+
+def test_next_text_reassigns_expired_lock(client):
+    other_id = uuid.uuid4()
+    with db.SessionLocal() as session:
+        text_a = session.query(TextSample).filter_by(content="text A").one()
+        text_a.locked_by_id = other_id
+        text_a.locked_at = datetime.now(timezone.utc) - LOCK_DURATION - timedelta(
+            seconds=1
+        )
+        text_a.state = "in_annotation"
+        session.commit()
+
+    resp = client.post("/api/texts/assignments/next", params={"category_id": 1})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["text"]["content"] == "text A"
+    with db.SessionLocal() as session:
+        refreshed = session.get(TextSample, body["text"]["id"])
+        assert refreshed.locked_by_id == TEST_USER_ID
         assert refreshed.locked_at is not None
 
 

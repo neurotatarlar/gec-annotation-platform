@@ -278,6 +278,7 @@ def get_next_text(
     )
 
     terminal_statuses = ("submitted", "skip", "trash")
+    terminal_texts_subq = select(AnnotationTask.text_id).where(AnnotationTask.status.in_(terminal_statuses))
 
     existing_task_row = (
         db.query(AnnotationTask, TextSample)
@@ -287,6 +288,8 @@ def get_next_text(
             AnnotationTask.status.notin_(terminal_statuses),
             TextSample.category_id == category_id,
             TextSample.state.in_(["pending", "in_annotation"]),
+            ~AnnotationTask.text_id.in_(skipped_subquery),
+            ~TextSample.id.in_(terminal_texts_subq),
         )
         .order_by(AnnotationTask.updated_at.desc(), AnnotationTask.id.desc())
         .with_for_update(skip_locked=True)
@@ -316,8 +319,6 @@ def get_next_text(
         .correlate(TextSample)
         .scalar_subquery()
     )
-
-    terminal_texts_subq = select(AnnotationTask.text_id).where(AnnotationTask.status.in_(terminal_statuses))
 
     stmt = (
         select(TextSample)
@@ -471,7 +472,6 @@ def save_annotations(
                 db.query(Annotation)
                 .filter(
                     Annotation.text_id == text_id,
-                    Annotation.author_id == current_user.id,
                     Annotation.id.in_(deleted_ids),
                 )
                 .delete(synchronize_session=False)
