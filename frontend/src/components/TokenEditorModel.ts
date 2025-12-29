@@ -434,7 +434,7 @@ export const deriveMoveMarkers = (tokens: Token[]): MoveMarker[] => {
   return markers;
 };
 
-// Compare sequences by visible content (text + kind + spacing) ignoring ids and previousTokens.
+// Compare sequences by visible content (text + kind + spacing), ignoring leading-space differences.
 const sameTokenSequence = (existing: Token[], nextRaw: Token[]) => {
   if (existing.length !== nextRaw.length) return false;
   for (let i = 0; i < existing.length; i += 1) {
@@ -443,7 +443,7 @@ const sameTokenSequence = (existing: Token[], nextRaw: Token[]) => {
     if (
       existing[i].text !== nextRaw[i].text ||
       existing[i].kind !== nextRaw[i].kind ||
-      existingSpace !== nextSpace
+      (i > 0 && existingSpace !== nextSpace)
     ) {
       return false;
     }

@@ -189,6 +189,8 @@ export const TokenEditor: React.FC<{
   const [isTrashing, setIsTrashing] = useState(false);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [flashTypeId, setFlashTypeId] = useState<number | null>(null);
+  const flashTimerRef = useRef<number | null>(null);
 
   const updateGapPositions = useCallback(() => {
     const row = tokenRowRef.current;
@@ -210,6 +212,25 @@ export const TokenEditor: React.FC<{
       });
     });
     gapLayoutRef.current = { left: containerRect.left, top: containerRect.top, positions };
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (flashTimerRef.current) {
+        window.clearTimeout(flashTimerRef.current);
+      }
+    };
+  }, []);
+
+  const triggerTypeFlash = useCallback((typeId: number) => {
+    setFlashTypeId(typeId);
+    if (flashTimerRef.current) {
+      window.clearTimeout(flashTimerRef.current);
+    }
+    flashTimerRef.current = window.setTimeout(() => {
+      setFlashTypeId((prev) => (prev === typeId ? null : prev));
+      flashTimerRef.current = null;
+    }, 260);
   }, []);
 
   useEffect(() => {
@@ -1772,8 +1793,9 @@ export const TokenEditor: React.FC<{
   const handleTypePick = useCallback(
     (typeId: number) => {
       applyTypeToSelection(typeId);
+      triggerTypeFlash(typeId);
     },
-    [applyTypeToSelection]
+    [applyTypeToSelection, triggerTypeFlash]
   );
 
   const hotkeyMap = useMemo(() => buildHotkeyMap(errorTypes), [errorTypes]);
@@ -2131,6 +2153,7 @@ export const TokenEditor: React.FC<{
           groupedErrorTypes={groupedErrorTypes}
           errorTypesError={errorTypesError}
           isLoadingErrorTypes={isLoadingErrorTypes}
+          flashTypeId={flashTypeId}
           locale={locale}
           onTypePick={handleTypePick}
           onOpenSettings={handleOpenSettings}
@@ -2294,6 +2317,7 @@ type ErrorTypePanelProps = {
   groupedErrorTypes: Array<{ label: string; items: ErrorType[] }>;
   errorTypesError: string | null;
   isLoadingErrorTypes: boolean;
+  flashTypeId: number | null;
   locale: string;
   onTypePick: (typeId: number) => void;
   onOpenSettings: () => void;
@@ -2304,11 +2328,16 @@ const ErrorTypePanel: React.FC<ErrorTypePanelProps> = ({
   groupedErrorTypes,
   errorTypesError,
   isLoadingErrorTypes,
+  flashTypeId,
   locale,
   onTypePick,
   onOpenSettings,
   t,
-}) => (
+}) => {
+  const [hoveredTypeId, setHoveredTypeId] = useState<number | null>(null);
+  const [pressedTypeId, setPressedTypeId] = useState<number | null>(null);
+
+  return (
   <div style={categoryPanelStyle}>
     <div style={{ ...rowLabelStyle, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
       <span style={{ visibility: "hidden" }}>{t("tokenEditor.categories")}</span>
@@ -2350,18 +2379,47 @@ const ErrorTypePanel: React.FC<ErrorTypePanelProps> = ({
                 colorWithAlpha(type.default_color, 0.3) ??
                 categoryColors[(groupIdx + idx) % categoryColors.length];
               const hotkey = (type.default_hotkey ?? "").trim();
+              const isHover = hoveredTypeId === type.id;
+              const isPressed = pressedTypeId === type.id;
+              const isFlash = flashTypeId === type.id;
+              const borderColor = isPressed
+                ? "rgba(226,232,240,0.9)"
+                : isFlash
+                  ? "rgba(16,185,129,0.85)"
+                  : isHover
+                    ? "rgba(226,232,240,0.55)"
+                    : "rgba(148,163,184,0.35)";
               return (
                 <div
                   key={type.id}
                   style={{
                     ...categoryChipStyle,
-                    background: chipBg,
-                    border: "1px solid rgba(148,163,184,0.35)",
+                    background: isPressed ? colorWithAlpha(type.default_color, 0.45) ?? chipBg : chipBg,
+                    border: `${isFlash || isPressed ? 2 : 1}px solid ${borderColor}`,
+                    boxShadow: isFlash
+                      ? "0 0 0 2px rgba(16,185,129,0.25)"
+                      : isHover
+                        ? "0 0 0 1px rgba(226,232,240,0.2)"
+                        : "none",
+                    transform: isPressed ? "translateY(1px)" : "none",
+                    transition: "transform 0.08s ease, box-shadow 0.2s ease, border-color 0.2s ease",
                   }}
                   title={type.description ?? undefined}
                   role="button"
                   tabIndex={0}
                   onClick={() => onTypePick(type.id)}
+                  onMouseEnter={() => setHoveredTypeId(type.id)}
+                  onMouseLeave={() => {
+                    setHoveredTypeId((prev) => (prev === type.id ? null : prev));
+                    setPressedTypeId((prev) => (prev === type.id ? null : prev));
+                  }}
+                  onMouseDown={() => setPressedTypeId(type.id)}
+                  onMouseUp={() => setPressedTypeId((prev) => (prev === type.id ? null : prev))}
+                  onFocus={() => setHoveredTypeId(type.id)}
+                  onBlur={() => {
+                    setHoveredTypeId((prev) => (prev === type.id ? null : prev));
+                    setPressedTypeId((prev) => (prev === type.id ? null : prev));
+                  }}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" || e.key === " ") {
                       e.preventDefault();
@@ -2395,7 +2453,8 @@ const ErrorTypePanel: React.FC<ErrorTypePanelProps> = ({
       ))}
     </div>
   </div>
-);
+  );
+};
 
 // ---------------------------
 // Styles

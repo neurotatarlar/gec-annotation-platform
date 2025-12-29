@@ -300,6 +300,18 @@ describe("tokenEditorReducer core flows", () => {
     expect(state3.present.tokens.map((t) => t.text)).toEqual(["foo", "bar"]);
   });
 
+  it("does not create a correction when the edited text is unchanged", () => {
+    const base = initState("hello world");
+    const edited = tokenEditorReducer(base, {
+      type: "EDIT_SELECTED_RANGE_AS_TEXT",
+      range: [1, 1],
+      newText: "world",
+    });
+    const hasHistory = edited.present.tokens.some((tok) => (tok.previousTokens ?? []).length > 0);
+    expect(hasHistory).toBe(false);
+    expect(edited.present.tokens.map((t) => t.text)).toEqual(["hello", "world"]);
+  });
+
   it("creates a correction when only spacing changes around punctuation", () => {
     const base = initState(",foo");
     const edited = tokenEditorReducer(base, {
@@ -1784,7 +1796,11 @@ describe("revert clears selection", () => {
 
     const spelling = await screen.findByRole("button", { name: "Spelling" });
     await user.click(spelling);
-    expect(spelling).toHaveStyle("border: 1px solid rgba(148,163,184,0.35)");
+    fireEvent.mouseLeave(spelling);
+    fireEvent.blur(spelling);
+    await waitFor(() =>
+      expect(spelling).toHaveStyle("border: 1px solid rgba(148,163,184,0.35)")
+    );
   });
 
   it("hides noop error type from the picker", async () => {
