@@ -1595,7 +1595,10 @@ export const computeTokensSha256 = async (tokens: string[]): Promise<string | nu
   return computeSha256(joined);
 };
 
-export const annotationsSignature = (annotations: AnnotationDraft[]) => JSON.stringify(annotations);
+export const annotationsSignature = (annotations: AnnotationDraft[]) =>
+  JSON.stringify(
+    annotations.map(({ id, ...rest }) => rest)
+  );
 
 export const shouldSkipSave = (
   lastSignature: string | null,
@@ -1791,19 +1794,26 @@ export const buildAnnotationsPayloadStandalone = async ({
         ...originalTokens.slice(card.rangeStart, card.rangeEnd + 1).filter((tok) => tok.kind !== "empty")
       );
     }
-    const beforeIds = normalizeBeforeIds(historyTokens);
+    const historyVisible = historyTokens.filter((tok) => tok.kind !== "empty");
+    const beforeIds = normalizeBeforeIds(historyVisible);
     const afterFragments = tokens
       .slice(card.rangeStart, card.rangeEnd + 1)
       .filter((tok) => tok.kind !== "empty")
       .map(fragmentFromToken);
     const beforeText = textForIds(beforeIds);
     const afterText = afterFragments.map((f) => f.text).join(" ").trim();
+    const currentVisible = tokens
+      .slice(card.rangeStart, card.rangeEnd + 1)
+      .filter((tok) => tok.kind !== "empty");
+    const beforeTextRaw = buildEditableTextFromTokens(historyVisible);
+    const afterTextRaw = buildEditableTextFromTokens(currentVisible);
+    const whitespaceChanged = beforeTextRaw !== afterTextRaw;
     let operation: AnnotationDetailPayload["operation"] = "replace";
     if (!afterFragments.length || afterText === "") {
       operation = "delete";
     } else if (!beforeIds.length) {
       operation = "insert";
-    } else if (beforeText === afterText) {
+    } else if (beforeText === afterText && !whitespaceChanged) {
       operation = "noop";
     }
 

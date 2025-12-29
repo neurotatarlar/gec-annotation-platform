@@ -39,6 +39,8 @@ export const useSaveController = ({
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [saveStatus, setSaveStatus] = useState<SaveStatus["state"]>("idle");
   const autosaveInitializedRef = useRef(false);
+  const inFlightSignatureRef = useRef<string | null>(null);
+  const inFlightPromiseRef = useRef<Promise<void> | null>(null);
 
   const saveAnnotations = useCallback(async () => {
     const annotations = await buildAnnotationsPayload();
@@ -60,6 +62,12 @@ export const useSaveController = ({
       setSaveStatus("saved");
       return;
     }
+    if (
+      inFlightSignatureRef.current === nextSignature &&
+      inFlightPromiseRef.current
+    ) {
+      return inFlightPromiseRef.current;
+    }
     const payload: AnnotationSavePayload = {
       annotations,
       client_version: serverAnnotationVersion,
@@ -67,21 +75,33 @@ export const useSaveController = ({
     if (deletedIds.length) {
       payload.deleted_ids = deletedIds;
     }
-    const response = await post(`/api/texts/${textId}/annotations`, payload);
-    lastSavedSignatureRef.current = nextSignature;
-    const items = Array.isArray(response.data) ? response.data : [];
-    annotationIdMap.current = new Map<string, number>();
-    items.forEach((ann: any) => {
-      if (ann?.id != null && typeof ann.start_token === "number" && typeof ann.end_token === "number") {
-        const spanKey = `${ann.start_token}-${ann.end_token}`;
-        annotationIdMap.current.set(spanKey, ann.id);
+    const request = (async () => {
+      const response = await post(`/api/texts/${textId}/annotations`, payload);
+      lastSavedSignatureRef.current = nextSignature;
+      const items = Array.isArray(response.data) ? response.data : [];
+      annotationIdMap.current = new Map<string, number>();
+      items.forEach((ann: any) => {
+        if (ann?.id != null && typeof ann.start_token === "number" && typeof ann.end_token === "number") {
+          const spanKey = `${ann.start_token}-${ann.end_token}`;
+          annotationIdMap.current.set(spanKey, ann.id);
+        }
+      });
+      const maxVersion = items.reduce(
+        (acc: number, ann: any) => Math.max(acc, ann?.version ?? serverAnnotationVersion),
+        serverAnnotationVersion
+      );
+      setServerAnnotationVersion(maxVersion || serverAnnotationVersion + 1);
+    })();
+    inFlightSignatureRef.current = nextSignature;
+    inFlightPromiseRef.current = request;
+    try {
+      await request;
+    } finally {
+      if (inFlightSignatureRef.current === nextSignature) {
+        inFlightSignatureRef.current = null;
+        inFlightPromiseRef.current = null;
       }
-    });
-    const maxVersion = items.reduce(
-      (acc: number, ann: any) => Math.max(acc, ann?.version ?? serverAnnotationVersion),
-      serverAnnotationVersion
-    );
-    setServerAnnotationVersion(maxVersion || serverAnnotationVersion + 1);
+    }
   }, [
     annotationIdMap,
     buildAnnotationsPayload,

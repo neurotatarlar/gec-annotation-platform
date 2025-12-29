@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { useLocation, useNavigate } from "react-router-dom";
 
 import { useAuthedApi } from "../api/client";
@@ -277,6 +277,7 @@ export const TokenEditor: React.FC<{
   const annotationDeleteMap = useRef<Map<string, number[]>>(new Map());
   const pendingLocalStateRef = useRef<EditorPresentState | null>(null);
   const hydratedFromServerRef = useRef(false);
+  const annotationsRequestRef = useRef<number | null>(null);
   const handleRevert = (rangeStart: number, rangeEnd: number) => {
     markSkipAutoSelect();
     setPendingSelectIndex(rangeStart);
@@ -412,10 +413,17 @@ export const TokenEditor: React.FC<{
       sorted.forEach((ann: any) => {
         const payload = ann?.payload || {};
         const operation = payload.operation || (ann?.replacement ? "replace" : "noop");
-        if (operation === "noop") return;
-        if (String(operation) === "move") {
-          const afterRaw = Array.isArray(payload.after_tokens) ? payload.after_tokens : [];
-          const beforeTokensPayload = Array.isArray(payload.before_tokens) ? payload.before_tokens : [];
+        const beforeTokensPayload = Array.isArray(payload.before_tokens) ? payload.before_tokens : [];
+        const afterTokensPayload = Array.isArray(payload.after_tokens) ? payload.after_tokens : [];
+        const hasReplacement = Boolean(ann?.replacement && String(ann.replacement).length > 0);
+        const normalizedOperation =
+          operation === "noop" &&
+          (afterTokensPayload.length > 0 || beforeTokensPayload.length > 0 || hasReplacement)
+            ? "replace"
+            : operation;
+        if (normalizedOperation === "noop") return;
+        if (String(normalizedOperation) === "move") {
+          const afterRaw = afterTokensPayload;
           const moveFrom =
             typeof payload.move_from === "number"
               ? payload.move_from
@@ -507,9 +515,8 @@ export const TokenEditor: React.FC<{
         const endOriginal = typeof ann?.end_token === "number" ? ann.end_token : startOriginal;
         const targetStart = Math.max(0, Math.min(working.length, startOriginal + offsetAt(startOriginal)));
         const leadingSpace = targetStart === 0 ? false : working[targetStart]?.spaceBefore !== false;
-        const beforeTokensPayload = Array.isArray(payload.before_tokens) ? payload.before_tokens : [];
         const removeCountFromSpan =
-          operation === "insert"
+          normalizedOperation === "insert"
             ? 0
             : Math.max(0, Math.min(working.length - targetStart, Math.max(0, endOriginal - startOriginal + 1)));
         const beforeCount = beforeTokensPayload.length
@@ -518,15 +525,15 @@ export const TokenEditor: React.FC<{
         const removeCount = beforeCount > 0 ? beforeCount : removeCountFromSpan;
         const previousRaw = cloneTokens(working.slice(targetStart, targetStart + removeCount));
         const previous =
-          operation === "insert" && previousRaw.length === 0 ? [makeEmptyPlaceholder([])] : previousRaw;
-        const afterRaw = Array.isArray(payload.after_tokens) ? payload.after_tokens : [];
+          normalizedOperation === "insert" && previousRaw.length === 0 ? [makeEmptyPlaceholder([])] : previousRaw;
+        const afterRaw = afterTokensPayload;
         const replacementText = ann?.replacement ? String(ann.replacement) : "";
       const groupId = createId();
       const cardType = ann?.error_type_id ?? null;
 
       const newTokens: Token[] = [];
       const builtTokens = buildTokensFromFragments(afterRaw, replacementText, leadingSpace);
-        if (!builtTokens.length && (operation === "delete" || operation === "insert")) {
+        if (!builtTokens.length && (normalizedOperation === "delete" || normalizedOperation === "insert")) {
           newTokens.push({ ...makeEmptyPlaceholder(previous), groupId, spaceBefore: leadingSpace });
         } else {
           builtTokens.forEach((tok) => {
@@ -945,60 +952,63 @@ export const TokenEditor: React.FC<{
     [dispatch, endEdit, markSkipAutoSelect, setSelection]
   );
 
-  const { data: serverAnnotations } = useQuery({
-    queryKey: ["annotations", textId, "all-authors"],
-    enabled: Boolean(textId),
-    queryFn: async () => {
-      const res = await get(`/api/texts/${textId}/annotations`, { params: { all_authors: true } });
-      return Array.isArray(res.data) ? res.data : [];
-    },
-    staleTime: Infinity,
-    refetchOnWindowFocus: false,
-  });
-
   useEffect(() => {
-    if (!serverAnnotations) return;
-    const items = serverAnnotations;
-    const deleteMap = new Map<string, number[]>();
-    items.forEach((ann: any) => {
-      if (ann?.id == null) return;
-      if (typeof ann.start_token !== "number" || typeof ann.end_token !== "number") return;
-      const key = `${ann.start_token}-${ann.end_token}`;
-      const existing = deleteMap.get(key) ?? [];
-      existing.push(ann.id);
-      deleteMap.set(key, existing);
-    });
-    annotationDeleteMap.current = deleteMap;
-    const maxVersion = items.reduce((acc: number, ann: any) => Math.max(acc, ann?.version ?? 0), 0);
-    setServerAnnotationVersion(maxVersion);
-    const hydrated = hydrateFromServerAnnotations(items);
-    if (hydrated && !hydratedFromServerRef.current) {
-      dispatch({ type: "INIT_FROM_STATE", state: hydrated.present });
-      seedCorrectionTypes(hydrated.typeMap);
-      annotationIdMap.current = hydrated.spanMap;
-      hydratedFromServerRef.current = true;
-    } else if (!hydratedFromServerRef.current && pendingLocalStateRef.current) {
-      dispatch({ type: "INIT_FROM_STATE", state: pendingLocalStateRef.current });
-      hydratedFromServerRef.current = true;
-    } else {
-      annotationIdMap.current = new Map<string, number>();
-      items.forEach((ann: any) => {
-        if (
-          ann?.id != null &&
-          typeof ann.start_token === "number" &&
-          typeof ann.end_token === "number" &&
-          (!currentUserId || ann.author_id === currentUserId)
-        ) {
+    let cancelled = false;
+    if (annotationsRequestRef.current === textId) return () => {};
+    annotationsRequestRef.current = textId;
+    const loadExistingAnnotations = async () => {
+      try {
+        const res = await get(`/api/texts/${textId}/annotations`, { params: { all_authors: true } });
+        if (cancelled) return;
+        const items = Array.isArray(res.data) ? res.data : [];
+        const deleteMap = new Map<string, number[]>();
+        items.forEach((ann: any) => {
+          if (ann?.id == null) return;
+          if (typeof ann.start_token !== "number" || typeof ann.end_token !== "number") return;
           const key = `${ann.start_token}-${ann.end_token}`;
-          annotationIdMap.current.set(key, ann.id);
+          const existing = deleteMap.get(key) ?? [];
+          existing.push(ann.id);
+          deleteMap.set(key, existing);
+        });
+        annotationDeleteMap.current = deleteMap;
+        const maxVersion = items.reduce((acc: number, ann: any) => Math.max(acc, ann?.version ?? 0), 0);
+        setServerAnnotationVersion(maxVersion);
+        const hydrated = hydrateFromServerAnnotations(items);
+        if (hydrated && !hydratedFromServerRef.current) {
+          dispatch({ type: "INIT_FROM_STATE", state: hydrated.present });
+          seedCorrectionTypes(hydrated.typeMap);
+          annotationIdMap.current = hydrated.spanMap;
+          hydratedFromServerRef.current = true;
+        } else if (!hydratedFromServerRef.current && pendingLocalStateRef.current) {
+          dispatch({ type: "INIT_FROM_STATE", state: pendingLocalStateRef.current });
+          hydratedFromServerRef.current = true;
+        } else {
+          annotationIdMap.current = new Map<string, number>();
+          items.forEach((ann: any) => {
+            if (
+              ann?.id != null &&
+              typeof ann.start_token === "number" &&
+              typeof ann.end_token === "number" &&
+              (!currentUserId || ann.author_id === currentUserId)
+            ) {
+              const key = `${ann.start_token}-${ann.end_token}`;
+              annotationIdMap.current.set(key, ann.id);
+            }
+          });
         }
-      });
-    }
-    if (!items.length) {
-      annotationIdMap.current = new Map<string, number>();
-      annotationDeleteMap.current = new Map<string, number[]>();
-    }
-  }, [serverAnnotations, hydrateFromServerAnnotations, currentUserId, seedCorrectionTypes]);
+        if (!items.length) {
+          annotationIdMap.current = new Map<string, number>();
+          annotationDeleteMap.current = new Map<string, number[]>();
+        }
+      } catch {
+        // ignore load errors; optimistic saves will still work
+      }
+    };
+    loadExistingAnnotations();
+    return () => {
+      cancelled = true;
+    };
+  }, [get, textId, hydrateFromServerAnnotations, currentUserId, seedCorrectionTypes]);
 
   const requestNextText = useCallback(async () => {
     try {

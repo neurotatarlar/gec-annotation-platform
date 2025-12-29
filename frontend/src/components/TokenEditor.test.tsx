@@ -1035,6 +1035,32 @@ describe("buildAnnotationsPayloadStandalone", () => {
     expect(payloads[0].payload.move_to).toBeTypeOf("number");
   });
 
+  it("treats whitespace-only edits as replace operations", async () => {
+    const base = initState("foo,bar");
+    const edited = tokenEditorReducer(base, {
+      type: "EDIT_SELECTED_RANGE_AS_TEXT",
+      range: [1, 2],
+      newText: " bar",
+    });
+    const moveMarkers = deriveMoveMarkers(edited.present.tokens);
+    const correctionCards = deriveCorrectionCards(edited.present.tokens, moveMarkers);
+    const correctionTypeMap = Object.fromEntries(correctionCards.map((card) => [card.id, 1]));
+
+    const payloads = await buildAnnotationsPayloadStandalone({
+      initialText: "foo,bar",
+      tokens: edited.present.tokens,
+      originalTokens: edited.present.originalTokens,
+      correctionCards,
+      correctionTypeMap,
+      moveMarkers,
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0].payload.operation).toBe("replace");
+    const after = payloads[0].payload.after_tokens as any[];
+    expect(after[0].space_before).toBe(true);
+  });
+
   it("emits separate payloads for multiple move corrections", async () => {
     const base = initState("alpha beta gamma delta");
     const firstMove = tokenEditorReducer(base, {
@@ -1076,6 +1102,13 @@ describe("save skipping helpers", () => {
     const result = shouldSkipSave(sig, anns);
     expect(result.skip).toBe(true);
     expect(result.nextSignature).toBe(sig);
+  });
+
+  it("ignores annotation ids in signature", () => {
+    const base = { start_token: 0, end_token: 0, replacement: "a", error_type_id: 1, payload: {} as any };
+    const sigA = annotationsSignature([{ ...base, id: 1 } as any]);
+    const sigB = annotationsSignature([{ ...base, id: 2 } as any]);
+    expect(sigA).toBe(sigB);
   });
 
   it("skips initial empty payload", () => {
@@ -2451,6 +2484,42 @@ describe("TokenEditor view toggles", () => {
                   operation: "replace",
                   before_tokens: [",", "bar"],
                   after_tokens: [{ id: "b1", text: "bar", origin: "base", space_before: true }],
+                  text_tokens: ["foo", ",", "bar"],
+                },
+              },
+            ],
+          });
+        }
+        return Promise.resolve({ data: {} });
+      },
+    });
+
+    const corrected = await screen.findByTestId("corrected-panel");
+    await waitFor(() => {
+      const markers = within(corrected).queryAllByTestId("space-marker");
+      expect(markers.length).toBe(1);
+    });
+  });
+
+  it("hydrates noop payloads when after_tokens are present", async () => {
+    localStorage.clear();
+    await renderEditor("foo,bar", {
+      getImpl: (url: string) => {
+        if (url.includes("/api/error-types")) return Promise.resolve({ data: [] });
+        if (url.includes("/annotations")) {
+          return Promise.resolve({
+            data: [
+              {
+                id: 25,
+                author_id: "other",
+                start_token: 1,
+                end_token: 2,
+                replacement: "bar",
+                error_type_id: 1,
+                payload: {
+                  operation: "noop",
+                  before_tokens: [",", "bar"],
+                  after_tokens: [{ id: "b2", text: "bar", origin: "base", space_before: true }],
                   text_tokens: ["foo", ",", "bar"],
                 },
               },
