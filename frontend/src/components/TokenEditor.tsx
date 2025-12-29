@@ -873,8 +873,8 @@ export const TokenEditor: React.FC<{
     (cardId: string) => {
       if (wordOrderTypeId && moveCardIds.has(cardId)) return wordOrderTypeId;
       const whitespaceChange = getWhitespaceCorrection(cardId);
-      if (whitespaceChange === "split" && splitTypeId) return splitTypeId;
-      if (whitespaceChange === "merge" && mergeTypeId) return mergeTypeId;
+      if (whitespaceChange === "split" && mergeTypeId) return mergeTypeId;
+      if (whitespaceChange === "merge" && splitTypeId) return splitTypeId;
       if (hyphenTypeId && isHyphenCorrection(cardId)) return hyphenTypeId;
       if (punctuationTypeId && isPunctuationCorrection(cardId)) return punctuationTypeId;
       const wordEdit = getSingleWordEdit(cardId);

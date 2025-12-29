@@ -1822,7 +1822,7 @@ describe("revert clears selection", () => {
     expect(screen.queryByText("noop")).not.toBeInTheDocument();
   });
 
-  it("auto-assigns Split when adding a single whitespace", async () => {
+  it("auto-assigns Merge when adding a single whitespace", async () => {
     localStorage.clear();
     const base = initState("foobar");
     const edited = tokenEditorReducer(base, {
@@ -1835,7 +1835,7 @@ describe("revert clears selection", () => {
       getImpl: (url: string) => {
         if (url.includes("/api/error-types")) {
           return Promise.resolve({
-            data: [{ id: 30, en_name: "Split", tt_name: "Split", is_active: true, default_color: "#38bdf8" }],
+            data: [{ id: 30, en_name: "Merge", tt_name: "Merge", is_active: true, default_color: "#fbbf24" }],
           });
         }
         if (url.includes("/annotations")) return Promise.resolve({ data: [] });
@@ -1843,10 +1843,10 @@ describe("revert clears selection", () => {
       },
     });
     const corrected = await screen.findByTestId("corrected-panel");
-    await waitFor(() => expect(within(corrected).getByText("Split")).toBeInTheDocument());
+    await waitFor(() => expect(within(corrected).getByText("Merge")).toBeInTheDocument());
   });
 
-  it("auto-assigns Merge when removing a single whitespace", async () => {
+  it("auto-assigns Split when removing a single whitespace", async () => {
     localStorage.clear();
     const base = initState("foo bar");
     const edited = tokenEditorReducer(base, {
@@ -1859,7 +1859,7 @@ describe("revert clears selection", () => {
       getImpl: (url: string) => {
         if (url.includes("/api/error-types")) {
           return Promise.resolve({
-            data: [{ id: 31, en_name: "Merge", tt_name: "Merge", is_active: true, default_color: "#fbbf24" }],
+            data: [{ id: 31, en_name: "Split", tt_name: "Split", is_active: true, default_color: "#38bdf8" }],
           });
         }
         if (url.includes("/annotations")) return Promise.resolve({ data: [] });
@@ -1867,7 +1867,7 @@ describe("revert clears selection", () => {
       },
     });
     const corrected = await screen.findByTestId("corrected-panel");
-    await waitFor(() => expect(within(corrected).getByText("Merge")).toBeInTheDocument());
+    await waitFor(() => expect(within(corrected).getByText("Split")).toBeInTheDocument());
   });
 
   it("auto-assigns CapitalLowerLetter when capitalizing the first letter", async () => {
