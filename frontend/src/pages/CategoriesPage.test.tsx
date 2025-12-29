@@ -27,16 +27,18 @@ beforeEach(() => {
   mockPut.mockReset();
 });
 
-const renderPage = (categories: any[]) => {
+const renderPage = (categories: any[], qc?: QueryClient) => {
   mockGet.mockResolvedValueOnce({ data: categories });
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0, cacheTime: 0 } } });
-  return render(
+  const client =
+    qc ?? new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0, cacheTime: 0 } } });
+  const view = render(
     <MemoryRouter>
-      <QueryClientProvider client={qc}>
+      <QueryClientProvider client={client}>
         <CategoriesPage />
       </QueryClientProvider>
     </MemoryRouter>
   );
+  return { qc: client, view };
 };
 
 describe("parseUploadJson", () => {
@@ -142,5 +144,25 @@ describe("CategoriesPage interactions", () => {
 
     fireEvent.click(card as Element);
     await waitFor(() => expect(mockPost).toHaveBeenCalled());
+  });
+
+  it("caches assigned text details from next-text response", async () => {
+    const categories = [
+      { id: 1, name: "Ready", description: null, is_hidden: false, total_texts: 5, remaining_texts: 2, in_progress_texts: 0, locked_texts: 0, skipped_texts: 0, trashed_texts: 0, awaiting_review_texts: 0 },
+    ];
+    const assigned = { id: 5, content: "hello", category_id: 1 };
+    mockPost.mockResolvedValueOnce({ data: { text: assigned } });
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: Infinity, cacheTime: Infinity } },
+    });
+    const { qc: cachedClient } = renderPage(categories, qc);
+
+    const card = await screen.findByText("Ready");
+    fireEvent.click(card.closest("article")!);
+
+    await waitFor(() => expect(mockPost).toHaveBeenCalled());
+    await waitFor(() => {
+      expect(cachedClient.getQueryData(["text", "5"])).toEqual(assigned);
+    });
   });
 });

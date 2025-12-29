@@ -31,6 +31,8 @@ export const AnnotationPage: React.FC = () => {
       const response = await api.get(`/api/texts/${textId}`);
       return response.data;
     },
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
   });
 
   if (!textId) {

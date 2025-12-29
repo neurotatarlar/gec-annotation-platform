@@ -92,7 +92,10 @@ export const CategoriesPage = () => {
       const response = await api.post<AssignmentResponse>("/api/texts/assignments/next", null, {
         params: { category_id: category.id }
       });
-      navigate(`/annotate/${response.data.text.id}`);
+      const assignedText = response.data?.text;
+      if (assignedText?.id == null) return;
+      queryClient.setQueryData(["text", String(assignedText.id)], assignedText);
+      navigate(`/annotate/${assignedText.id}`);
     } catch (err) {
       const detail = (err as any)?.response?.data?.detail;
       if ((err as any)?.response?.status === 404) {

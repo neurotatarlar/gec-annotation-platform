@@ -11,6 +11,10 @@ const apiMocks = vi.hoisted(() => ({
   mockPut: vi.fn(),
 }));
 
+const queryClientMocks = vi.hoisted(() => ({
+  invalidateQueries: vi.fn(),
+}));
+
 vi.mock("../context/I18nContext", () => ({
   useI18n: () => ({ t: (k: string) => k, locale: "en" }),
 }));
@@ -51,7 +55,7 @@ vi.mock("@tanstack/react-query", () => {
     isPending: false,
   });
 
-  const useQueryClient = () => ({ invalidateQueries: vi.fn() });
+  const useQueryClient = () => queryClientMocks;
   const QueryClientProvider = ({ children }: { children: React.ReactNode }) => <>{children}</>;
 
   return { useQuery, useMutation, useQueryClient, QueryClientProvider };
@@ -71,6 +75,7 @@ describe("SettingsPage", () => {
     apiMocks.mockGet.mockReset();
     apiMocks.mockPost.mockReset();
     apiMocks.mockPut.mockReset();
+    queryClientMocks.invalidateQueries.mockReset();
     apiMocks.mockGet.mockImplementation((url: string) => {
       if (url === "/api/error-types/") return Promise.resolve({ data: [] });
       if (url === "/api/auth/me") return Promise.resolve({ data: { id: "u1", username: "tester", role: "admin" } });
@@ -117,5 +122,11 @@ describe("SettingsPage", () => {
     const saveButton = screen.getByText("settings.profileSave");
     expect(saveButton).toBeDisabled();
     expect(apiMocks.mockPut).not.toHaveBeenCalled();
+  });
+
+  it("invalidates error types cache when navigating back", async () => {
+    await setup();
+    fireEvent.click(screen.getByText("common.back"));
+    expect(queryClientMocks.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["error-types"] });
   });
 });

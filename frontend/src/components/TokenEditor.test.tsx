@@ -1790,6 +1790,26 @@ describe("revert clears selection", () => {
     await waitFor(() => expect(errorTypeCalls).toBe(1));
   });
 
+  it("loads annotations only once on initial render", async () => {
+    localStorage.clear();
+    const user = userEvent.setup();
+    let annotationCalls = 0;
+    renderEditor("hello world", {
+      getImpl: (url: string) => {
+        if (url.includes("/api/error-types")) return Promise.resolve({ data: [] });
+        if (url.includes("/annotations")) {
+          annotationCalls += 1;
+          return Promise.resolve({ data: [] });
+        }
+        return Promise.resolve({ data: {} });
+      },
+    });
+    await waitFor(() => expect(annotationCalls).toBe(1));
+    const token = await screen.findByText("hello");
+    await user.click(token);
+    await waitFor(() => expect(annotationCalls).toBe(1));
+  });
+
   it("clears the active error type after applying to a selection", async () => {
     localStorage.clear();
     await renderEditor("hello world", {
@@ -2409,6 +2429,42 @@ describe("TokenEditor view toggles", () => {
         .filter((el) => el.getAttribute("aria-pressed") !== null)
         .map((el) => el.textContent);
       expect(tokens.slice(0, 3)).toEqual(["foo", ",", "bar"]);
+    });
+  });
+
+  it("hydrates leading-space edits between punctuation and a word", async () => {
+    localStorage.clear();
+    await renderEditor("foo,bar", {
+      getImpl: (url: string) => {
+        if (url.includes("/api/error-types")) return Promise.resolve({ data: [] });
+        if (url.includes("/annotations")) {
+          return Promise.resolve({
+            data: [
+              {
+                id: 24,
+                author_id: "other",
+                start_token: 1,
+                end_token: 2,
+                replacement: "bar",
+                error_type_id: 1,
+                payload: {
+                  operation: "replace",
+                  before_tokens: [",", "bar"],
+                  after_tokens: [{ id: "b1", text: "bar", origin: "base", space_before: true }],
+                  text_tokens: ["foo", ",", "bar"],
+                },
+              },
+            ],
+          });
+        }
+        return Promise.resolve({ data: {} });
+      },
+    });
+
+    const corrected = await screen.findByTestId("corrected-panel");
+    await waitFor(() => {
+      const markers = within(corrected).queryAllByTestId("space-marker");
+      expect(markers.length).toBe(1);
     });
   });
 

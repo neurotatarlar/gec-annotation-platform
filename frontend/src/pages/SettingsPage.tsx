@@ -350,6 +350,7 @@ export const SettingsPage = () => {
   const lastAnnotationPath =
     typeof window !== "undefined" ? window.localStorage.getItem("lastAnnotationPath") : null;
   const handleBack = () => {
+    queryClient.invalidateQueries({ queryKey: ["error-types"] });
     if (lastAnnotationPath) {
       navigate(lastAnnotationPath);
     } else {

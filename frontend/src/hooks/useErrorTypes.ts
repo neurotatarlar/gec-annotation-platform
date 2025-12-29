@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
+import { useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
 
 import { ErrorType } from "../types";
 
@@ -8,36 +9,31 @@ type UseErrorTypesArgs = {
 };
 
 export const useErrorTypes = ({ enabled, loadErrorTypes }: UseErrorTypesArgs) => {
-  const [errorTypes, setErrorTypes] = useState<ErrorType[]>([]);
-  const [isLoadingErrorTypes, setIsLoadingErrorTypes] = useState(false);
-  const [errorTypesError, setErrorTypesError] = useState<string | null>(null);
+  const query = useQuery({
+    queryKey: ["error-types"],
+    queryFn: loadErrorTypes,
+    enabled,
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+    refetchOnMount: true,
+  });
 
-  const load = useCallback(async () => {
-    setIsLoadingErrorTypes(true);
-    setErrorTypesError(null);
-    try {
-      const raw = await loadErrorTypes();
-      const filtered = raw.filter((item) => (item.en_name ?? "").trim().toLowerCase() !== "noop");
-      setErrorTypes(filtered);
-    } catch (error: any) {
-      setErrorTypesError(error?.response?.data?.detail ?? error?.message ?? String(error));
-    } finally {
-      setIsLoadingErrorTypes(false);
-    }
-  }, [loadErrorTypes]);
+  const errorTypes = useMemo(
+    () =>
+      (query.data ?? []).filter(
+        (item) => (item.en_name ?? "").trim().toLowerCase() !== "noop"
+      ),
+    [query.data]
+  );
+  const errorTypesError =
+    (query.error as any)?.response?.data?.detail ??
+    (query.error as any)?.message ??
+    (query.error ? String(query.error) : null);
 
-  useEffect(() => {
-    if (!enabled) return;
-    let cancelled = false;
-    const run = async () => {
-      await load();
-      if (cancelled) return;
-    };
-    run();
-    return () => {
-      cancelled = true;
-    };
-  }, [enabled, load]);
-
-  return { errorTypes, isLoadingErrorTypes, errorTypesError, reload: load };
+  return {
+    errorTypes,
+    isLoadingErrorTypes: query.isLoading,
+    errorTypesError,
+    reload: query.refetch,
+  };
 };
