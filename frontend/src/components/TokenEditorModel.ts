@@ -84,9 +84,59 @@ type Action =
 // Utilities
 // ---------------------------
 // Treat any non-letter/number/non-space as punctuation/symbol.
-const punctuation = /[^\p{L}\p{N}\s]/u;
+const punctOnly = /^[^\p{L}\p{N}\s]+$/u;
 let idCounter = 0;
 export const createId = () => `token-${idCounter++}`;
+
+const buildTokenFromText = (text: string, hadSpace: boolean, isFirst: boolean): Token => {
+  const isSpecial = isSpecialTokenText(text);
+  const isPunct = !isSpecial && punctOnly.test(text);
+  return {
+    id: createId(),
+    text,
+    kind: isSpecial ? "special" : isPunct ? "punct" : "word",
+    selected: false,
+    spaceBefore: isSpecial ? undefined : isFirst ? false : hadSpace,
+    origin: undefined,
+  };
+};
+
+const getLeadingSpace = (tokens: Token[], index: number): boolean =>
+  index === 0 ? false : tokens[index]?.spaceBefore !== false;
+
+const buildSpanKey = (start: number, end: number): string => `${start}-${end}`;
+
+const readExplicitSpace = (fragment: any): boolean | undefined => {
+  if (typeof fragment?.space_before === "boolean") return fragment.space_before;
+  if (typeof fragment?.spaceBefore === "boolean") return fragment.spaceBefore;
+  return undefined;
+};
+
+const buildPlaceholderToken = (previousTokens: Token[], overrides: Partial<Token> = {}): Token => ({
+  id: createId(),
+  text: "⬚",
+  kind: "empty",
+  selected: false,
+  previousTokens,
+  origin: undefined,
+  ...overrides,
+});
+
+export const buildTokenFragment = (tok: Token): TokenFragmentPayload => {
+  const fragment: TokenFragmentPayload = {
+    id: tok.id,
+    text: tok.text,
+    origin: tok.origin === "inserted" ? "inserted" : "base",
+    source_id:
+      tok.origin === "inserted"
+        ? tok.previousTokens?.find((p) => p.kind !== "empty")?.id ?? null
+        : tok.id,
+  };
+  if (typeof tok.spaceBefore === "boolean") {
+    fragment.space_before = tok.spaceBefore;
+  }
+  return fragment;
+};
 
 export type HotkeySpec = {
   key: string;
@@ -168,13 +218,7 @@ export const tokenizeToTokens = (text: string): Token[] => {
         const raw = res[0];
         const value = raw.replace(/[.,;:!?]+$/, "");
         const advanceBy = value.length || raw.length;
-        tokens.push({
-          id: createId(),
-          text: value,
-          kind: "special",
-          selected: false,
-          origin: undefined,
-        });
+        tokens.push(buildTokenFromText(value, hadSpace, tokens.length === 0));
         idx += advanceBy;
         matched = true;
         break;
@@ -186,15 +230,7 @@ export const tokenizeToTokens = (text: string): Token[] => {
     const baseMatch = baseRegex.exec(text);
     if (baseMatch && baseMatch.index === idx) {
       const value = baseMatch[0];
-      const isWord = !punctuation.test(value);
-      tokens.push({
-        id: createId(),
-        text: value,
-        kind: isWord ? "word" : "punct",
-        selected: false,
-        spaceBefore: hadSpace,
-        origin: undefined,
-      });
+      tokens.push(buildTokenFromText(value, hadSpace, tokens.length === 0));
       idx += value.length;
       continue;
     }
@@ -206,8 +242,22 @@ export const tokenizeToTokens = (text: string): Token[] => {
   return tokens;
 };
 
+export const computeLineBreaksFromText = (text: string): number[] => {
+  const breaks: number[] = [];
+  if (!text) return breaks;
+  const lines = text.split(/\n/);
+  let count = 0;
+  lines.forEach((line, idx) => {
+    const lineTokens = tokenizeToTokens(line);
+    count += lineTokens.filter((t) => t.kind !== "empty").length;
+    if (idx < lines.length - 1) {
+      breaks.push(count);
+    }
+  });
+  return breaks;
+};
+
 export const buildTokensFromSnapshot = (snapshot: string[], sourceText: string): Token[] => {
-  const punctOnly = /^[^\p{L}\p{N}\s]+$/u;
   const tokens: Token[] = [];
   let cursor = 0;
   snapshot.forEach((text, idx) => {
@@ -221,21 +271,215 @@ export const buildTokensFromSnapshot = (snapshot: string[], sourceText: string):
       hasSpace = hasSpace || /\s/.test(sourceText.slice(cursor, nextIndex));
       cursor = nextIndex;
     }
-    const isSpecial = isSpecialTokenText(text);
-    const isPunct = !isSpecial && punctOnly.test(text);
-    tokens.push({
-      id: createId(),
-      text,
-      kind: isSpecial ? "special" : isPunct ? "punct" : "word",
-      selected: false,
-      spaceBefore: idx === 0 ? false : hasSpace || !isPunct,
-      origin: undefined,
-    });
+    tokens.push(buildTokenFromText(text, hasSpace, idx === 0));
     if (nextIndex >= 0) {
       cursor += text.length;
     }
   });
   return tokens;
+};
+
+type HydrationResult = {
+  present: EditorPresentState;
+  typeMap: Record<string, number | null>;
+  spanMap: Map<string, number>;
+};
+
+export const hydrateFromServerAnnotations = ({
+  items,
+  initialText,
+  currentUserId,
+}: {
+  items: any[];
+  initialText: string;
+  currentUserId?: string | null;
+}): HydrationResult | null => {
+  if (!items?.length) return null;
+  const snapshotTokens = items.find(
+    (ann: any) => Array.isArray(ann?.payload?.text_tokens) && ann.payload.text_tokens.length
+  )?.payload?.text_tokens as string[] | undefined;
+  const baseTokens = snapshotTokens?.length
+    ? buildTokensFromSnapshot(snapshotTokens, initialText)
+    : tokenizeToTokens(initialText);
+  const originalById = new Map<string, Token>();
+  baseTokens.forEach((tok) => {
+    if (tok.kind === "empty") return;
+    originalById.set(tok.id, tok);
+  });
+  let working = cloneTokens(baseTokens);
+  const offsetDeltas: Array<{ start: number; delta: number }> = [];
+  const offsetAt = (index: number) =>
+    offsetDeltas.reduce((acc, entry) => (entry.start <= index ? acc + entry.delta : acc), 0);
+  const typeMap: Record<string, number | null> = {};
+  const spanMap = new Map<string, number>();
+  const sorted = [...items].sort((a, b) => {
+    const startA = a?.start_token ?? 0;
+    const startB = b?.start_token ?? 0;
+    if (startA !== startB) return startA - startB;
+    const opA = a?.payload?.operation || (a?.replacement ? "replace" : "noop");
+    const opB = b?.payload?.operation || (b?.replacement ? "replace" : "noop");
+    const priority = (op: string) => (op === "move" ? 0 : 1);
+    const prioDiff = priority(opA) - priority(opB);
+    if (prioDiff !== 0) return prioDiff;
+    return (a?.end_token ?? 0) - (b?.end_token ?? 0);
+  });
+  sorted.forEach((ann: any) => {
+    const payload = ann?.payload || {};
+    const operation = payload.operation || (ann?.replacement ? "replace" : "noop");
+    const beforeTokensPayload = Array.isArray(payload.before_tokens) ? payload.before_tokens : [];
+    const afterTokensPayload = Array.isArray(payload.after_tokens) ? payload.after_tokens : [];
+    const hasReplacement = Boolean(ann?.replacement && String(ann.replacement).length > 0);
+    const normalizedOperation =
+      operation === "noop" &&
+      (afterTokensPayload.length > 0 || beforeTokensPayload.length > 0 || hasReplacement)
+        ? "replace"
+        : operation;
+    if (normalizedOperation === "noop") return;
+    if (String(normalizedOperation) === "move") {
+      const afterRaw = afterTokensPayload;
+      const moveFrom =
+        typeof payload.move_from === "number"
+          ? payload.move_from
+          : typeof payload.moveFrom === "number"
+            ? payload.moveFrom
+            : typeof ann?.start_token === "number"
+              ? ann.start_token
+              : 0;
+      const moveTo =
+        typeof payload.move_to === "number"
+          ? payload.move_to
+          : typeof payload.moveTo === "number"
+            ? payload.moveTo
+            : typeof ann?.start_token === "number"
+              ? ann.start_token
+              : 0;
+      const moveLen =
+        typeof payload.move_len === "number"
+          ? payload.move_len
+          : afterRaw.length
+            ? afterRaw.length
+            : beforeTokensPayload.length
+              ? beforeTokensPayload.length
+              : 1;
+      const sourceStart = Math.max(0, Math.min(working.length, moveFrom + offsetAt(moveFrom)));
+      const sourceEnd = Math.max(sourceStart, Math.min(working.length - 1, sourceStart + moveLen - 1));
+      const moveId = `move-${createId()}`;
+
+      const mappedHistory = beforeTokensPayload
+        .map((id: string) => originalById.get(id))
+        .filter(Boolean)
+        .map((tok) => ({ ...tok!, selected: false, previousTokens: undefined }));
+      const historyTokens = mappedHistory.length
+        ? mappedHistory
+        : unwindHistoryTokens(working.slice(sourceStart, sourceEnd + 1));
+      const placeholder = buildPlaceholderToken(historyTokens, {
+        groupId: `move-src-${moveId}`,
+        moveId,
+        spaceBefore: working[sourceStart]?.spaceBefore ?? true,
+      });
+
+      const rawMovedTokens = afterRaw.length
+        ? buildTokensFromFragments(afterRaw, "", undefined)
+        : cloneTokens(working.slice(sourceStart, sourceEnd + 1));
+
+      working.splice(sourceStart, sourceEnd - sourceStart + 1);
+      working.splice(sourceStart, 0, placeholder);
+
+      let insertionIndex = Math.max(0, Math.min(working.length, moveTo + offsetAt(moveTo)));
+      if (insertionIndex > sourceEnd + 1) {
+        insertionIndex -= sourceEnd - sourceStart + 1;
+      }
+      if (insertionIndex >= sourceStart) {
+        insertionIndex += 1;
+      }
+      insertionIndex = Math.max(0, Math.min(working.length, insertionIndex));
+      const leadingSpace = getLeadingSpace(working, insertionIndex);
+
+      const movedTokens = rawMovedTokens.map((tok, idx) => ({
+        ...tok,
+        id: createId(),
+        groupId: `move-dest-${moveId}`,
+        moveId,
+        spaceBefore: idx === 0 ? leadingSpace : tok.spaceBefore,
+        previousTokens: tok.previousTokens ? cloneTokens(tok.previousTokens) : tok.previousTokens,
+      }));
+
+      working.splice(insertionIndex, 0, ...movedTokens);
+      typeMap[moveId] = ann?.error_type_id ?? null;
+      const spanStart = moveTo;
+      const spanEnd = moveTo + Math.max(1, movedTokens.length) - 1;
+      if (currentUserId && ann?.author_id === currentUserId && ann?.id != null) {
+        spanMap.set(buildSpanKey(spanStart, spanEnd), ann.id);
+      }
+      const deltaSource = 1 - moveLen;
+      const deltaDest = movedTokens.length;
+      offsetDeltas.push({ start: moveFrom, delta: deltaSource });
+      offsetDeltas.push({ start: moveTo, delta: deltaDest });
+      return;
+    }
+    const startOriginal = typeof ann?.start_token === "number" ? ann.start_token : 0;
+    const endOriginal = typeof ann?.end_token === "number" ? ann.end_token : startOriginal;
+    const targetStart = Math.max(0, Math.min(working.length, startOriginal + offsetAt(startOriginal)));
+    const leadingSpace = getLeadingSpace(working, targetStart);
+    const removeCountFromSpan =
+      normalizedOperation === "insert"
+        ? 0
+        : Math.max(0, Math.min(working.length - targetStart, Math.max(0, endOriginal - startOriginal + 1)));
+    const beforeCount = beforeTokensPayload.length
+      ? Math.min(working.length - targetStart, beforeTokensPayload.length)
+      : 0;
+    const removeCount = beforeCount > 0 ? beforeCount : removeCountFromSpan;
+    const previousRaw = cloneTokens(working.slice(targetStart, targetStart + removeCount));
+    const previous =
+      normalizedOperation === "insert" && previousRaw.length === 0 ? [makeEmptyPlaceholder([])] : previousRaw;
+    const afterRaw = afterTokensPayload;
+    const replacementText = ann?.replacement ? String(ann.replacement) : "";
+    const groupId = createId();
+    const cardType = ann?.error_type_id ?? null;
+
+    const newTokens: Token[] = [];
+    const builtTokens = buildTokensFromFragments(afterRaw, replacementText, leadingSpace);
+    if (!builtTokens.length && (normalizedOperation === "delete" || normalizedOperation === "insert")) {
+      newTokens.push(buildPlaceholderToken(previous, { groupId, spaceBefore: leadingSpace }));
+    } else {
+      builtTokens.forEach((tok) => {
+        newTokens.push({
+          ...tok,
+          id: createId(),
+          groupId,
+          selected: false,
+          previousTokens: cloneTokens(previous),
+        });
+      });
+    }
+    if (newTokens.length) {
+      const firstFrag = Array.isArray(afterRaw) ? afterRaw[0] : null;
+      const hasExplicitSpace = firstFrag && typeof firstFrag === "object" && readExplicitSpace(firstFrag) !== undefined;
+      if (!hasExplicitSpace) {
+        newTokens[0].spaceBefore = leadingSpace;
+      }
+    }
+    const removal = removeCount;
+    working.splice(targetStart, removal, ...newTokens);
+    typeMap[groupId] = cardType;
+    if (
+      currentUserId &&
+      ann?.author_id === currentUserId &&
+      ann?.id != null &&
+      typeof ann.start_token === "number" &&
+      typeof ann.end_token === "number"
+    ) {
+      spanMap.set(buildSpanKey(ann.start_token, ann.end_token), ann.id);
+    }
+    const delta = newTokens.length - removal;
+    offsetDeltas.push({ start: startOriginal, delta });
+  });
+  const present: EditorPresentState = {
+    originalTokens: cloneTokens(baseTokens),
+    tokens: working,
+    operations: [],
+  };
+  return { present, typeMap, spanMap };
 };
 
 // When editing an existing correction, respect the literal text the annotator typed,
@@ -251,15 +495,7 @@ export const tokenizeEditedText = (text: string): Token[] => {
       spaceBefore = true;
       return;
     }
-    const isWord = /[\p{L}\p{N}]/u.test(part);
-    tokens.push({
-      id: createId(),
-      text: part,
-      kind: isWord ? "word" : "punct",
-      selected: false,
-      spaceBefore,
-      origin: undefined,
-    });
+    tokens.push(buildTokenFromText(part, spaceBefore, tokens.length === 0));
     spaceBefore = false;
   });
   return tokens;
@@ -291,14 +527,8 @@ export const cloneTokens = (items: Token[]) =>
     moveId: t.moveId,
   }));
 
-export const makeEmptyPlaceholder = (previousTokens: Token[]): Token => ({
-  id: createId(),
-  text: "⬚",
-  kind: "empty",
-  selected: false,
-  previousTokens,
-  origin: undefined,
-});
+export const makeEmptyPlaceholder = (previousTokens: Token[]): Token =>
+  buildPlaceholderToken(previousTokens);
 
 // Unwind correction chains to the earliest known state (walk previousTokens until none).
 export const unwindToOriginal = (tokens: Token[]): Token[] => {
@@ -312,6 +542,15 @@ export const unwindToOriginal = (tokens: Token[]): Token[] => {
   });
   return result;
 };
+
+const restoreHistoryTokens = (items: Token[]): Token[] =>
+  unwindHistoryTokens(items).map((tok) => ({
+    ...tok,
+    selected: false,
+    previousTokens: undefined,
+    moveId: undefined,
+    groupId: undefined,
+  }));
 
 // Remove ⬚ tokens that carry no history (pure placeholders).
 export const dropRedundantEmpties = (tokens: Token[]): Token[] =>
@@ -346,6 +585,35 @@ export const findGroupRangeForTokens = (tokens: Token[], idx: number): [number, 
   while (l - 1 >= 0 && tokens[l - 1]?.groupId === tok.groupId) l -= 1;
   while (r + 1 < tokens.length && tokens[r + 1]?.groupId === tok.groupId) r += 1;
   return [l, r];
+};
+
+const expandRangeByGroupKey = (
+  tokens: Token[],
+  start: number,
+  end: number,
+  getKey: (tok: Token | undefined) => string | number | null | undefined
+): [number, number] => {
+  let rangeStart = start;
+  let rangeEnd = end;
+  let expanded = true;
+  while (expanded) {
+    expanded = false;
+    for (let i = rangeStart; i <= rangeEnd; i += 1) {
+      const key = getKey(tokens[i]);
+      if (key == null) continue;
+      let l = i;
+      let r = i;
+      while (l - 1 >= 0 && getKey(tokens[l - 1]) === key) l -= 1;
+      while (r + 1 < tokens.length && getKey(tokens[r + 1]) === key) r += 1;
+      if (l < rangeStart || r > rangeEnd) {
+        rangeStart = Math.min(rangeStart, l);
+        rangeEnd = Math.max(rangeEnd, r);
+        expanded = true;
+        break;
+      }
+    }
+  }
+  return [rangeStart, rangeEnd];
 };
 
 export const deriveCorrectionCards = (tokens: Token[], moveMarkers: MoveMarker[]): CorrectionCardLite[] => {
@@ -503,6 +771,45 @@ const buildHistoryTokensForSpan = (originalTokens: Token[], start: number, end: 
   }));
 };
 
+const unwindHistoryTokens = (items: Token[]): Token[] =>
+  dedupeTokens(unwindToOriginal(cloneTokens(items))).filter((tok) => tok.kind !== "empty");
+
+const getOriginalSpanForToken = (
+  tok: Token,
+  originalIndexById: Map<string, number>
+): { min: number; max: number } | null => {
+  if (tok.moveId) return null;
+  const indices: number[] = [];
+  const direct = originalIndexById.get(tok.id);
+  if (direct !== undefined) indices.push(direct);
+    if (tok.previousTokens?.length) {
+      const originals = unwindToOriginal(tok.previousTokens);
+      originals.forEach((prev) => {
+        const idx = originalIndexById.get(prev.id);
+        if (idx !== undefined) indices.push(idx);
+      });
+  }
+  if (!indices.length) return null;
+  return { min: Math.min(...indices), max: Math.max(...indices) };
+};
+
+const findInsertionIndexFromTokens = (
+  tokens: Token[],
+  originalIndexById: Map<string, number>,
+  rangeStart: number,
+  rangeEnd: number
+): number => {
+  for (let i = rangeStart - 1; i >= 0; i -= 1) {
+    const span = getOriginalSpanForToken(tokens[i], originalIndexById);
+    if (span) return span.max + 1;
+  }
+  for (let i = rangeEnd + 1; i < tokens.length; i += 1) {
+    const span = getOriginalSpanForToken(tokens[i], originalIndexById);
+    if (span) return span.min;
+  }
+  return 0;
+};
+
 export const buildTokensFromFragments = (
   fragments: TokenFragmentPayload[],
   fallbackText: string,
@@ -516,12 +823,7 @@ export const buildTokensFromFragments = (
     const text = typeof frag?.text === "string" ? frag.text : "";
     if (!text) return;
     const origin = originOverride ?? (frag?.origin === "inserted" ? "inserted" : undefined);
-    const explicitSpace =
-      typeof (frag as any)?.space_before === "boolean"
-        ? (frag as any).space_before
-        : typeof (frag as any)?.spaceBefore === "boolean"
-          ? (frag as any).spaceBefore
-          : undefined;
+    const explicitSpace = readExplicitSpace(frag);
     const baseTokens = tokenizeEditedText(text);
     baseTokens.forEach((tok, idx) => {
       let spaceBefore = tok.spaceBefore;
@@ -569,7 +871,7 @@ const applyOperations = (originalTokens: Token[], operations: Operation[]): Toke
     const startOriginal = op.start;
     const endOriginal = op.end;
     const targetStart = Math.max(0, Math.min(working.length, startOriginal + offset));
-    const leadingSpace = targetStart === 0 ? false : working[targetStart]?.spaceBefore !== false;
+    const leadingSpace = getLeadingSpace(working, targetStart);
     const removeCount = op.type === "insert" ? 0 : Math.max(0, endOriginal - startOriginal + 1);
     const historyTokens = op.type === "insert" ? [] : buildHistoryTokensForSpan(originalTokens, op.start, op.end);
     const history = op.type === "insert" ? [makeEmptyPlaceholder([])] : historyTokens;
@@ -590,12 +892,7 @@ const applyOperations = (originalTokens: Token[], operations: Operation[]): Toke
       ];
     } else if (!builtTokens.length && op.type === "delete") {
       newTokens = [
-        {
-          ...makeEmptyPlaceholder(history),
-          id: `${op.id}-ph`,
-          groupId: op.id,
-          spaceBefore: leadingSpace,
-        },
+        buildPlaceholderToken(history, { id: `${op.id}-ph`, groupId: op.id, spaceBefore: leadingSpace }),
       ];
     } else {
       newTokens = builtTokens.map((tok, idx) => ({
@@ -608,9 +905,7 @@ const applyOperations = (originalTokens: Token[], operations: Operation[]): Toke
     }
     if (newTokens.length) {
       const firstFrag = op.after[0];
-      const hasExplicitSpace =
-        typeof (firstFrag as any)?.space_before === "boolean" ||
-        typeof (firstFrag as any)?.spaceBefore === "boolean";
+      const hasExplicitSpace = readExplicitSpace(firstFrag) !== undefined;
       if (!hasExplicitSpace) {
         newTokens[0].spaceBefore = leadingSpace;
       }
@@ -629,45 +924,16 @@ export const deriveOperationsFromTokens = (originalTokens: Token[], tokens: Toke
     if (tok.kind !== "empty") originalIndexById.set(tok.id, idx);
   });
 
-  const getOriginalSpanForToken = (tok: Token): { min: number; max: number } | null => {
-    if (tok.moveId) return null;
-    const indices: number[] = [];
-    const direct = originalIndexById.get(tok.id);
-    if (direct !== undefined) indices.push(direct);
-    if (tok.previousTokens?.length) {
-      const originals = unwindToOriginal(cloneTokens(tok.previousTokens));
-      originals.forEach((prev) => {
-        const idx = originalIndexById.get(prev.id);
-        if (idx !== undefined) indices.push(idx);
-      });
-    }
-    if (!indices.length) return null;
-    return { min: Math.min(...indices), max: Math.max(...indices) };
-  };
-
-  const findInsertionIndex = (rangeStart: number, rangeEnd: number) => {
-    for (let i = rangeStart - 1; i >= 0; i -= 1) {
-      const span = getOriginalSpanForToken(tokens[i]);
-      if (span) return span.max + 1;
-    }
-    for (let i = rangeEnd + 1; i < tokens.length; i += 1) {
-      const span = getOriginalSpanForToken(tokens[i]);
-      if (span) return span.min;
-    }
-    return 0;
-  };
+  const findInsertionIndex = (rangeStart: number, rangeEnd: number) =>
+    findInsertionIndexFromTokens(tokens, originalIndexById, rangeStart, rangeEnd);
 
   const tokensToFragments = (items: Token[]): TokenFragmentPayload[] =>
     items
       .filter((tok) => tok.kind !== "empty" && tok.text !== "")
       .map((tok) => {
-        const fragment: TokenFragmentPayload = {
-          text: tok.text,
-          origin: tok.origin === "inserted" ? "inserted" : "base",
-        };
-        if (typeof tok.spaceBefore === "boolean") {
-          fragment.space_before = tok.spaceBefore;
-        }
+        const fragment = buildTokenFragment(tok);
+        delete (fragment as Partial<TokenFragmentPayload>).id;
+        delete (fragment as Partial<TokenFragmentPayload>).source_id;
         return fragment;
       });
 
@@ -692,7 +958,7 @@ export const deriveOperationsFromTokens = (originalTokens: Token[], tokens: Toke
         historyTokens.push(...cloneTokens(t.previousTokens));
       }
     });
-    const baseHistory = dedupeTokens(unwindToOriginal(historyTokens)).filter((t) => t.kind !== "empty");
+    const baseHistory = unwindHistoryTokens(historyTokens);
     const baseIndices = baseHistory
       .map((t) => originalIndexById.get(t.id))
       .filter((idx): idx is number => idx !== undefined);
@@ -705,7 +971,9 @@ export const deriveOperationsFromTokens = (originalTokens: Token[], tokens: Toke
     } else {
       type = "replace";
     }
-    const spanStart = baseIndices.length ? Math.min(...baseIndices) : findInsertionIndex(rangeStart, rangeEnd);
+    const spanStart = baseIndices.length
+      ? Math.min(...baseIndices)
+      : findInsertionIndexFromTokens(tokens, originalIndexById, rangeStart, rangeEnd);
     const spanEnd = baseIndices.length ? Math.max(...baseIndices) : spanStart;
     operations.push({
       id: opId,
@@ -818,70 +1086,12 @@ const tokenReducer = (state: EditorHistoryState, action: Action): EditorHistoryS
         }
       }
       // Expand selection to include the whole inserted group if selection intersects it.
-      let expanded = true;
-      while (expanded) {
-        expanded = false;
-        for (let i = start; i <= end; i += 1) {
-          const tok = tokens[i];
-          if (tok?.origin === "inserted") {
-            const gid = tok.groupId ?? null;
-            let l = i;
-            let r = i;
-            while (
-              l - 1 >= 0 &&
-              tokens[l - 1].origin === "inserted" &&
-              (tokens[l - 1].groupId ?? null) === gid
-            ) {
-              l -= 1;
-            }
-            while (
-              r + 1 < tokens.length &&
-              tokens[r + 1].origin === "inserted" &&
-              (tokens[r + 1].groupId ?? null) === gid
-            ) {
-              r += 1;
-            }
-            if (l < start || r > end) {
-              start = Math.min(start, l);
-              end = Math.max(end, r);
-              expanded = true;
-              break;
-            }
-          }
-        }
-      }
+      [start, end] = expandRangeByGroupKey(tokens, start, end, (tok) =>
+        tok?.origin === "inserted" ? (tok.groupId ?? "__inserted__") : null
+      );
       // Expand selection to include entire correction group (e.g., split result) sharing the same groupId that carries history.
-      expanded = true;
-      while (expanded) {
-        expanded = false;
-        for (let i = start; i <= end; i += 1) {
-          const tok = tokens[i];
-          if (tok?.groupId) {
-            const gid = tok.groupId;
-            let l = i;
-            let r = i;
-            while (
-              l - 1 >= 0 &&
-              tokens[l - 1].groupId === gid
-            ) {
-              l -= 1;
-            }
-            while (
-              r + 1 < tokens.length &&
-              tokens[r + 1].groupId === gid
-            ) {
-              r += 1;
-            }
-            if (l < start || r > end) {
-              start = Math.min(start, l);
-              end = Math.max(end, r);
-              expanded = true;
-              break;
-            }
-          }
-        }
-      }
-      const leadingSpace = start === 0 ? false : tokens[start]?.spaceBefore !== false;
+      [start, end] = expandRangeByGroupKey(tokens, start, end, (tok) => tok?.groupId ?? null);
+      const leadingSpace = getLeadingSpace(tokens, start);
       const removed = tokens.slice(start, end + 1);
       const anchorIndex =
         typeof action.anchorIndex === "number" && action.anchorIndex >= start && action.anchorIndex <= end
@@ -893,17 +1103,11 @@ const tokenReducer = (state: EditorHistoryState, action: Action): EditorHistoryS
         const replacement: Token[] = [];
         removed.forEach((tok, idx) => {
           if (idx === anchorIndex) {
-            const restore = dedupeTokens(unwindToOriginal(cloneTokens(tok.previousTokens ?? []))).map((restored) => ({
-              ...restored,
-              previousTokens: undefined,
-              selected: false,
-              origin: restored.origin,
-              moveId: undefined,
-            }));
+            const restore = restoreHistoryTokens(tok.previousTokens ?? []);
             if (restore.length) {
               replacement.push(...restore);
             } else {
-              replacement.push({ ...makeEmptyPlaceholder([]), selected: false });
+              replacement.push(buildPlaceholderToken([], { selected: false }));
             }
           } else {
             replacement.push({ ...tok, selected: false });
@@ -927,14 +1131,7 @@ const tokenReducer = (state: EditorHistoryState, action: Action): EditorHistoryS
         const replacement: Token[] = [];
         removed.forEach((tok) => {
           if (tok.previousTokens && tok.previousTokens.length) {
-            const restore = dedupeTokens(unwindToOriginal(cloneTokens(tok.previousTokens))).map((restored) => ({
-              ...restored,
-              previousTokens: undefined,
-              selected: false,
-              origin: restored.origin,
-              moveId: undefined,
-            }));
-            replacement.push(...restore);
+            replacement.push(...restoreHistoryTokens(tok.previousTokens));
           } else {
             replacement.push({ ...tok, selected: false });
           }
@@ -950,12 +1147,13 @@ const tokenReducer = (state: EditorHistoryState, action: Action): EditorHistoryS
         const next: EditorPresentState = { ...state.present, tokens };
         return pushPresent(state, next);
       }
-      const previousTokens = dedupeTokens(removed.flatMap((t) => unwindToOriginal([t])).map((tok) => ({ ...tok, selected: false })));
+      const previousTokens = unwindHistoryTokens(
+        removed.flatMap((t) => unwindToOriginal([t])).map((tok) => ({ ...tok, selected: false }))
+      );
       if (!previousTokens.length) {
         previousTokens.push(makeEmptyPlaceholder([]));
       }
-      const placeholder = makeEmptyPlaceholder(previousTokens);
-      placeholder.spaceBefore = leadingSpace;
+      const placeholder = buildPlaceholderToken(previousTokens, { spaceBefore: leadingSpace });
       tokens.splice(start, removed.length, placeholder);
       const next: EditorPresentState = { ...state.present, tokens };
       return pushPresent(state, next);
@@ -995,7 +1193,7 @@ const tokenReducer = (state: EditorHistoryState, action: Action): EditorHistoryS
         }
         insertionIndex = Math.max(0, Math.min(tokens.length, insertionIndex));
 
-        const leadingSpace = insertionIndex === 0 ? false : tokens[insertionIndex]?.spaceBefore !== false;
+        const leadingSpace = getLeadingSpace(tokens, insertionIndex);
         const movedTokens = removedDest.map((tok, idx) => ({
           ...tok,
           groupId: `move-dest-${moveId}`,
@@ -1008,20 +1206,13 @@ const tokenReducer = (state: EditorHistoryState, action: Action): EditorHistoryS
         return pushPresent(state, next);
       }
 
-      const placeholderHistory = dedupeTokens(unwindToOriginal(movedSlice)).map((tok) => ({
-        ...tok,
-        previousTokens: undefined,
-        selected: false,
-        groupId: undefined,
-        moveId: undefined,
-      }));
+      const placeholderHistory = restoreHistoryTokens(movedSlice);
       const moveId = `move-${createId()}`;
-      const placeholder = {
-        ...makeEmptyPlaceholder(placeholderHistory),
+      const placeholder = buildPlaceholderToken(placeholderHistory, {
         groupId: `move-src-${moveId}`,
         moveId,
         spaceBefore: movedSlice[0]?.spaceBefore ?? true,
-      };
+      });
 
       tokens.splice(fromStart, movedSlice.length);
       tokens.splice(fromStart, 0, placeholder);
@@ -1035,7 +1226,7 @@ const tokenReducer = (state: EditorHistoryState, action: Action): EditorHistoryS
       }
       insertionIndex = Math.max(0, Math.min(tokens.length, insertionIndex));
 
-      const leadingSpace = insertionIndex === 0 ? false : tokens[insertionIndex]?.spaceBefore !== false;
+      const leadingSpace = getLeadingSpace(tokens, insertionIndex);
       const movedTokens = movedSlice.map((tok, idx) => ({
         ...tok,
         groupId: `move-dest-${moveId}`,
@@ -1062,16 +1253,9 @@ const tokenReducer = (state: EditorHistoryState, action: Action): EditorHistoryS
       }
       const placeholderSpan = marker.fromEnd - marker.fromStart + 1;
       const placeholder = tokens.slice(placeholderIndex, placeholderIndex + placeholderSpan).find((t) => t.moveId === action.moveId && t.kind === "empty");
-      const history =
-        placeholder?.previousTokens?.length
-          ? dedupeTokens(unwindToOriginal(cloneTokens(placeholder.previousTokens))).map((t) => ({
-              ...t,
-              selected: false,
-              previousTokens: undefined,
-              moveId: undefined,
-              groupId: undefined,
-            }))
-          : [];
+      const history = placeholder?.previousTokens?.length
+        ? restoreHistoryTokens(placeholder.previousTokens)
+        : [];
       tokens.splice(placeholderIndex, placeholderSpan, ...history);
       const cleaned = dropRedundantEmpties(tokens);
       const next: EditorPresentState = { ...state.present, tokens: cleaned };
@@ -1081,7 +1265,7 @@ const tokenReducer = (state: EditorHistoryState, action: Action): EditorHistoryS
       if (!action.range) return state;
       const [start] = action.range;
       const tokens = cloneTokens(state.present.tokens);
-      const leadingSpace = start === 0 ? false : tokens[start]?.spaceBefore !== false;
+      const leadingSpace = getLeadingSpace(tokens, start);
       const inserted: Token = {
         id: createId(),
         text: "",
@@ -1123,11 +1307,12 @@ const tokenReducer = (state: EditorHistoryState, action: Action): EditorHistoryS
       // Always expand the edit to the full correction group so re-edits stay in-place.
       const gid = tokens[start]?.groupId;
       if (gid) {
-        while (start - 1 >= 0 && tokens[start - 1]?.groupId === gid) start -= 1;
-        while (end + 1 < tokens.length && tokens[end + 1]?.groupId === gid) end += 1;
+        [start, end] = expandRangeByGroupKey(tokens, start, end, (tok) =>
+          tok?.groupId === gid ? gid : null
+        );
       }
       let oldSlice = tokens.slice(start, end + 1);
-      const leadingSpace = start === 0 ? false : tokens[start]?.spaceBefore !== false;
+      const leadingSpace = getLeadingSpace(tokens, start);
       const hasExplicitLeadingSpace = /^\s/.test(action.newText);
       const whitespaceOnly = /^\s+$/.test(action.newText);
       let newTokensRaw = tokenizeEditedText(action.newText);
@@ -1181,19 +1366,12 @@ const tokenReducer = (state: EditorHistoryState, action: Action): EditorHistoryS
         (existingGroupId ? tokens.find((t) => t.groupId === existingGroupId && t.previousTokens && t.previousTokens.length) : undefined);
       const reuseHistory = Boolean(existingGroupId && anchorExistingHistory?.previousTokens?.length);
       const baseHistoryRaw = reuseHistory ? cloneTokens(anchorExistingHistory!.previousTokens!) : flattenedOld;
-      const baseHistory = dedupeTokens(unwindToOriginal(baseHistoryRaw));
+      const baseHistory = unwindHistoryTokens(baseHistoryRaw);
       const baseVisible = baseHistory.filter((t) => t.kind !== "empty");
 
       // If the new text matches the original visible tokens exactly, treat this as a full revert.
       if (newTokensRaw.length && sameTokenSequence(baseVisible, newTokensRaw)) {
-        const restored = baseVisible.map((tok) => ({
-          ...tok,
-          selected: false,
-          previousTokens: undefined,
-          groupId: undefined,
-          moveId: undefined,
-        }));
-        tokens.splice(start, oldSlice.length, ...restored);
+        tokens.splice(start, oldSlice.length, ...restoreHistoryTokens(baseVisible));
         const cleaned = dropRedundantEmpties(tokens);
         const next: EditorPresentState = {
           ...state.present,
@@ -1205,7 +1383,7 @@ const tokenReducer = (state: EditorHistoryState, action: Action): EditorHistoryS
       const groupId = reuseHistory && existingGroupId ? existingGroupId : createId();
       let replacement: Token[] = newTokensRaw.length
         ? cloneTokens(newTokensRaw).map((tok) => ({ ...tok, groupId, moveId: moveIdReuse }))
-        : [{ ...makeEmptyPlaceholder([]), moveId: moveIdReuse }];
+        : [buildPlaceholderToken([], { moveId: moveIdReuse })];
       if (oldSliceAllInserted) {
         replacement = replacement.map((tok) => ({ ...tok, origin: "inserted" }));
       }
@@ -1282,12 +1460,7 @@ const tokenReducer = (state: EditorHistoryState, action: Action): EditorHistoryS
       const replacementRaw = tokens[anchorIdx].previousTokens?.length
         ? cloneTokens(tokens[anchorIdx].previousTokens!)
         : [makeEmptyPlaceholder([])];
-      const replacement = dedupeTokens(unwindToOriginal(replacementRaw)).map((tok) => ({
-        ...tok,
-        previousTokens: undefined,
-        selected: false,
-        moveId: undefined,
-      }));
+      const replacement = restoreHistoryTokens(replacementRaw);
       const rangeLen = rangeEnd - rangeStart + 1;
       // If the replacement is just a single empty placeholder with no history, drop the correction entirely.
       const isJustEmpty =
@@ -1695,51 +1868,10 @@ export const buildAnnotationsPayloadStandalone = async ({
       .join(" ")
       .trim();
 
-  const getOriginalSpanForToken = (tok: Token): { min: number; max: number } | null => {
-    if (tok.moveId) return null;
-    const indices: number[] = [];
-    const direct = originalIndexById.get(tok.id);
-    if (direct !== undefined) {
-      indices.push(direct);
-    }
-    if (tok.previousTokens?.length) {
-      const originals = unwindToOriginal(cloneTokens(tok.previousTokens));
-      originals.forEach((prev) => {
-        const idx = originalIndexById.get(prev.id);
-        if (idx !== undefined) indices.push(idx);
-      });
-    }
-    if (!indices.length) return null;
-    return { min: Math.min(...indices), max: Math.max(...indices) };
-  };
+  const findInsertionIndex = (rangeStart: number, rangeEnd: number) =>
+    findInsertionIndexFromTokens(tokens, originalIndexById, rangeStart, rangeEnd);
 
-  const findInsertionIndex = (rangeStart: number, rangeEnd: number) => {
-    for (let i = rangeStart - 1; i >= 0; i -= 1) {
-      const span = getOriginalSpanForToken(tokens[i]);
-      if (span) return span.max + 1;
-    }
-    for (let i = rangeEnd + 1; i < tokens.length; i += 1) {
-      const span = getOriginalSpanForToken(tokens[i]);
-      if (span) return span.min;
-    }
-    return 0;
-  };
-
-  const fragmentFromToken = (tok: Token): TokenFragmentPayload => {
-    const fragment: TokenFragmentPayload = {
-      id: tok.id,
-      text: tok.text,
-      origin: tok.origin === "inserted" ? "inserted" : "base",
-      source_id:
-        tok.origin === "inserted"
-          ? tok.previousTokens?.find((p) => p.kind !== "empty")?.id ?? null
-          : tok.id,
-    };
-    if (typeof tok.spaceBefore === "boolean") {
-      fragment.space_before = tok.spaceBefore;
-    }
-    return fragment;
-  };
+  const fragmentFromToken = buildTokenFragment;
 
   const moveMarkerById = new Map<string, MoveMarker>();
   moveMarkers.forEach((marker) => moveMarkerById.set(marker.id, marker));
@@ -1774,7 +1906,7 @@ export const buildAnnotationsPayloadStandalone = async ({
         .map((id) => originalIndexById.get(id))
         .filter((idx): idx is number => idx !== undefined);
       const moveFrom = moveFromIndices.length ? Math.min(...moveFromIndices) : moveMarker.fromStart;
-      const moveTo = findInsertionIndex(moveRangeStart, moveRangeEnd);
+      const moveTo = findInsertionIndexFromTokens(tokens, originalIndexById, moveRangeStart, moveRangeEnd);
       const moveLength = Math.max(1, beforeIds.length || afterFragments.length || 1);
       const replacement = afterFragments.length ? afterFragments.map((f) => f.text).join(" ").trim() : null;
       const payload: AnnotationDetailPayload = {
@@ -1798,7 +1930,7 @@ export const buildAnnotationsPayloadStandalone = async ({
         error_type_id: typeId,
         payload,
       };
-      const spanKey = `${spanStart}-${spanEnd}`;
+      const spanKey = buildSpanKey(spanStart, spanEnd);
       const existingId = annotationIdMap?.get(spanKey);
       if (existingId !== undefined) {
         draft.id = existingId;
@@ -1811,7 +1943,7 @@ export const buildAnnotationsPayloadStandalone = async ({
     for (let idx = card.rangeStart; idx <= card.rangeEnd; idx += 1) {
       const tok = tokens[idx];
       if (tok?.previousTokens?.length) {
-        historyTokens.push(...unwindToOriginal(cloneTokens(tok.previousTokens)));
+        historyTokens.push(...unwindToOriginal(tok.previousTokens));
       }
     }
     if (!historyTokens.length) {
@@ -1846,7 +1978,7 @@ export const buildAnnotationsPayloadStandalone = async ({
     const beforeIndices = beforeIds
       .map((id) => originalIndexById.get(id))
       .filter((idx): idx is number => idx !== undefined);
-    const insertionIndex = findInsertionIndex(card.rangeStart, card.rangeEnd);
+    const insertionIndex = findInsertionIndexFromTokens(tokens, originalIndexById, card.rangeStart, card.rangeEnd);
     const spanStart = beforeIndices.length ? Math.min(...beforeIndices) : insertionIndex;
     const spanEnd = beforeIndices.length ? Math.max(...beforeIndices) : insertionIndex;
 
@@ -1866,7 +1998,7 @@ export const buildAnnotationsPayloadStandalone = async ({
       error_type_id: typeId,
       payload,
     };
-    const spanKey = `${spanStart}-${spanEnd}`;
+    const spanKey = buildSpanKey(spanStart, spanEnd);
     const existingId = annotationIdMap?.get(spanKey);
     if (existingId !== undefined) {
       draft.id = existingId;
@@ -1875,7 +2007,7 @@ export const buildAnnotationsPayloadStandalone = async ({
   });
 
   if (includeDeletedIds && (annotationDeleteMap || annotationIdMap)) {
-    const spanKeys = new Set(payloads.map((p) => `${p.start_token}-${p.end_token}`));
+    const spanKeys = new Set(payloads.map((p) => buildSpanKey(p.start_token, p.end_token)));
     const sourceMap = annotationDeleteMap ?? new Map<string, number[]>();
     const deletedIds: number[] = [];
     if (annotationDeleteMap) {

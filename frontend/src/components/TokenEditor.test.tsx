@@ -11,6 +11,7 @@ import {
   buildTextFromTokens,
   buildTextFromTokensWithBreaks,
   buildM2Preview,
+  computeLineBreaksFromText,
   computeTokensSha256,
   buildAnnotationsPayloadStandalone,
   shouldSkipSave,
@@ -18,6 +19,8 @@ import {
   buildAnnotationsPayloadStandalone as buildStandalone,
   TokenEditor,
   tokenEditorReducer,
+  buildTokensFromSnapshot,
+  hydrateFromServerAnnotations,
   tokenizeToTokens,
   deriveMoveMarkers,
   deriveCorrectionCards,
@@ -275,8 +278,56 @@ describe("tokenEditorReducer core flows", () => {
     localStorage.clear();
     const url = "https://example.com";
     await renderEditor(`Visit ${url} now`);
-    const token = await screen.findByText(url);
+    const panel = await screen.findByTestId("corrected-panel");
+    const token = within(panel).getByRole("button", { name: url });
     expect(token).toHaveAttribute("tabindex", "-1");
+  });
+
+  it("keeps snapshot tokenization aligned with initial parsing", () => {
+    const text = "Hello,world www.example.com\nNext line";
+    const initialTokens = tokenizeToTokens(text);
+    const snapshot = initialTokens.map((t) => t.text);
+    const snapshotTokens = buildTokensFromSnapshot(snapshot, text);
+    expect(snapshotTokens.length).toBe(initialTokens.length);
+    snapshotTokens.forEach((tok, idx) => {
+      const initial = initialTokens[idx];
+      expect(tok.text).toBe(initial.text);
+      expect(tok.kind).toBe(initial.kind);
+      expect(tok.spaceBefore).toBe(initial.spaceBefore);
+    });
+  });
+
+  it("computes line breaks using the shared tokenizer", () => {
+    const url = "https://example.com";
+    const breaks = computeLineBreaksFromText(`foo ${url}\nbar`);
+    expect(breaks).toEqual([2]);
+  });
+
+  it("hydrates server annotations via the model helper", () => {
+    const text = "foo bar";
+    const hydrated = hydrateFromServerAnnotations({
+      items: [
+        {
+          id: 1,
+          author_id: "other",
+          start_token: 1,
+          end_token: 1,
+          replacement: "baz",
+          error_type_id: 1,
+          payload: {
+            operation: "replace",
+            before_tokens: ["token-1"],
+            after_tokens: [{ id: "t1", text: "baz", origin: "base" }],
+            text_tokens: ["foo", "bar"],
+          },
+        },
+      ],
+      initialText: text,
+      currentUserId: "other",
+    });
+    expect(hydrated).not.toBeNull();
+    const tokens = hydrated!.present.tokens.filter((tok) => tok.kind !== "empty").map((tok) => tok.text);
+    expect(tokens).toEqual(["foo", "baz"]);
   });
 
   it("handles complex URLs with query chars without splitting", () => {
@@ -1837,6 +1888,25 @@ describe("revert clears selection", () => {
     await waitFor(() => expect(errorTypeCalls).toBe(1));
   });
 
+  it("loads error types only once in strict mode", async () => {
+    localStorage.clear();
+    let errorTypeCalls = 0;
+    renderEditor("hello world", {
+      strict: true,
+      getImpl: (url: string) => {
+        if (url.includes("/api/error-types")) {
+          errorTypeCalls += 1;
+          return Promise.resolve({ data: [] });
+        }
+        if (url.includes("/api/texts/")) {
+          return Promise.resolve({ data: [] });
+        }
+        return Promise.resolve({ data: {} });
+      },
+    });
+    await waitFor(() => expect(errorTypeCalls).toBe(1));
+  });
+
   it("loads annotations only once on initial render", async () => {
     localStorage.clear();
     const user = userEvent.setup();
@@ -1854,6 +1924,23 @@ describe("revert clears selection", () => {
     await waitFor(() => expect(annotationCalls).toBe(1));
     const token = await screen.findByText("hello");
     await user.click(token);
+    await waitFor(() => expect(annotationCalls).toBe(1));
+  });
+
+  it("loads annotations only once in strict mode", async () => {
+    localStorage.clear();
+    let annotationCalls = 0;
+    renderEditor("hello world", {
+      strict: true,
+      getImpl: (url: string) => {
+        if (url.includes("/api/error-types")) return Promise.resolve({ data: [] });
+        if (url.includes("/annotations")) {
+          annotationCalls += 1;
+          return Promise.resolve({ data: [] });
+        }
+        return Promise.resolve({ data: {} });
+      },
+    });
     await waitFor(() => expect(annotationCalls).toBe(1));
   });
 

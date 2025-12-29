@@ -4,7 +4,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 
 import { useAuthedApi } from "../api/client";
 import { useI18n } from "../context/I18nContext";
-import { ErrorType, SaveStatus, TokenFragmentPayload } from "../types";
+import { ErrorType, SaveStatus } from "../types";
 import { useCorrectionSelection } from "../hooks/useCorrectionSelection";
 import { useCorrectionTypes } from "../hooks/useCorrectionTypes";
 import { useEditorUIState } from "../hooks/useEditorUIState";
@@ -33,11 +33,11 @@ import {
   HotkeySpec,
   MoveMarker,
   Token,
-  buildTokensFromSnapshot,
+  computeLineBreaksFromText,
+  hydrateFromServerAnnotations as hydrateFromServerAnnotationsModel,
   buildAnnotationsPayloadStandalone,
   buildEditableTextFromTokens,
   buildHotkeyMap,
-  buildTokensFromFragments,
   buildTextFromTokensWithBreaks,
   cloneTokens,
   createId,
@@ -247,27 +247,17 @@ export const TokenEditor: React.FC<{
   }, [prefs.viewTab]);
   const [viewTab, setViewTab] = useState<"original" | "corrected">(initialViewTab);
   const [isTextPanelOpen, setIsTextPanelOpen] = useState<boolean>(prefs.textPanelOpen ?? true);
-  const computeLineBreaks = useCallback((text: string) => {
-    const breaks: number[] = [];
-    const lines = text.split(/\n/);
-    let count = 0;
-    lines.forEach((line, idx) => {
-      const lineTokens = tokenizeToTokens(line);
-      count += lineTokens.filter((t) => t.kind !== "empty").length;
-      if (idx < lines.length - 1) {
-        breaks.push(count);
-      }
-    });
-    return breaks;
-  }, []);
-  const lineBreaks = useMemo(() => computeLineBreaks(initialText), [initialText, computeLineBreaks]);
-  const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
-  const lineBreakCountMap = useMemo(() => {
+  const lineBreaks = useMemo(
+    () => computeLineBreaksFromText(initialText),
+    [initialText]
+  );
+  const { lineBreakSet, lineBreakCountMap } = useMemo(() => {
+    const set = new Set(lineBreaks);
     const map = new Map<number, number>();
     lineBreaks.forEach((idx) => {
       map.set(idx, (map.get(idx) ?? 0) + 1);
     });
-    return map;
+    return { lineBreakSet: set, lineBreakCountMap: map };
   }, [lineBreaks]);
   const lastSavedSignatureRef = useRef<string | null>(null);
   const [lastDecision, setLastDecision] = useState<"skip" | "trash" | "submit" | null>(
@@ -309,41 +299,6 @@ export const TokenEditor: React.FC<{
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
   }, [updateGapPositions]);
-  const baseTokenMap = useMemo(() => {
-    const map = new Map<string, Token>();
-    originalTokens.forEach((tok) => {
-      if (tok.kind !== "empty") {
-        map.set(tok.id, tok);
-      }
-    });
-    return map;
-  }, [originalTokens]);
-  const textForIds = useCallback(
-    (ids: string[]) =>
-      buildEditableTextFromTokens(
-        ids.map((id) => baseTokenMap.get(id)).filter(Boolean) as Token[]
-      ),
-    [baseTokenMap]
-  );
-  const toFragment = useCallback(
-    (tok: Token): TokenFragmentPayload => {
-      const fragment: TokenFragmentPayload = {
-        id: tok.id,
-        text: tok.text,
-        origin: tok.origin === "inserted" ? "inserted" : "base",
-        source_id:
-          tok.origin === "inserted"
-            ? tok.previousTokens?.find((p) => p.kind !== "empty")?.id ?? null
-            : tok.id,
-      };
-      if (typeof tok.spaceBefore === "boolean") {
-        fragment.space_before = tok.spaceBefore;
-      }
-      return fragment;
-    },
-    []
-  );
-
   const formatError = useCallback((error: any): string => {
     const detail = error?.response?.data?.detail ?? error?.message ?? String(error);
     if (typeof detail === "string") return detail;
@@ -384,205 +339,13 @@ export const TokenEditor: React.FC<{
   }, [initialText, textId]);
 
   const hydrateFromServerAnnotations = useCallback(
-    (items: any[]) => {
-      if (!items?.length) return null;
-      const snapshotTokens = items.find(
-        (ann: any) => Array.isArray(ann?.payload?.text_tokens) && ann.payload.text_tokens.length
-      )?.payload?.text_tokens as string[] | undefined;
-      const baseTokens = snapshotTokens?.length
-        ? buildTokensFromSnapshot(snapshotTokens, initialText)
-        : tokenizeToTokens(initialText);
-      let working = cloneTokens(baseTokens);
-      const offsetDeltas: Array<{ start: number; delta: number }> = [];
-      const offsetAt = (index: number) =>
-        offsetDeltas.reduce((acc, entry) => (entry.start <= index ? acc + entry.delta : acc), 0);
-      const typeMap: Record<string, number | null> = {};
-      const spanMap = new Map<string, number>();
-      const sorted = [...items].sort((a, b) => {
-        const startA = a?.start_token ?? 0;
-        const startB = b?.start_token ?? 0;
-        if (startA !== startB) return startA - startB;
-        const opA =
-          a?.payload?.operation || (a?.replacement ? "replace" : "noop");
-        const opB =
-          b?.payload?.operation || (b?.replacement ? "replace" : "noop");
-        const priority = (op: string) => (op === "move" ? 0 : 1);
-        const prioDiff = priority(opA) - priority(opB);
-        if (prioDiff !== 0) return prioDiff;
-        return (a?.end_token ?? 0) - (b?.end_token ?? 0);
-      });
-      sorted.forEach((ann: any) => {
-        const payload = ann?.payload || {};
-        const operation = payload.operation || (ann?.replacement ? "replace" : "noop");
-        const beforeTokensPayload = Array.isArray(payload.before_tokens) ? payload.before_tokens : [];
-        const afterTokensPayload = Array.isArray(payload.after_tokens) ? payload.after_tokens : [];
-        const hasReplacement = Boolean(ann?.replacement && String(ann.replacement).length > 0);
-        const normalizedOperation =
-          operation === "noop" &&
-          (afterTokensPayload.length > 0 || beforeTokensPayload.length > 0 || hasReplacement)
-            ? "replace"
-            : operation;
-        if (normalizedOperation === "noop") return;
-        if (String(normalizedOperation) === "move") {
-          const afterRaw = afterTokensPayload;
-          const moveFrom =
-            typeof payload.move_from === "number"
-              ? payload.move_from
-              : typeof payload.moveFrom === "number"
-                ? payload.moveFrom
-                : typeof ann?.start_token === "number"
-                  ? ann.start_token
-                  : 0;
-          const moveTo =
-            typeof payload.move_to === "number"
-              ? payload.move_to
-              : typeof payload.moveTo === "number"
-                ? payload.moveTo
-                : typeof ann?.start_token === "number"
-                  ? ann.start_token
-                  : 0;
-          const moveLen =
-            typeof payload.move_len === "number"
-              ? payload.move_len
-              : afterRaw.length
-                ? afterRaw.length
-                : beforeTokensPayload.length
-                  ? beforeTokensPayload.length
-                  : 1;
-          const sourceStart = Math.max(0, Math.min(working.length, moveFrom + offsetAt(moveFrom)));
-          const sourceEnd = Math.max(sourceStart, Math.min(working.length - 1, sourceStart + moveLen - 1));
-          const moveId = `move-${createId()}`;
-
-          const originalById = new Map<string, Token>();
-          baseTokens.forEach((tok) => {
-            if (tok.kind === "empty") return;
-            originalById.set(tok.id, tok);
-          });
-          const mappedHistory = beforeTokensPayload
-            .map((id: string) => originalById.get(id))
-            .filter(Boolean)
-            .map((tok) => ({ ...tok!, selected: false, previousTokens: undefined }));
-          const historyTokens = mappedHistory.length
-            ? mappedHistory
-            : dedupeTokens(unwindToOriginal(cloneTokens(working.slice(sourceStart, sourceEnd + 1))));
-          const placeholder = {
-            ...makeEmptyPlaceholder(historyTokens),
-            groupId: `move-src-${moveId}`,
-            moveId,
-            spaceBefore: working[sourceStart]?.spaceBefore ?? true,
-          };
-
-          const rawMovedTokens = afterRaw.length
-            ? buildTokensFromFragments(afterRaw, "", undefined)
-            : cloneTokens(working.slice(sourceStart, sourceEnd + 1));
-
-          working.splice(sourceStart, sourceEnd - sourceStart + 1);
-          working.splice(sourceStart, 0, placeholder);
-
-          let insertionIndex = Math.max(0, Math.min(working.length, moveTo + offsetAt(moveTo)));
-          if (insertionIndex > sourceEnd + 1) {
-            insertionIndex -= sourceEnd - sourceStart + 1;
-          }
-          if (insertionIndex >= sourceStart) {
-            insertionIndex += 1;
-          }
-          insertionIndex = Math.max(0, Math.min(working.length, insertionIndex));
-          const leadingSpace = insertionIndex === 0 ? false : working[insertionIndex]?.spaceBefore !== false;
-
-          const movedTokens = rawMovedTokens.map((tok, idx) => ({
-            ...tok,
-            id: createId(),
-            groupId: `move-dest-${moveId}`,
-            moveId,
-            spaceBefore: idx === 0 ? leadingSpace : tok.spaceBefore,
-            previousTokens: tok.previousTokens ? cloneTokens(tok.previousTokens) : tok.previousTokens,
-          }));
-
-          working.splice(insertionIndex, 0, ...movedTokens);
-          typeMap[moveId] = ann?.error_type_id ?? null;
-          const spanStart = moveTo;
-          const spanEnd = moveTo + Math.max(1, movedTokens.length) - 1;
-          if (currentUserId && ann?.author_id === currentUserId && ann?.id != null) {
-            const spanKey = `${spanStart}-${spanEnd}`;
-            spanMap.set(spanKey, ann.id);
-          }
-          const deltaSource = 1 - moveLen;
-          const deltaDest = movedTokens.length;
-          offsetDeltas.push({ start: moveFrom, delta: deltaSource });
-          offsetDeltas.push({ start: moveTo, delta: deltaDest });
-          return;
-        }
-        const startOriginal = typeof ann?.start_token === "number" ? ann.start_token : 0;
-        const endOriginal = typeof ann?.end_token === "number" ? ann.end_token : startOriginal;
-        const targetStart = Math.max(0, Math.min(working.length, startOriginal + offsetAt(startOriginal)));
-        const leadingSpace = targetStart === 0 ? false : working[targetStart]?.spaceBefore !== false;
-        const removeCountFromSpan =
-          normalizedOperation === "insert"
-            ? 0
-            : Math.max(0, Math.min(working.length - targetStart, Math.max(0, endOriginal - startOriginal + 1)));
-        const beforeCount = beforeTokensPayload.length
-          ? Math.min(working.length - targetStart, beforeTokensPayload.length)
-          : 0;
-        const removeCount = beforeCount > 0 ? beforeCount : removeCountFromSpan;
-        const previousRaw = cloneTokens(working.slice(targetStart, targetStart + removeCount));
-        const previous =
-          normalizedOperation === "insert" && previousRaw.length === 0 ? [makeEmptyPlaceholder([])] : previousRaw;
-        const afterRaw = afterTokensPayload;
-        const replacementText = ann?.replacement ? String(ann.replacement) : "";
-      const groupId = createId();
-      const cardType = ann?.error_type_id ?? null;
-
-      const newTokens: Token[] = [];
-      const builtTokens = buildTokensFromFragments(afterRaw, replacementText, leadingSpace);
-        if (!builtTokens.length && (normalizedOperation === "delete" || normalizedOperation === "insert")) {
-          newTokens.push({ ...makeEmptyPlaceholder(previous), groupId, spaceBefore: leadingSpace });
-        } else {
-          builtTokens.forEach((tok) => {
-            newTokens.push({
-              ...tok,
-              id: createId(),
-              groupId,
-              selected: false,
-              previousTokens: cloneTokens(previous),
-            });
-          });
-        }
-        if (newTokens.length) {
-          const firstFrag = Array.isArray(afterRaw) ? afterRaw[0] : null;
-          const hasExplicitSpace =
-            firstFrag &&
-            typeof firstFrag === "object" &&
-            (typeof (firstFrag as any).space_before === "boolean" ||
-              typeof (firstFrag as any).spaceBefore === "boolean");
-          if (!hasExplicitSpace) {
-            newTokens[0].spaceBefore = leadingSpace;
-          }
-        }
-        const removal = removeCount;
-        working.splice(targetStart, removal, ...newTokens);
-        typeMap[groupId] = cardType;
-        if (
-          currentUserId &&
-          ann?.author_id === currentUserId &&
-          ann?.id != null &&
-          typeof ann.start_token === "number" &&
-          typeof ann.end_token === "number"
-        ) {
-          const spanKey = `${ann.start_token}-${ann.end_token}`;
-          spanMap.set(spanKey, ann.id);
-        }
-        const delta = newTokens.length - removal;
-        offsetDeltas.push({ start: startOriginal, delta });
-      });
-      const present: EditorPresentState = {
-        originalTokens: cloneTokens(baseTokens),
-        tokens: working,
-        // Let the reducer derive operations from hydrated tokens to avoid rebuilding them.
-        operations: [],
-      };
-      return { present, typeMap, spanMap };
-    },
-    [initialText, currentUserId, buildTokensFromSnapshot]
+    (items: any[]) =>
+      hydrateFromServerAnnotationsModel({
+        items,
+        initialText,
+        currentUserId,
+      }),
+    [initialText, currentUserId]
   );
 
   useEffect(() => {

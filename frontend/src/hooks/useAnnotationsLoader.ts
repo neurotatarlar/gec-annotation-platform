@@ -40,12 +40,6 @@ export const useAnnotationsLoader = ({
   const promiseTextIdRef = useRef<number | null>(null);
 
   useEffect(() => {
-    loadedRef.current = null;
-    promiseRef.current = null;
-    promiseTextIdRef.current = null;
-  }, [textId]);
-
-  useEffect(() => {
     let cancelled = false;
     if (loadedRef.current === textId) return () => {};
     const loadExistingAnnotations = async () => {
