@@ -271,6 +271,14 @@ describe("tokenEditorReducer core flows", () => {
     expect(specialCount).toBe(3);
   });
 
+  it("renders urls as compact special tokens on initial render", async () => {
+    localStorage.clear();
+    const url = "https://example.com";
+    await renderEditor(`Visit ${url} now`);
+    const token = await screen.findByText(url);
+    expect(token).toHaveAttribute("tabindex", "-1");
+  });
+
   it("handles complex URLs with query chars without splitting", () => {
     const url =
       "http://intertat.ru/tt/yanalyklar/item/52387-ya%D2%A3a-el-b%D3%99yr%D3%99mn%D3%99rend%D3%99-%D2%97%D3%99m%D3%99gat-transportyi-hezm%D3%99te-nichek-eshli?.html";

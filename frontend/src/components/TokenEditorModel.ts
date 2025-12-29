@@ -1,4 +1,5 @@
 import { AnnotationDetailPayload, AnnotationDraft, ErrorType, TokenFragmentPayload } from "../types";
+import { createSpecialTokenMatchers, isSpecialTokenText } from "../utils/specialTokens";
 
 // ---------------------------
 // Types and data structures
@@ -143,26 +144,11 @@ export const parseHotkey = (raw: string | null | undefined): HotkeySpec | null =
   return { key, code: guessCodeFromKey(key), ctrl, alt, shift, meta };
 };
 
-const SPECIAL_TOKEN_SOURCES = [
-  "\\+\\d[\\d()\\- ]*\\d",
-  "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}",
-  "(https?:\\/\\/[^\\s,;:!]+|www\\.[^\\s,;:!]+)",
-];
-const SPECIAL_TOKEN_MATCHERS: Array<{ regex: RegExp }> = SPECIAL_TOKEN_SOURCES.map((source) => ({
-  regex: new RegExp(source, "y"),
-}));
-const SPECIAL_TOKEN_FULL = SPECIAL_TOKEN_SOURCES.map((source) => new RegExp(`^${source}$`));
-
-export const isSpecialTokenText = (text: string): boolean => {
-  const trimmed = text.replace(/[.,;:!?]+$/, "");
-  if (!trimmed) return false;
-  return SPECIAL_TOKEN_FULL.some((regex) => regex.test(trimmed));
-};
-
 // Tokenizer: splits into words vs punctuation, skipping spaces.
 export const tokenizeToTokens = (text: string): Token[] => {
   const tokens: Token[] = [];
   if (!text) return tokens;
+  const specialMatchers = createSpecialTokenMatchers();
   const baseRegex = /(\p{L}|\p{N})+|[^\p{L}\p{N}\s]/uy;
 
   let idx = 0;
@@ -175,7 +161,7 @@ export const tokenizeToTokens = (text: string): Token[] => {
     if (idx >= text.length) break;
 
     let matched = false;
-    for (const m of SPECIAL_TOKEN_MATCHERS) {
+    for (const m of specialMatchers) {
       m.regex.lastIndex = idx;
       const res = m.regex.exec(text);
       if (res && res.index === idx) {
@@ -217,6 +203,38 @@ export const tokenizeToTokens = (text: string): Token[] => {
     idx += 1;
   }
 
+  return tokens;
+};
+
+export const buildTokensFromSnapshot = (snapshot: string[], sourceText: string): Token[] => {
+  const punctOnly = /^[^\p{L}\p{N}\s]+$/u;
+  const tokens: Token[] = [];
+  let cursor = 0;
+  snapshot.forEach((text, idx) => {
+    let hasSpace = false;
+    while (cursor < sourceText.length && /\s/.test(sourceText[cursor])) {
+      hasSpace = true;
+      cursor += 1;
+    }
+    const nextIndex = sourceText.indexOf(text, cursor);
+    if (nextIndex > cursor) {
+      hasSpace = hasSpace || /\s/.test(sourceText.slice(cursor, nextIndex));
+      cursor = nextIndex;
+    }
+    const isSpecial = isSpecialTokenText(text);
+    const isPunct = !isSpecial && punctOnly.test(text);
+    tokens.push({
+      id: createId(),
+      text,
+      kind: isSpecial ? "special" : isPunct ? "punct" : "word",
+      selected: false,
+      spaceBefore: idx === 0 ? false : hasSpace || !isPunct,
+      origin: undefined,
+    });
+    if (nextIndex >= 0) {
+      cursor += text.length;
+    }
+  });
   return tokens;
 };
 

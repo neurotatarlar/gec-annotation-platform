@@ -8,6 +8,7 @@ import { ErrorType, SaveStatus, TokenFragmentPayload } from "../types";
 import { useCorrectionSelection } from "../hooks/useCorrectionSelection";
 import { useCorrectionTypes } from "../hooks/useCorrectionTypes";
 import { useEditorUIState } from "../hooks/useEditorUIState";
+import { useAnnotationsLoader } from "../hooks/useAnnotationsLoader";
 import { useSaveController } from "../hooks/useSaveController";
 import { useErrorTypes } from "../hooks/useErrorTypes";
 import { useTokenDragDrop } from "../hooks/useTokenDragDrop";
@@ -32,6 +33,7 @@ import {
   HotkeySpec,
   MoveMarker,
   Token,
+  buildTokensFromSnapshot,
   buildAnnotationsPayloadStandalone,
   buildEditableTextFromTokens,
   buildHotkeyMap,
@@ -44,7 +46,6 @@ import {
   deriveCorrectionCards,
   deriveMoveMarkers,
   isInsertPlaceholder,
-  isSpecialTokenText,
   makeEmptyPlaceholder,
   normalizeHotkeySpec,
   rangeToArray,
@@ -117,38 +118,6 @@ export const TokenEditor: React.FC<{
   const navigate = useNavigate();
   const location = useLocation();
   const queryClient = useQueryClient();
-
-  const buildTokensFromSnapshot = useCallback((snapshot: string[], sourceText: string) => {
-    const punctOnly = /^[^\p{L}\p{N}\s]+$/u;
-    const tokens: Token[] = [];
-    let cursor = 0;
-    snapshot.forEach((text, idx) => {
-      let hasSpace = false;
-      while (cursor < sourceText.length && /\s/.test(sourceText[cursor])) {
-        hasSpace = true;
-        cursor += 1;
-      }
-      const nextIndex = sourceText.indexOf(text, cursor);
-      if (nextIndex > cursor) {
-        hasSpace = hasSpace || /\s/.test(sourceText.slice(cursor, nextIndex));
-        cursor = nextIndex;
-      }
-      const isSpecial = isSpecialTokenText(text);
-      const isPunct = !isSpecial && punctOnly.test(text);
-      tokens.push({
-        id: createId(),
-        text,
-        kind: isSpecial ? "special" : isPunct ? "punct" : "word",
-        selected: false,
-        spaceBefore: idx === 0 ? false : hasSpace || !isPunct,
-        origin: undefined,
-      });
-      if (nextIndex >= 0) {
-        cursor += text.length;
-      }
-    });
-    return tokens;
-  }, []);
 
   const [history, dispatch] = useReducer(tokenEditorReducer, {
     past: [],
@@ -291,7 +260,7 @@ export const TokenEditor: React.FC<{
     });
     return breaks;
   }, []);
-  const [lineBreaks, setLineBreaks] = useState<number[]>(() => computeLineBreaks(initialText));
+  const lineBreaks = useMemo(() => computeLineBreaks(initialText), [initialText, computeLineBreaks]);
   const lineBreakSet = useMemo(() => new Set(lineBreaks), [lineBreaks]);
   const lineBreakCountMap = useMemo(() => {
     const map = new Map<number, number>();
@@ -309,9 +278,6 @@ export const TokenEditor: React.FC<{
   const annotationDeleteMap = useRef<Map<string, number[]>>(new Map());
   const pendingLocalStateRef = useRef<EditorPresentState | null>(null);
   const hydratedFromServerRef = useRef(false);
-  const annotationsLoadedRef = useRef<number | null>(null);
-  const annotationsPromiseRef = useRef<Promise<any> | null>(null);
-  const annotationsPromiseTextIdRef = useRef<number | null>(null);
   const handleRevert = (rangeStart: number, rangeEnd: number) => {
     markSkipAutoSelect();
     setPendingSelectIndex(rangeStart);
@@ -402,9 +368,6 @@ export const TokenEditor: React.FC<{
   useEffect(() => {
     setServerAnnotationVersion(0);
     hydratedFromServerRef.current = false;
-    annotationsLoadedRef.current = null;
-    annotationsPromiseRef.current = null;
-    annotationsPromiseTextIdRef.current = null;
     resetUI();
   }, [resetUI, textId]);
 
@@ -419,10 +382,6 @@ export const TokenEditor: React.FC<{
     }
     lastSavedSignatureRef.current = null;
   }, [initialText, textId]);
-
-  useEffect(() => {
-    setLineBreaks(computeLineBreaks(initialText));
-  }, [initialText, computeLineBreaks]);
 
   const hydrateFromServerAnnotations = useCallback(
     (items: any[]) => {
@@ -994,73 +953,19 @@ export const TokenEditor: React.FC<{
     [dispatch, endEdit, markSkipAutoSelect, setSelection]
   );
 
-  useEffect(() => {
-    let cancelled = false;
-    if (annotationsLoadedRef.current === textId) return () => {};
-    const loadExistingAnnotations = async () => {
-      try {
-        let promise = annotationsPromiseRef.current;
-        if (!promise || annotationsPromiseTextIdRef.current !== textId) {
-          annotationsPromiseTextIdRef.current = textId;
-          promise = get(`/api/texts/${textId}/annotations`, { params: { all_authors: true } });
-          annotationsPromiseRef.current = promise;
-        }
-        const res = await promise;
-        if (cancelled) return;
-        const items = Array.isArray(res.data) ? res.data : [];
-        const deleteMap = new Map<string, number[]>();
-        items.forEach((ann: any) => {
-          if (ann?.id == null) return;
-          if (typeof ann.start_token !== "number" || typeof ann.end_token !== "number") return;
-          const key = `${ann.start_token}-${ann.end_token}`;
-          const existing = deleteMap.get(key) ?? [];
-          existing.push(ann.id);
-          deleteMap.set(key, existing);
-        });
-        annotationDeleteMap.current = deleteMap;
-        const maxVersion = items.reduce((acc: number, ann: any) => Math.max(acc, ann?.version ?? 0), 0);
-        setServerAnnotationVersion(maxVersion);
-        const hydrated = hydrateFromServerAnnotations(items);
-        if (hydrated && !hydratedFromServerRef.current) {
-          dispatch({ type: "INIT_FROM_STATE", state: hydrated.present });
-          seedCorrectionTypes(hydrated.typeMap);
-          annotationIdMap.current = hydrated.spanMap;
-          hydratedFromServerRef.current = true;
-        } else if (!hydratedFromServerRef.current && pendingLocalStateRef.current) {
-          dispatch({ type: "INIT_FROM_STATE", state: pendingLocalStateRef.current });
-          hydratedFromServerRef.current = true;
-        } else {
-          annotationIdMap.current = new Map<string, number>();
-          items.forEach((ann: any) => {
-            if (
-              ann?.id != null &&
-              typeof ann.start_token === "number" &&
-              typeof ann.end_token === "number" &&
-              (!currentUserId || ann.author_id === currentUserId)
-            ) {
-              const key = `${ann.start_token}-${ann.end_token}`;
-              annotationIdMap.current.set(key, ann.id);
-            }
-          });
-        }
-        if (!items.length) {
-          annotationIdMap.current = new Map<string, number>();
-          annotationDeleteMap.current = new Map<string, number[]>();
-        }
-        annotationsLoadedRef.current = textId;
-      } catch {
-        // ignore load errors; optimistic saves will still work
-      } finally {
-        if (annotationsPromiseTextIdRef.current === textId) {
-          annotationsPromiseRef.current = null;
-        }
-      }
-    };
-    loadExistingAnnotations();
-    return () => {
-      cancelled = true;
-    };
-  }, [get, textId, hydrateFromServerAnnotations, currentUserId, seedCorrectionTypes]);
+  useAnnotationsLoader({
+    textId,
+    currentUserId,
+    get,
+    hydrateFromServerAnnotations,
+    dispatch,
+    seedCorrectionTypes,
+    pendingLocalStateRef,
+    hydratedFromServerRef,
+    annotationIdMap,
+    annotationDeleteMap,
+    setServerAnnotationVersion,
+  });
 
   const requestNextText = useCallback(async () => {
     try {
