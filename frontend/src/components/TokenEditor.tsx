@@ -43,8 +43,8 @@ import {
   deriveCorrectionByIndex,
   deriveCorrectionCards,
   deriveMoveMarkers,
-  deriveOperationsFromTokens,
   isInsertPlaceholder,
+  isSpecialTokenText,
   makeEmptyPlaceholder,
   normalizeHotkeySpec,
   rangeToArray,
@@ -117,6 +117,38 @@ export const TokenEditor: React.FC<{
   const navigate = useNavigate();
   const location = useLocation();
   const queryClient = useQueryClient();
+
+  const buildTokensFromSnapshot = useCallback((snapshot: string[], sourceText: string) => {
+    const punctOnly = /^[^\p{L}\p{N}\s]+$/u;
+    const tokens: Token[] = [];
+    let cursor = 0;
+    snapshot.forEach((text, idx) => {
+      let hasSpace = false;
+      while (cursor < sourceText.length && /\s/.test(sourceText[cursor])) {
+        hasSpace = true;
+        cursor += 1;
+      }
+      const nextIndex = sourceText.indexOf(text, cursor);
+      if (nextIndex > cursor) {
+        hasSpace = hasSpace || /\s/.test(sourceText.slice(cursor, nextIndex));
+        cursor = nextIndex;
+      }
+      const isSpecial = isSpecialTokenText(text);
+      const isPunct = !isSpecial && punctOnly.test(text);
+      tokens.push({
+        id: createId(),
+        text,
+        kind: isSpecial ? "special" : isPunct ? "punct" : "word",
+        selected: false,
+        spaceBefore: idx === 0 ? false : hasSpace || !isPunct,
+        origin: undefined,
+      });
+      if (nextIndex >= 0) {
+        cursor += text.length;
+      }
+    });
+    return tokens;
+  }, []);
 
   const [history, dispatch] = useReducer(tokenEditorReducer, {
     past: [],
@@ -277,7 +309,9 @@ export const TokenEditor: React.FC<{
   const annotationDeleteMap = useRef<Map<string, number[]>>(new Map());
   const pendingLocalStateRef = useRef<EditorPresentState | null>(null);
   const hydratedFromServerRef = useRef(false);
-  const annotationsRequestRef = useRef<number | null>(null);
+  const annotationsLoadedRef = useRef<number | null>(null);
+  const annotationsPromiseRef = useRef<Promise<any> | null>(null);
+  const annotationsPromiseTextIdRef = useRef<number | null>(null);
   const handleRevert = (rangeStart: number, rangeEnd: number) => {
     markSkipAutoSelect();
     setPendingSelectIndex(rangeStart);
@@ -368,6 +402,9 @@ export const TokenEditor: React.FC<{
   useEffect(() => {
     setServerAnnotationVersion(0);
     hydratedFromServerRef.current = false;
+    annotationsLoadedRef.current = null;
+    annotationsPromiseRef.current = null;
+    annotationsPromiseTextIdRef.current = null;
     resetUI();
   }, [resetUI, textId]);
 
@@ -390,7 +427,12 @@ export const TokenEditor: React.FC<{
   const hydrateFromServerAnnotations = useCallback(
     (items: any[]) => {
       if (!items?.length) return null;
-      const baseTokens = tokenizeToTokens(initialText);
+      const snapshotTokens = items.find(
+        (ann: any) => Array.isArray(ann?.payload?.text_tokens) && ann.payload.text_tokens.length
+      )?.payload?.text_tokens as string[] | undefined;
+      const baseTokens = snapshotTokens?.length
+        ? buildTokensFromSnapshot(snapshotTokens, initialText)
+        : tokenizeToTokens(initialText);
       let working = cloneTokens(baseTokens);
       const offsetDeltas: Array<{ start: number; delta: number }> = [];
       const offsetAt = (index: number) =>
@@ -573,15 +615,15 @@ export const TokenEditor: React.FC<{
         const delta = newTokens.length - removal;
         offsetDeltas.push({ start: startOriginal, delta });
       });
-      const operations = deriveOperationsFromTokens(baseTokens, working);
       const present: EditorPresentState = {
         originalTokens: cloneTokens(baseTokens),
         tokens: working,
-        operations,
+        // Let the reducer derive operations from hydrated tokens to avoid rebuilding them.
+        operations: [],
       };
       return { present, typeMap, spanMap };
     },
-    [initialText, currentUserId]
+    [initialText, currentUserId, buildTokensFromSnapshot]
   );
 
   useEffect(() => {
@@ -954,11 +996,16 @@ export const TokenEditor: React.FC<{
 
   useEffect(() => {
     let cancelled = false;
-    if (annotationsRequestRef.current === textId) return () => {};
-    annotationsRequestRef.current = textId;
+    if (annotationsLoadedRef.current === textId) return () => {};
     const loadExistingAnnotations = async () => {
       try {
-        const res = await get(`/api/texts/${textId}/annotations`, { params: { all_authors: true } });
+        let promise = annotationsPromiseRef.current;
+        if (!promise || annotationsPromiseTextIdRef.current !== textId) {
+          annotationsPromiseTextIdRef.current = textId;
+          promise = get(`/api/texts/${textId}/annotations`, { params: { all_authors: true } });
+          annotationsPromiseRef.current = promise;
+        }
+        const res = await promise;
         if (cancelled) return;
         const items = Array.isArray(res.data) ? res.data : [];
         const deleteMap = new Map<string, number[]>();
@@ -1000,8 +1047,13 @@ export const TokenEditor: React.FC<{
           annotationIdMap.current = new Map<string, number>();
           annotationDeleteMap.current = new Map<string, number[]>();
         }
+        annotationsLoadedRef.current = textId;
       } catch {
         // ignore load errors; optimistic saves will still work
+      } finally {
+        if (annotationsPromiseTextIdRef.current === textId) {
+          annotationsPromiseRef.current = null;
+        }
       }
     };
     loadExistingAnnotations();

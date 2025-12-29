@@ -83,7 +83,10 @@ beforeEach(() => {
   navigateMock.mockReset();
 });
 
-const renderEditor = (initialText: string, opts?: { getImpl?: (url: string) => Promise<any> }) => {
+const renderEditor = (
+  initialText: string,
+  opts?: { getImpl?: (url: string) => Promise<any>; strict?: boolean }
+) => {
   mockGet.mockImplementation((url: string) => {
     if (opts?.getImpl) return opts.getImpl(url);
     if (url.includes("/api/error-types")) {
@@ -91,12 +94,15 @@ const renderEditor = (initialText: string, opts?: { getImpl?: (url: string) => P
     }
     return Promise.resolve({ data: {} });
   });
-  return render(
+  const content = (
     <MemoryRouter>
       <QueryClientProvider client={createQueryClient()}>
         <TokenEditor initialText={initialText} textId={1} categoryId={1} />
       </QueryClientProvider>
     </MemoryRouter>
+  );
+  return render(
+    opts?.strict ? <React.StrictMode>{content}</React.StrictMode> : content
   );
 };
 
@@ -2534,6 +2540,193 @@ describe("TokenEditor view toggles", () => {
     await waitFor(() => {
       const markers = within(corrected).queryAllByTestId("space-marker");
       expect(markers.length).toBe(1);
+    });
+  });
+
+  it("hydrates using text_tokens when tokenization differs", async () => {
+    localStorage.clear();
+    await renderEditor("foo-bar", {
+      getImpl: (url: string) => {
+        if (url.includes("/api/error-types")) return Promise.resolve({ data: [] });
+        if (url.includes("/annotations")) {
+          return Promise.resolve({
+            data: [
+              {
+                id: 26,
+                author_id: "other",
+                start_token: 0,
+                end_token: 0,
+                replacement: "foo bar",
+                error_type_id: 1,
+                payload: {
+                  operation: "replace",
+                  before_tokens: ["token-1"],
+                  after_tokens: [
+                    { id: "f1", text: "foo", origin: "base", space_before: false },
+                    { id: "b1", text: "bar", origin: "base", space_before: true },
+                  ],
+                  text_tokens: ["foo-bar"],
+                },
+              },
+            ],
+          });
+        }
+        return Promise.resolve({ data: {} });
+      },
+    });
+
+    const corrected = await screen.findByTestId("corrected-panel");
+    await waitFor(() => {
+      const tokens = within(corrected)
+        .getAllByRole("button")
+        .filter((el) => el.getAttribute("data-token-index") !== null)
+        .map((el) => el.textContent?.trim())
+        .filter(Boolean) as string[];
+      expect(tokens).toEqual(["foo", "bar"]);
+    });
+  });
+
+  it("hydrates replace payloads that use token-id before_tokens from manual annotations", async () => {
+    localStorage.clear();
+    const initialText =
+      'Сак булыгыз! Һава торышы бозыла!!! Юлга чыкмавың хәерлерәк... http://intertat.ru/tt/yanalyklar/item/51971-sak-bulyigyiz-%D2%BBava-toryishyi-bozyila.html';
+    await renderEditor(initialText, {
+      getImpl: (url: string) => {
+        if (url.includes("/api/error-types")) return Promise.resolve({ data: [] });
+        if (url.includes("/annotations")) {
+          return Promise.resolve({
+            data: [
+              {
+                id: 1062,
+                author_id: "other",
+                start_token: 5,
+                end_token: 5,
+                replacement: "бозыл а",
+                error_type_id: 12,
+                payload: {
+                  operation: "replace",
+                  before_tokens: ["token-239"],
+                  after_tokens: [
+                    { id: "token-259-0", text: "бозыл", origin: "base", space_before: true },
+                    { id: "token-259-1", text: "а", origin: "base", space_before: true },
+                  ],
+                  text_tokens: [
+                    "Сак",
+                    "булыгыз",
+                    "!",
+                    "Һава",
+                    "торышы",
+                    "бозыла",
+                    "!",
+                    "!",
+                    "!",
+                    "Юлга",
+                    "чыкмавың",
+                    "хәерлерәк",
+                    ".",
+                    ".",
+                    ".",
+                    "http://intertat.ru/tt/yanalyklar/item/51971-sak-bulyigyiz-%D2%BBava-toryishyi-bozyila.html",
+                  ],
+                },
+              },
+            ],
+          });
+        }
+        return Promise.resolve({ data: {} });
+      },
+    });
+
+    const corrected = await screen.findByTestId("corrected-panel");
+    await waitFor(() => {
+      const tokens = within(corrected)
+        .getAllByRole("button")
+        .filter((el) => el.getAttribute("data-token-index") !== null)
+        .map((el) => el.textContent?.trim())
+        .filter(Boolean) as string[];
+      expect(tokens).toContain("бозыл");
+      expect(tokens).toContain("а");
+    });
+    const historyTokens = within(corrected).getAllByText("бозыла");
+    expect(historyTokens.some((el) => el.tagName === "SPAN")).toBe(true);
+  });
+
+  it("hydrates url tokens as special from snapshot", async () => {
+    localStorage.clear();
+    const url = "http://ex.com";
+    await renderEditor(`Check ${url} now`, {
+      getImpl: (path: string) => {
+        if (path.includes("/api/error-types")) return Promise.resolve({ data: [] });
+        if (path.includes("/annotations")) {
+          return Promise.resolve({
+            data: [
+              {
+                id: 32,
+                author_id: "other",
+                start_token: 0,
+                end_token: 0,
+                replacement: null,
+                error_type_id: 1,
+                payload: {
+                  operation: "noop",
+                  before_tokens: [],
+                  after_tokens: [],
+                  text_tokens: ["Check", url, "now"],
+                },
+              },
+            ],
+          });
+        }
+        return Promise.resolve({ data: {} });
+      },
+    });
+
+    const corrected = await screen.findByTestId("corrected-panel");
+    const urlToken = within(corrected)
+      .getAllByRole("button")
+      .find((el) => el.textContent?.trim() === url);
+    expect(urlToken).toBeTruthy();
+    expect(urlToken).toHaveAttribute("tabindex", "-1");
+  });
+
+  it("hydrates annotations in strict mode double-effects", async () => {
+    localStorage.clear();
+    await renderEditor("foo bar", {
+      strict: true,
+      getImpl: (url: string) => {
+        if (url.includes("/api/error-types")) return Promise.resolve({ data: [] });
+        if (url.includes("/annotations")) {
+          return Promise.resolve({
+            data: [
+              {
+                id: 31,
+                author_id: "other",
+                start_token: 1,
+                end_token: 1,
+                replacement: "baz",
+                error_type_id: 1,
+                payload: {
+                  operation: "replace",
+                  before_tokens: ["token-1"],
+                  after_tokens: [{ id: "r1", text: "baz", origin: "base" }],
+                  text_tokens: ["foo", "bar"],
+                },
+              },
+            ],
+          });
+        }
+        return Promise.resolve({ data: {} });
+      },
+    });
+
+    const corrected = await screen.findByTestId("corrected-panel");
+    await waitFor(() => {
+      const tokens = within(corrected)
+        .getAllByRole("button")
+        .filter((el) => el.getAttribute("data-token-index") !== null)
+        .map((el) => el.textContent?.trim())
+        .filter(Boolean) as string[];
+      expect(tokens).toContain("baz");
     });
   });
 
