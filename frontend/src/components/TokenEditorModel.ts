@@ -582,7 +582,13 @@ const applyOperations = (originalTokens: Token[], operations: Operation[]): Toke
       }));
     }
     if (newTokens.length) {
-      newTokens[0].spaceBefore = leadingSpace;
+      const firstFrag = op.after[0];
+      const hasExplicitSpace =
+        typeof (firstFrag as any)?.space_before === "boolean" ||
+        typeof (firstFrag as any)?.spaceBefore === "boolean";
+      if (!hasExplicitSpace) {
+        newTokens[0].spaceBefore = leadingSpace;
+      }
     }
     working = [...working.slice(0, targetStart), ...newTokens, ...working.slice(targetStart + removeCount)];
     offset += newTokens.length - removeCount;
@@ -1095,8 +1101,32 @@ const tokenReducer = (state: EditorHistoryState, action: Action): EditorHistoryS
         while (start - 1 >= 0 && tokens[start - 1]?.groupId === gid) start -= 1;
         while (end + 1 < tokens.length && tokens[end + 1]?.groupId === gid) end += 1;
       }
-      const oldSlice = tokens.slice(start, end + 1);
-      const leadingSpace = start === 0 ? false : oldSlice[0]?.spaceBefore !== false;
+      let oldSlice = tokens.slice(start, end + 1);
+      const leadingSpace = start === 0 ? false : tokens[start]?.spaceBefore !== false;
+      const hasExplicitLeadingSpace = /^\s/.test(action.newText);
+      const whitespaceOnly = /^\s+$/.test(action.newText);
+      let newTokensRaw = tokenizeEditedText(action.newText);
+      if (whitespaceOnly) {
+        let nextIndex = end + 1;
+        while (nextIndex < tokens.length && tokens[nextIndex]?.kind === "empty") {
+          nextIndex += 1;
+        }
+        if (nextIndex < tokens.length) {
+          end = nextIndex;
+          oldSlice = tokens.slice(start, end + 1);
+          const nextToken = tokens[nextIndex];
+          newTokensRaw = [
+            {
+              id: createId(),
+              text: nextToken.text,
+              kind: nextToken.kind,
+              selected: false,
+              spaceBefore: true,
+              origin: nextToken.origin,
+            },
+          ];
+        }
+      }
       const oldSliceAllInserted = oldSlice.every((tok) => tok.origin === "inserted");
       const moveIdReuse =
         oldSlice.length > 0 && oldSlice.every((tok) => tok.moveId === oldSlice[0].moveId)
@@ -1109,7 +1139,6 @@ const tokenReducer = (state: EditorHistoryState, action: Action): EditorHistoryS
           flattenedOld.push(...cloneTokens(tok.previousTokens));
         }
       });
-      const newTokensRaw = tokenizeEditedText(action.newText);
       // If this was a newly inserted placeholder and user left it empty, revert to previous present.
       const newlyInsertedEmpty = newTokensRaw.length === 0 && isInsertPlaceholder(oldSlice);
       if (newlyInsertedEmpty && state.past.length) {
@@ -1156,7 +1185,10 @@ const tokenReducer = (state: EditorHistoryState, action: Action): EditorHistoryS
         replacement = replacement.map((tok) => ({ ...tok, origin: "inserted" }));
       }
       if (replacement.length) {
-        replacement[0].spaceBefore = leadingSpace;
+        const replacementLeadingSpace = newTokensRaw.length
+          ? hasExplicitLeadingSpace || leadingSpace
+          : leadingSpace;
+        replacement[0].spaceBefore = replacementLeadingSpace;
       }
       if (newTokensRaw.length) {
         const anchorIndex = Math.floor((replacement.length - 1) / 2);

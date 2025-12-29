@@ -324,6 +324,26 @@ describe("tokenEditorReducer core flows", () => {
     expect(buildTextFromTokens(edited.present.tokens)).toBe(", foo");
   });
 
+  it("preserves leading whitespace when editing punctuation into a spaced word", () => {
+    const base = initState("foo,bar");
+    const edited = tokenEditorReducer(base, {
+      type: "EDIT_SELECTED_RANGE_AS_TEXT",
+      range: [1, 2],
+      newText: " bar",
+    });
+    expect(buildTextFromTokens(edited.present.tokens)).toBe("foo bar");
+  });
+
+  it("keeps whitespace-only edits as spacing between neighbors", () => {
+    const base = initState("foo,bar");
+    const edited = tokenEditorReducer(base, {
+      type: "EDIT_SELECTED_RANGE_AS_TEXT",
+      range: [1, 1],
+      newText: " ",
+    });
+    expect(buildTextFromTokens(edited.present.tokens)).toBe("foo bar");
+  });
+
   it("preserves explicit spaces before punctuation when re-editing a correction", async () => {
     const edited = tokenEditorReducer(initState("hello world"), {
       type: "EDIT_SELECTED_RANGE_AS_TEXT",
