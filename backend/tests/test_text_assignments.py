@@ -287,8 +287,8 @@ def test_import_skips_duplicates_by_external_id(client):
 
 
 def test_import_m2_creates_annotations(client):
-    m2 = """S hello world
-A 0 0|||ART|||hi|||REQUIRED|||-NONE-|||0
+    m2 = f"""S hello world
+A 0 0|||ART|||hi|||REQUIRED|||-NONE-|||{TEST_USER_ID}
 """
     resp = client.post(
         "/api/texts/import",

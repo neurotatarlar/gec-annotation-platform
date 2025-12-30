@@ -1,3 +1,9 @@
 export for file
 if some text was submitted by 2 annotators by same annotations on review it will have double annotations
-colors name on bange and in annotation pane; is differ
++ colors name on bange and in annotation pane; is differ
+whitespace placeholders disappear on edition
+do not show whitespace before after deletion in case 
+error on setting page saving
+
+
+doubled punctuation http://82.202.143.151/annotate/645?focusAction=submit

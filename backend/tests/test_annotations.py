@@ -537,6 +537,346 @@ def test_save_annotations_deletes_other_author_and_keeps_own(client):
         assert kept.replacement == "keep"
 
 
+def test_save_annotations_does_not_duplicate_other_author_entries(client):
+    text_id, et_id = get_seed_ids()
+    other_id = uuid.uuid4()
+    with db.SessionLocal() as session:
+        other_ann = Annotation(
+            text_id=text_id,
+            author_id=other_id,
+            start_token=0,
+            end_token=0,
+            replacement="hi",
+            payload={
+                "operation": "replace",
+                "before_tokens": ["base-0"],
+                "after_tokens": [{"id": "base-0", "text": "hi", "origin": "base"}],
+                "text_sha256": sha256("hello world"),
+            },
+            error_type_id=et_id,
+        )
+        session.add(other_ann)
+        session.commit()
+
+    payload = {
+        "annotations": [
+            {
+                # A's existing annotation (no id) should not be re-saved for B.
+                "start_token": 0,
+                "end_token": 0,
+                "replacement": "hi",
+                "error_type_id": et_id,
+                "payload": {
+                    "operation": "replace",
+                    "before_tokens": ["base-0"],
+                    "after_tokens": [{"id": "base-0", "text": "hi", "origin": "base"}],
+                    "text_sha256": sha256("hello world"),
+                },
+            },
+            {
+                # B's own change should be saved normally.
+                "start_token": 1,
+                "end_token": 1,
+                "replacement": "earth",
+                "error_type_id": et_id,
+                "payload": {
+                    "operation": "replace",
+                    "before_tokens": ["base-1"],
+                    "after_tokens": [{"id": "base-1", "text": "earth", "origin": "base"}],
+                    "text_sha256": sha256("hello world"),
+                },
+            },
+        ],
+        "client_version": 0,
+    }
+    resp = client.post(f"/api/texts/{text_id}/annotations", json=payload)
+    assert resp.status_code == 200, resp.text
+    with db.SessionLocal() as session:
+        by_other = session.query(Annotation).filter_by(text_id=text_id, author_id=other_id).all()
+        by_self = session.query(Annotation).filter_by(text_id=text_id, author_id=TEST_USER_ID).all()
+        assert len(by_other) == 1
+        assert len(by_self) == 1
+
+
+def test_save_annotations_overwrites_other_author_on_change(client):
+    text_id, et_id = get_seed_ids()
+    other_id = uuid.uuid4()
+    with db.SessionLocal() as session:
+        other_ann = Annotation(
+            text_id=text_id,
+            author_id=other_id,
+            start_token=0,
+            end_token=0,
+            replacement="hi",
+            payload={
+                "operation": "replace",
+                "before_tokens": ["base-0"],
+                "after_tokens": [{"id": "base-0", "text": "hi", "origin": "base"}],
+                "text_sha256": sha256("hello world"),
+            },
+            error_type_id=et_id,
+        )
+        session.add(other_ann)
+        session.commit()
+
+    payload = {
+        "annotations": [
+            {
+                "start_token": 0,
+                "end_token": 0,
+                "replacement": "hey",
+                "error_type_id": et_id,
+                "payload": {
+                    "operation": "replace",
+                    "before_tokens": ["base-0"],
+                    "after_tokens": [{"id": "base-0", "text": "hey", "origin": "base"}],
+                    "text_sha256": sha256("hello world"),
+                },
+            }
+        ],
+        "client_version": 0,
+    }
+    resp = client.post(f"/api/texts/{text_id}/annotations", json=payload)
+    assert resp.status_code == 200, resp.text
+    with db.SessionLocal() as session:
+        anns = session.query(Annotation).filter_by(text_id=text_id).all()
+        assert len(anns) == 1
+        assert anns[0].author_id == TEST_USER_ID
+        assert anns[0].replacement == "hey"
+
+
+def test_save_annotations_skips_other_author_when_id_matches_unchanged(client):
+    text_id, et_id = get_seed_ids()
+    other_id = uuid.uuid4()
+    with db.SessionLocal() as session:
+        other_ann = Annotation(
+            text_id=text_id,
+            author_id=other_id,
+            start_token=0,
+            end_token=0,
+            replacement="hi",
+            payload={
+                "operation": "replace",
+                "before_tokens": ["base-0"],
+                "after_tokens": [{"id": "base-0", "text": "hi", "origin": "base"}],
+                "text_sha256": sha256("hello world"),
+            },
+            error_type_id=et_id,
+        )
+        session.add(other_ann)
+        session.commit()
+        session.refresh(other_ann)
+
+    payload = {
+        "annotations": [
+            {
+                "id": other_ann.id,
+                "start_token": 0,
+                "end_token": 0,
+                "replacement": "hi",
+                "error_type_id": et_id,
+                "payload": {
+                    "operation": "replace",
+                    "before_tokens": ["base-0"],
+                    "after_tokens": [{"id": "base-0", "text": "hi", "origin": "base"}],
+                    "text_sha256": sha256("hello world"),
+                },
+            }
+        ],
+        "client_version": 0,
+    }
+    resp = client.post(f"/api/texts/{text_id}/annotations", json=payload)
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == []
+    with db.SessionLocal() as session:
+        by_other = session.query(Annotation).filter_by(text_id=text_id, author_id=other_id).all()
+        by_self = session.query(Annotation).filter_by(text_id=text_id, author_id=TEST_USER_ID).all()
+        assert len(by_other) == 1
+        assert len(by_self) == 0
+
+
+def test_save_annotations_overwrites_other_author_when_id_matches_change(client):
+    text_id, et_id = get_seed_ids()
+    other_id = uuid.uuid4()
+    with db.SessionLocal() as session:
+        other_ann = Annotation(
+            text_id=text_id,
+            author_id=other_id,
+            start_token=0,
+            end_token=0,
+            replacement="hi",
+            payload={
+                "operation": "replace",
+                "before_tokens": ["base-0"],
+                "after_tokens": [{"id": "base-0", "text": "hi", "origin": "base"}],
+                "text_sha256": sha256("hello world"),
+            },
+            error_type_id=et_id,
+        )
+        session.add(other_ann)
+        session.commit()
+        session.refresh(other_ann)
+
+    payload = {
+        "annotations": [
+            {
+                "id": other_ann.id,
+                "start_token": 0,
+                "end_token": 0,
+                "replacement": "hey",
+                "error_type_id": et_id,
+                "payload": {
+                    "operation": "replace",
+                    "before_tokens": ["base-0"],
+                    "after_tokens": [{"id": "base-0", "text": "hey", "origin": "base"}],
+                    "text_sha256": sha256("hello world"),
+                },
+            }
+        ],
+        "client_version": 0,
+    }
+    resp = client.post(f"/api/texts/{text_id}/annotations", json=payload)
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert len(data) == 1
+    assert data[0]["id"] == other_ann.id
+    assert data[0]["author_id"] == str(TEST_USER_ID)
+    with db.SessionLocal() as session:
+        anns = session.query(Annotation).filter_by(text_id=text_id).all()
+        assert len(anns) == 1
+        assert anns[0].author_id == TEST_USER_ID
+        assert anns[0].replacement == "hey"
+
+
+def test_save_annotations_prefers_exact_match_among_other_duplicates(client):
+    text_id, et_id = get_seed_ids()
+    other_a = uuid.uuid4()
+    other_b = uuid.uuid4()
+    with db.SessionLocal() as session:
+        ann_match = Annotation(
+            text_id=text_id,
+            author_id=other_a,
+            start_token=0,
+            end_token=0,
+            replacement="hi",
+            payload={
+                "operation": "replace",
+                "before_tokens": ["base-0"],
+                "after_tokens": [{"id": "base-0", "text": "hi", "origin": "base"}],
+                "text_sha256": sha256("hello world"),
+            },
+            error_type_id=et_id,
+        )
+        ann_other = Annotation(
+            text_id=text_id,
+            author_id=other_b,
+            start_token=0,
+            end_token=0,
+            replacement="hey",
+            payload={
+                "operation": "replace",
+                "before_tokens": ["base-0"],
+                "after_tokens": [{"id": "base-0", "text": "hey", "origin": "base"}],
+                "text_sha256": sha256("hello world"),
+            },
+            error_type_id=et_id,
+        )
+        session.add_all([ann_match, ann_other])
+        session.commit()
+
+    payload = {
+        "annotations": [
+            {
+                "start_token": 0,
+                "end_token": 0,
+                "replacement": "hi",
+                "error_type_id": et_id,
+                "payload": {
+                    "operation": "replace",
+                    "before_tokens": ["base-0"],
+                    "after_tokens": [{"id": "base-0", "text": "hi", "origin": "base"}],
+                    "text_sha256": sha256("hello world"),
+                },
+            }
+        ],
+        "client_version": 0,
+    }
+    resp = client.post(f"/api/texts/{text_id}/annotations", json=payload)
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == []
+    with db.SessionLocal() as session:
+        by_self = session.query(Annotation).filter_by(text_id=text_id, author_id=TEST_USER_ID).all()
+        assert len(by_self) == 0
+        by_other = session.query(Annotation).filter_by(text_id=text_id).all()
+        assert len(by_other) == 2
+
+
+def test_save_annotations_overwrites_first_non_matching_duplicate(client):
+    text_id, et_id = get_seed_ids()
+    other_a = uuid.uuid4()
+    other_b = uuid.uuid4()
+    with db.SessionLocal() as session:
+        ann_first = Annotation(
+            text_id=text_id,
+            author_id=other_a,
+            start_token=0,
+            end_token=0,
+            replacement="hi",
+            payload={
+                "operation": "replace",
+                "before_tokens": ["base-0"],
+                "after_tokens": [{"id": "base-0", "text": "hi", "origin": "base"}],
+                "text_sha256": sha256("hello world"),
+            },
+            error_type_id=et_id,
+        )
+        ann_second = Annotation(
+            text_id=text_id,
+            author_id=other_b,
+            start_token=0,
+            end_token=0,
+            replacement="hey",
+            payload={
+                "operation": "replace",
+                "before_tokens": ["base-0"],
+                "after_tokens": [{"id": "base-0", "text": "hey", "origin": "base"}],
+                "text_sha256": sha256("hello world"),
+            },
+            error_type_id=et_id,
+        )
+        session.add_all([ann_first, ann_second])
+        session.commit()
+        session.refresh(ann_first)
+        session.refresh(ann_second)
+
+    payload = {
+        "annotations": [
+            {
+                "start_token": 0,
+                "end_token": 0,
+                "replacement": "hola",
+                "error_type_id": et_id,
+                "payload": {
+                    "operation": "replace",
+                    "before_tokens": ["base-0"],
+                    "after_tokens": [{"id": "base-0", "text": "hola", "origin": "base"}],
+                    "text_sha256": sha256("hello world"),
+                },
+            }
+        ],
+        "client_version": 0,
+    }
+    resp = client.post(f"/api/texts/{text_id}/annotations", json=payload)
+    assert resp.status_code == 200, resp.text
+    with db.SessionLocal() as session:
+        all_anns = session.query(Annotation).filter_by(text_id=text_id).order_by(Annotation.id).all()
+        assert len(all_anns) == 2
+        by_self = [ann for ann in all_anns if ann.author_id == TEST_USER_ID]
+        assert len(by_self) == 1
+        assert by_self[0].replacement == "hola"
+        assert by_self[0].id == ann_first.id
+
+
 def test_save_annotations_conflicts_on_stale_version(client):
     text_id, et_id = get_seed_ids()
     with db.SessionLocal() as session:

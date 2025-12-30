@@ -2,10 +2,10 @@ import hashlib
 import logging
 from datetime import datetime, timedelta, timezone
 from itertools import combinations
-from typing import Iterable
+from typing import Iterable, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy.orm.exc import StaleDataError
@@ -20,6 +20,7 @@ from ..models import (
     ErrorType,
     SkippedText,
     TextSample,
+    User,
 )
 from ..schemas.common import (
     AnnotationPayload,
@@ -464,6 +465,43 @@ def save_annotations(
             if not isinstance(before_tokens, list):
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="before_tokens must be a list")
 
+        def _normalize_token_fragment(token: object) -> tuple:
+            if isinstance(token, dict):
+                return (
+                    str(token.get("id")) if token.get("id") is not None else None,
+                    str(token.get("text") or ""),
+                    token.get("origin"),
+                    token.get("space_before", token.get("spaceBefore")),
+                    token.get("source_id", token.get("sourceId")),
+                )
+            return (
+                str(getattr(token, "id", None)) if getattr(token, "id", None) is not None else None,
+                str(getattr(token, "text", "") or ""),
+                getattr(token, "origin", None),
+                getattr(token, "space_before", getattr(token, "spaceBefore", None)),
+                getattr(token, "source_id", getattr(token, "sourceId", None)),
+            )
+
+        def _payload_signature(payload: dict, replacement: str | None) -> tuple:
+            op = payload.get("operation") or ("replace" if replacement else "noop")
+            before_tokens = payload.get("before_tokens")
+            if not isinstance(before_tokens, list):
+                before_tokens = []
+            after_tokens = payload.get("after_tokens")
+            if not isinstance(after_tokens, list):
+                after_tokens = []
+            move_from = payload.get("move_from", payload.get("moveFrom"))
+            move_to = payload.get("move_to", payload.get("moveTo"))
+            move_len = payload.get("move_len", payload.get("moveLen"))
+            return (
+                op,
+                tuple(str(tok) for tok in before_tokens),
+                tuple(_normalize_token_fragment(tok) for tok in after_tokens),
+                move_from,
+                move_to,
+                move_len,
+            )
+
         saved: list[Annotation] = []
         deleted_ids = set(request.deleted_ids or [])
         # Process deletions first
@@ -487,6 +525,17 @@ def save_annotations(
             )
         existing_by_id = {annotation.id: annotation for annotation in existing}
         existing_by_span = {(annotation.start_token, annotation.end_token): annotation for annotation in existing}
+        other_existing = (
+            db.query(Annotation)
+            .filter(Annotation.text_id == text_id, Annotation.author_id != current_user.id)
+            .all()
+        )
+        other_by_id = {annotation.id: annotation for annotation in other_existing}
+        other_by_span: dict[tuple[int, int], list[Annotation]] = {}
+        for annotation in other_existing:
+            other_by_span.setdefault((annotation.start_token, annotation.end_token), []).append(annotation)
+        for group in other_by_span.values():
+            group.sort(key=lambda ann: ann.id)
 
         for item in request.annotations:
             if item.id and item.id in deleted_ids:
@@ -528,6 +577,20 @@ def save_annotations(
             if payload.get("operation") == "noop":
                 replacement = replacement or None
 
+            def _annotation_matches(
+                candidate: Annotation,
+                expected_sig: tuple,
+                expected_replacement: str | None,
+                expected_error_type: int,
+            ) -> bool:
+                if (candidate.replacement or None) != (expected_replacement or None):
+                    return False
+                if candidate.error_type_id != expected_error_type:
+                    return False
+                candidate_payload = _ensure_payload_dict(candidate.payload)
+                candidate_sig = _payload_signature(candidate_payload, candidate.replacement)
+                return candidate_sig == expected_sig
+
             annotation = None
             if item.id:
                 annotation = existing_by_id.get(item.id)
@@ -541,18 +604,49 @@ def save_annotations(
                 annotation.payload = payload
                 annotation.error_type_id = item.error_type_id
                 annotation.version += 1
+                saved.append(annotation)
             else:
-                annotation = Annotation(
-                    text_id=text_id,
-                    author_id=current_user.id,
-                    start_token=item.start_token,
-                    end_token=item.end_token,
-                    replacement=replacement,
-                    payload=payload,
-                    error_type_id=item.error_type_id,
-                )
-                db.add(annotation)
-            saved.append(annotation)
+                payload_sig = _payload_signature(payload, replacement)
+                other_annotation = other_by_id.get(item.id) if item.id else None
+                if not other_annotation:
+                    candidates = other_by_span.get((item.start_token, item.end_token), [])
+                    if candidates:
+                        match = next(
+                            (
+                                candidate
+                                for candidate in candidates
+                                if _annotation_matches(candidate, payload_sig, replacement, item.error_type_id)
+                            ),
+                            None,
+                        )
+                        if match:
+                            continue
+                        other_annotation = candidates[0]
+                if other_annotation:
+                    if _annotation_matches(other_annotation, payload_sig, replacement, item.error_type_id):
+                        continue
+                    other_annotation.author_id = current_user.id
+                    other_annotation.start_token = item.start_token
+                    other_annotation.end_token = item.end_token
+                    other_annotation.replacement = replacement
+                    other_annotation.payload = payload
+                    other_annotation.error_type_id = item.error_type_id
+                    other_annotation.version += 1
+                    annotation = other_annotation
+                    existing_by_id[annotation.id] = annotation
+                    existing_by_span[(annotation.start_token, annotation.end_token)] = annotation
+                else:
+                    annotation = Annotation(
+                        text_id=text_id,
+                        author_id=current_user.id,
+                        start_token=item.start_token,
+                        end_token=item.end_token,
+                        replacement=replacement,
+                        payload=payload,
+                        error_type_id=item.error_type_id,
+                    )
+                    db.add(annotation)
+                saved.append(annotation)
 
         db.flush()
         # Persist snapshots for rollback/history
@@ -928,11 +1022,16 @@ def _render_replacement(ann: Annotation) -> str:
     return "-NONE-"
 
 
-def _build_m2_block(tokens: Iterable[str], annotations: list[Annotation]) -> str:
+def _build_m2_block(
+    tokens: Iterable[str],
+    annotations: list[Annotation],
+    annotator_label: str | None = None,
+) -> str:
     base_tokens = [t for t in tokens if t is not None]
     lines = [f"S {' '.join(base_tokens)}"]
+    annotator = annotator_label or "0"
     if not annotations:
-        lines.append("A -1 -1|||noop|||-NONE-|||REQUIRED|||-NONE-|||0")
+        lines.append(f"A -1 -1|||noop|||-NONE-|||REQUIRED|||-NONE-|||{annotator}")
         return "\n".join(lines)
     sorted_anns = sorted(
         annotations,
@@ -941,8 +1040,129 @@ def _build_m2_block(tokens: Iterable[str], annotations: list[Annotation]) -> str
     for ann in sorted_anns:
         label = _resolve_label(ann)
         replacement = _render_replacement(ann)
-        lines.append(f"A {ann.start_token} {ann.end_token}|||{label}|||{replacement}|||REQUIRED|||-NONE-|||0")
+        lines.append(
+            f"A {ann.start_token} {ann.end_token}|||{label}|||{replacement}|||REQUIRED|||-NONE-|||{annotator}"
+        )
     return "\n".join(lines)
+
+
+def _resolve_tokens_snapshot(text: TextSample, annotations: list[Annotation]) -> list[str]:
+    snapshot = None
+    for ann in annotations:
+        payload = ann.payload or {}
+        maybe_tokens = payload.get("text_tokens")
+        if isinstance(maybe_tokens, list) and maybe_tokens:
+            snapshot = maybe_tokens
+            break
+    tokens = snapshot or (text.content.split() if text.content else [])
+    return [t for t in tokens if t is not None]
+
+
+def _build_m2_block_for_text(
+    text: TextSample,
+    annotations: list[Annotation],
+    annotator_label: str | None = None,
+) -> str:
+    tokens = _resolve_tokens_snapshot(text, annotations)
+    if not tokens:
+        return ""
+    return _build_m2_block(tokens, annotations, annotator_label=annotator_label)
+
+
+def _build_m2_blocks_for_tasks(
+    db: Session,
+    tasks: list[AnnotationTask],
+    include_meta: bool = False,
+) -> list[object]:
+    if not tasks:
+        return []
+    task_ids = [task.id for task in tasks]
+    ann_rows = (
+        db.query(Annotation, AnnotationTask.id)
+        .join(AnnotationTask, AnnotationTask.text_id == Annotation.text_id)
+        .filter(AnnotationTask.id.in_(task_ids), Annotation.author_id == AnnotationTask.annotator_id)
+        .options(joinedload(Annotation.error_type))
+        .all()
+    )
+    anns_by_task: dict[int, list[Annotation]] = {task.id: [] for task in tasks}
+    for ann, task_id in ann_rows:
+        anns_by_task.setdefault(task_id, []).append(ann)
+
+    blocks: list[object] = []
+    for task in tasks:
+        anns = anns_by_task.get(task.id) or []
+        text = task.text
+        if not text:
+            continue
+        block = _build_m2_block_for_text(text, anns, annotator_label=str(task.annotator_id))
+        if block:
+            if include_meta:
+                blocks.append({"author_id": str(task.annotator_id), "block": block})
+            else:
+                blocks.append(block)
+    return blocks
+
+
+@router.get("/{text_id}/export", response_class=PlainTextResponse)
+def export_single_text(
+    text_id: int,
+    include_all: bool = Query(False, description="Include all annotations for preview"),
+    format: Literal["text", "json"] = Query("text", description="Response format"),
+    db: Session = Depends(get_db),
+    _: str = Depends(get_current_user),
+):
+    if include_all:
+        text = db.get(TextSample, text_id)
+        if not text:
+            raise HTTPException(status_code=404, detail="Text not found")
+        annotations = (
+            db.query(Annotation)
+            .filter(Annotation.text_id == text_id)
+            .options(joinedload(Annotation.error_type))
+            .all()
+        )
+        if not annotations:
+            block = _build_m2_block_for_text(text, [], annotator_label="Unknown")
+            if format == "json":
+                return JSONResponse(
+                    [{"author_id": None, "author_name": "Unknown", "block": block}] if block else []
+                )
+            return PlainTextResponse(block, media_type="text/plain")
+        anns_by_author: dict[object, list[Annotation]] = {}
+        for ann in annotations:
+            anns_by_author.setdefault(ann.author_id, []).append(ann)
+        author_ids = list(anns_by_author.keys())
+        users = db.query(User).filter(User.id.in_(author_ids)).all()
+        author_names = {user.id: user.username for user in users}
+        blocks: list[dict[str, object]] = []
+        for author_id, anns in sorted(
+            anns_by_author.items(),
+            key=lambda item: min(ann.id for ann in item[1]),
+        ):
+            ordered = sorted(anns, key=lambda ann: ann.id or 0)
+            author_name = author_names.get(author_id) or "Unknown"
+            block = _build_m2_block_for_text(text, ordered, annotator_label=author_name)
+            if block:
+                blocks.append(
+                    {"author_id": str(author_id), "author_name": author_name, "block": block}
+                )
+        if format == "json":
+            return JSONResponse(blocks)
+        return PlainTextResponse("\n\n".join(item["block"] for item in blocks), media_type="text/plain")
+
+    task_query = (
+        db.query(AnnotationTask)
+        .join(TextSample, AnnotationTask.text_id == TextSample.id)
+        .options(joinedload(AnnotationTask.text))
+        .filter(AnnotationTask.text_id == text_id)
+        .filter(AnnotationTask.status == "submitted")
+        .filter(TextSample.state.notin_(["trash", "skipped"]))
+    )
+    tasks = task_query.order_by(AnnotationTask.updated_at.desc()).all()
+    if format == "json":
+        return JSONResponse(_build_m2_blocks_for_tasks(db, tasks, include_meta=True))
+    blocks = _build_m2_blocks_for_tasks(db, tasks)
+    return PlainTextResponse("\n\n".join(blocks), media_type="text/plain")
 
 
 @router.get("/export", response_class=PlainTextResponse)
@@ -972,37 +1192,7 @@ def export_submitted_texts(
     if not tasks:
         return PlainTextResponse("", media_type="text/plain")
 
-    task_ids = [task.id for task in tasks]
-    ann_rows = (
-        db.query(Annotation, AnnotationTask.id)
-        .join(AnnotationTask, AnnotationTask.text_id == Annotation.text_id)
-        .filter(AnnotationTask.id.in_(task_ids), Annotation.author_id == AnnotationTask.annotator_id)
-        .options(joinedload(Annotation.error_type))
-        .all()
-    )
-    anns_by_task: dict[int, list[Annotation]] = {task.id: [] for task in tasks}
-    for ann, task_id in ann_rows:
-        anns_by_task.setdefault(task_id, []).append(ann)
-
-    blocks: list[str] = []
-    for task in tasks:
-        anns = anns_by_task.get(task.id) or []
-        text = task.text
-        if not text:
-            continue
-        tokens: Iterable[str] = []
-        # Prefer a saved snapshot from any annotation payload to preserve tokenization.
-        snapshot = None
-        for ann in anns:
-            payload = ann.payload or {}
-            maybe_tokens = payload.get("text_tokens")
-            if isinstance(maybe_tokens, list) and maybe_tokens:
-                snapshot = maybe_tokens
-                break
-        tokens = snapshot or text.content.split()
-        if not tokens:
-            continue
-        blocks.append(_build_m2_block(tokens, anns))
+    blocks = _build_m2_blocks_for_tasks(db, tasks)
 
     filename = f"export_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.m2"
     return PlainTextResponse(

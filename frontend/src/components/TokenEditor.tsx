@@ -239,14 +239,20 @@ export const TokenEditor: React.FC<{
   useEffect(() => {
     selectionRef.current = selection;
   }, [selection]);
-  const initialViewTab = useMemo<"original" | "corrected">(() => {
-    if (prefs.viewTab === "original" || prefs.viewTab === "corrected") {
+  const initialViewTab = useMemo<"original" | "corrected" | "m2">(() => {
+    if (prefs.viewTab === "original" || prefs.viewTab === "corrected" || prefs.viewTab === "m2") {
       return prefs.viewTab;
     }
     return "corrected";
   }, [prefs.viewTab]);
-  const [viewTab, setViewTab] = useState<"original" | "corrected">(initialViewTab);
+  const [viewTab, setViewTab] = useState<"original" | "corrected" | "m2">(initialViewTab);
   const [isTextPanelOpen, setIsTextPanelOpen] = useState<boolean>(prefs.textPanelOpen ?? true);
+  const [m2Blocks, setM2Blocks] = useState<
+    Array<{ authorId: string | null; authorName: string | null; block: string }>
+  >([]);
+  const [m2Loading, setM2Loading] = useState(false);
+  const [m2Error, setM2Error] = useState<string | null>(null);
+  const lastM2TextIdRef = useRef<number | null>(null);
   const lineBreaks = useMemo(
     () => computeLineBreaksFromText(initialText),
     [initialText]
@@ -268,6 +274,13 @@ export const TokenEditor: React.FC<{
   const annotationDeleteMap = useRef<Map<string, number[]>>(new Map());
   const pendingLocalStateRef = useRef<EditorPresentState | null>(null);
   const hydratedFromServerRef = useRef(false);
+
+  useEffect(() => {
+    setM2Blocks([]);
+    setM2Error(null);
+    setM2Loading(false);
+    lastM2TextIdRef.current = null;
+  }, [textId]);
   const handleRevert = (rangeStart: number, rangeEnd: number) => {
     markSkipAutoSelect();
     setPendingSelectIndex(rangeStart);
@@ -1490,6 +1503,48 @@ export const TokenEditor: React.FC<{
     });
   }, [tokenGap, tokenFontSize, spaceMarker, lastDecision, textId, viewTab, isTextPanelOpen]);
 
+  const requestM2Preview = useCallback(async () => {
+    if (m2Loading) return;
+    setM2Loading(true);
+    setM2Error(null);
+    try {
+      const response = await get(`/api/texts/${textId}/export`, {
+        responseType: "json",
+        params: { include_all: true, format: "json" },
+      });
+      const data = response.data;
+      let nextBlocks: Array<{ authorId: string | null; authorName: string | null; block: string }> = [];
+      if (Array.isArray(data)) {
+        nextBlocks = data
+          .map((item) => {
+            if (!item || typeof item !== "object") return null;
+            const block = typeof item.block === "string" ? item.block : "";
+            if (!block) return null;
+            const authorId = item.author_id ?? item.authorId ?? null;
+            const authorName = item.author_name ?? item.authorName ?? null;
+            return {
+              authorId: authorId ? String(authorId) : null,
+              authorName: authorName ? String(authorName) : null,
+              block,
+            };
+          })
+          .filter(Boolean) as Array<{ authorId: string | null; authorName: string | null; block: string }>;
+      } else if (typeof data === "string" && data.trim()) {
+        nextBlocks = [{ authorId: null, authorName: null, block: data }];
+      }
+      if (nextBlocks.length) {
+        setM2Blocks(nextBlocks);
+      } else {
+        setM2Blocks([]);
+      }
+      lastM2TextIdRef.current = textId;
+    } catch {
+      setM2Error(t("common.error"));
+    } finally {
+      setM2Loading(false);
+    }
+  }, [get, m2Loading, textId, t]);
+
   const handleSubmit = async () => {
     const unassigned = correctionCards.filter((card) => !correctionTypeMap[card.id]);
     if (unassigned.length) {
@@ -1868,10 +1923,44 @@ export const TokenEditor: React.FC<{
               >
                 {t("tokenEditor.corrected") ?? "Corrected"}
               </button>
+              <button
+                style={{
+                  ...miniNeutralButton,
+                  background:
+                    isTextPanelOpen && viewTab === "m2" ? "rgba(59,130,246,0.3)" : miniNeutralButton.background,
+                  borderColor: isTextPanelOpen && viewTab === "m2" ? "rgba(59,130,246,0.6)" : "rgba(148,163,184,0.6)",
+                }}
+                onClick={() => {
+                  if (viewTab === "m2") {
+                    setIsTextPanelOpen((v) => {
+                      const next = !v;
+                      if (next) {
+                        requestM2Preview();
+                      }
+                      return next;
+                    });
+                  } else {
+                    setViewTab("m2");
+                    setIsTextPanelOpen(true);
+                    requestM2Preview();
+                  }
+                }}
+                aria-pressed={isTextPanelOpen && viewTab === "m2"}
+              >
+                {t("tokenEditor.m2") ?? "M2"}
+              </button>
             </div>
             <button
               style={miniNeutralButton}
-              onClick={() => setIsTextPanelOpen((v) => !v)}
+              onClick={() =>
+                setIsTextPanelOpen((v) => {
+                  const next = !v;
+                  if (next && viewTab === "m2") {
+                    requestM2Preview();
+                  }
+                  return next;
+                })
+              }
               aria-expanded={isTextPanelOpen}
               data-testid="text-panel-toggle"
             >
@@ -1880,18 +1969,72 @@ export const TokenEditor: React.FC<{
           </div>
           {isTextPanelOpen && (
             <div style={{ padding: "10px 12px" }} data-testid="text-view-panel">
-              <span
-                style={{
-                  color: "#e2e8f0",
-                  fontSize: 14,
-                  wordBreak: "break-word",
-                  whiteSpace: "pre-wrap",
-                }}
-              >
-                {viewTab === "original"
-                  ? buildTextFromTokensWithBreaks(originalTokens, lineBreaks)
-                  : buildTextFromTokensWithBreaks(tokens, lineBreaks)}
-              </span>
+              {viewTab === "m2" ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                  {m2Blocks.length ? (
+                    m2Blocks.map((item, idx) => (
+                      <div key={`${item.authorId ?? "unknown"}-${idx}`}>
+                        <div
+                          style={{
+                            color: "rgba(148,163,184,0.9)",
+                            fontSize: 12,
+                            marginBottom: 4,
+                            letterSpacing: "0.02em",
+                            textTransform: "uppercase",
+                          }}
+                        >
+                          {t("tokenEditor.m2Author") ?? "Annotator"}:{" "}
+                          {item.authorName || item.authorId || t("tokenEditor.m2Unknown") || "—"}
+                        </div>
+                        <pre
+                          data-testid="m2-preview"
+                          style={{
+                            color: "#e2e8f0",
+                            fontSize: 13,
+                            wordBreak: "break-word",
+                            whiteSpace: "pre-wrap",
+                            fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+                            margin: 0,
+                          }}
+                        >
+                          {item.block}
+                        </pre>
+                      </div>
+                    ))
+                  ) : (
+                    <pre
+                      data-testid="m2-preview"
+                      style={{
+                        color: "#e2e8f0",
+                        fontSize: 13,
+                        wordBreak: "break-word",
+                        whiteSpace: "pre-wrap",
+                        fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+                        margin: 0,
+                      }}
+                    >
+                      {m2Error
+                        ? m2Error
+                        : m2Loading
+                          ? t("common.loading")
+                          : ""}
+                    </pre>
+                  )}
+                </div>
+              ) : (
+                <span
+                  style={{
+                    color: "#e2e8f0",
+                    fontSize: 14,
+                    wordBreak: "break-word",
+                    whiteSpace: "pre-wrap",
+                  }}
+                >
+                  {viewTab === "original"
+                    ? buildTextFromTokensWithBreaks(originalTokens, lineBreaks)
+                    : buildTextFromTokensWithBreaks(tokens, lineBreaks)}
+                </span>
+              )}
             </div>
           )}
         </div>
@@ -2160,7 +2303,7 @@ const ErrorTypePanel: React.FC<ErrorTypePanelProps> = ({
                         : "none",
                     transform: isPressed ? "translateY(1px)" : "none",
                     transition: "transform 0.08s ease, box-shadow 0.2s ease, border-color 0.2s ease",
-                    color: "#0b1120",
+                    color: "rgba(248,250,252,0.85)",
                   }}
                   title={type.description ?? undefined}
                   role="button"
@@ -2191,11 +2334,11 @@ const ErrorTypePanel: React.FC<ErrorTypePanelProps> = ({
                       <span
                         style={{
                           fontSize: 10,
-                          color: "#0b1120",
-                          border: "1px solid rgba(15,23,42,0.35)",
+                          color: "rgba(248,250,252,0.7)",
+                          border: "1px solid rgba(248,250,252,0.25)",
                           borderRadius: 6,
                           padding: "2px 6px",
-                          background: "rgba(255,255,255,0.35)",
+                          background: "rgba(15,23,42,0.2)",
                           lineHeight: 1.2,
                         }}
                       >

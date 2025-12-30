@@ -88,10 +88,10 @@ beforeEach(() => {
 
 const renderEditor = (
   initialText: string,
-  opts?: { getImpl?: (url: string) => Promise<any>; strict?: boolean }
+  opts?: { getImpl?: (url: string, options?: any) => Promise<any>; strict?: boolean }
 ) => {
-  mockGet.mockImplementation((url: string) => {
-    if (opts?.getImpl) return opts.getImpl(url);
+  mockGet.mockImplementation((url: string, options?: any) => {
+    if (opts?.getImpl) return opts.getImpl(url, options);
     if (url.includes("/api/error-types")) {
       return Promise.resolve({ data: [] });
     }
@@ -3106,6 +3106,29 @@ describe("TokenEditor view toggles", () => {
 
     await user.click(screen.getByTestId("text-panel-toggle"));
     await waitFor(() => expect(screen.getByTestId("text-view-panel")).toBeInTheDocument());
+  });
+
+  it("loads M2 preview from the backend on demand", async () => {
+    await renderEditor("hello world", {
+      getImpl: (url: string, options?: any) => {
+        if (url.includes("/api/error-types")) {
+          return Promise.resolve({ data: [] });
+        }
+        if (url.includes("/api/texts/1/export") && options?.params?.include_all) {
+          return Promise.resolve({
+            data: [{ author_id: "user-1", author_name: "User One", block: "S hello world" }],
+          });
+        }
+        if (url.includes("/api/texts/1/export")) {
+          return Promise.resolve({ data: "S hello world" });
+        }
+        return Promise.resolve({ data: {} });
+      },
+    });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "tokenEditor.m2" }));
+    await waitFor(() => expect(screen.getAllByTestId("m2-preview")[0]).toHaveTextContent("S hello world"));
+    expect(mockGet.mock.calls.some(([url]) => url === "/api/texts/1/export")).toBe(true);
   });
 });
 

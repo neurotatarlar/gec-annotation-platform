@@ -139,7 +139,16 @@ def parse_m2_block(block: str) -> dict:
         start, end = int(span[0]), int(span[1])
         label = parts[1]
         replacement = parts[2]
-        anns.append({"start": start, "end": end, "label": label, "replacement": replacement})
+        annotator = parts[5] if len(parts) > 5 else None
+        anns.append(
+            {
+                "start": start,
+                "end": end,
+                "label": label,
+                "replacement": replacement,
+                "annotator": annotator,
+            }
+        )
     return {"tokens": tokens, "annotations": anns}
 
 
@@ -148,8 +157,74 @@ def test_export_includes_only_submitted(client):
     assert resp.status_code == 200, resp.text
     body = resp.text.strip()
     assert "S hello world" in body
-    assert "A 0 0|||ART|||hi|||REQUIRED|||-NONE-|||0" in body
+    assert f"A 0 0|||ART|||hi|||REQUIRED|||-NONE-|||{TEST_USER_ID}" in body
     assert "trash me" not in body
+
+
+def test_export_single_text_include_all_returns_all_authors(client):
+    other_id = uuid.uuid4()
+    with db.SessionLocal() as session:
+        session.add(
+            User(
+                id=other_id,
+                username="other",
+                password_hash="x",
+                role="annotator",
+                is_active=True,
+            )
+        )
+        category = session.query(Category).filter_by(name="ExportCat").one()
+        text = TextSample(content="alpha beta", category_id=category.id, required_annotations=1)
+        session.add(text)
+        session.flush()
+        text_id = text.id
+        error_type = session.query(ErrorType).first()
+        session.add(
+            Annotation(
+                text_id=text.id,
+                author_id=TEST_USER_ID,
+                start_token=0,
+                end_token=0,
+                replacement="ALPHA",
+                error_type_id=error_type.id,
+                payload={
+                    "operation": "replace",
+                    "text_tokens": ["alpha", "beta"],
+                    "text_tokens_sha256": "x",
+                    "after_tokens": [{"id": "a1", "text": "ALPHA", "origin": "base"}],
+                },
+            )
+        )
+        session.add(
+            Annotation(
+                text_id=text.id,
+                author_id=other_id,
+                start_token=1,
+                end_token=1,
+                replacement="BETA",
+                error_type_id=error_type.id,
+                payload={
+                    "operation": "replace",
+                    "text_tokens": ["alpha", "beta"],
+                    "text_tokens_sha256": "x",
+                    "after_tokens": [{"id": "b1", "text": "BETA", "origin": "base"}],
+                },
+            )
+        )
+        session.commit()
+
+    resp = client.get(f"/api/texts/{text_id}/export", params={"include_all": "true"})
+    assert resp.status_code == 200, resp.text
+    blocks = [b for b in resp.text.strip().split("\n\n") if b.strip()]
+    assert len(blocks) == 2
+    parsed = [parse_m2_block(block) for block in blocks]
+    assert parsed[0]["tokens"] == ["alpha", "beta"]
+    assert parsed[1]["tokens"] == ["alpha", "beta"]
+    labels = {ann["label"] for block in parsed for ann in block["annotations"]}
+    assert "ART" in labels
+    annotators = {ann["annotator"] for block in parsed for ann in block["annotations"]}
+    assert "tester" in annotators
+    assert "other" in annotators
 
 
 def test_export_includes_noop_when_no_annotations(client):
@@ -171,7 +246,7 @@ def test_export_includes_noop_when_no_annotations(client):
     assert resp.status_code == 200, resp.text
     body = resp.text
     assert "S plain sample" in body
-    assert "A -1 -1|||noop|||-NONE-|||REQUIRED|||-NONE-|||0" in body
+    assert f"A -1 -1|||noop|||-NONE-|||REQUIRED|||-NONE-|||{TEST_USER_ID}" in body
 
 
 def test_export_filters_by_category(client):
@@ -233,8 +308,8 @@ def test_export_uses_payload_token_snapshot_and_orders_annotations(client):
     block = next(b for b in resp.text.strip().split("\n\n") if b.startswith("S foo bar baz"))
     lines = block.splitlines()
     assert lines[0] == "S foo bar baz"
-    assert lines[1] == "A 1 1|||ART|||-NONE-|||REQUIRED|||-NONE-|||0"
-    assert lines[2] == "A 2 2|||ART|||qux quux|||REQUIRED|||-NONE-|||0"
+    assert lines[1] == f"A 1 1|||ART|||-NONE-|||REQUIRED|||-NONE-|||{TEST_USER_ID}"
+    assert lines[2] == f"A 2 2|||ART|||qux quux|||REQUIRED|||-NONE-|||{TEST_USER_ID}"
 
 
 def test_export_handles_move_and_insert_payloads(client):
@@ -293,8 +368,8 @@ def test_export_handles_move_and_insert_payloads(client):
     assert resp.status_code == 200, resp.text
     block = next(b for b in resp.text.strip().split("\n\n") if b.startswith("S alpha beta gamma"))
     lines = block.splitlines()
-    assert "A 0 0|||MOVE|||gamma|||REQUIRED|||-NONE-|||0" in lines
-    assert "A 1 0|||INS|||new|||REQUIRED|||-NONE-|||0" in lines
+    assert f"A 0 0|||MOVE|||gamma|||REQUIRED|||-NONE-|||{TEST_USER_ID}" in lines
+    assert f"A 1 0|||INS|||new|||REQUIRED|||-NONE-|||{TEST_USER_ID}" in lines
 
 
 def test_export_omits_non_matching_annotators_and_states(client):
@@ -343,9 +418,9 @@ def test_export_omits_non_matching_annotators_and_states(client):
 
 def test_import_export_round_trip_preserves_blocks(client):
     # Import a small M2, then export and ensure the block matches structure.
-    sample_m2 = """S Rainy day
-A 0 0|||PUNC|||Rainy|||REQUIRED|||-NONE-|||0
-A -1 -1|||noop|||-NONE-|||REQUIRED|||-NONE-|||0
+    sample_m2 = f"""S Rainy day
+A 0 0|||PUNC|||Rainy|||REQUIRED|||-NONE-|||{TEST_USER_ID}
+A -1 -1|||noop|||-NONE-|||REQUIRED|||-NONE-|||{TEST_USER_ID}
 """
     with db.SessionLocal() as session:
         category = session.query(Category).filter_by(name="ExportCat").one()

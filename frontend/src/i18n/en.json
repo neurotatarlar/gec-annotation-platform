@@ -224,6 +224,9 @@
     "spacing": "Spacing",
     "undo": "Undo",
     "original": "Original",
-    "corrected": "Corrected"
+    "corrected": "Corrected",
+    "m2": "M2",
+    "m2Author": "Annotator",
+    "m2Unknown": "Unknown"
   }
 }

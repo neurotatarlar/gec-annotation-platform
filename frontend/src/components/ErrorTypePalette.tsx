@@ -25,12 +25,12 @@ export const ErrorTypePalette = ({ errorTypes, activeId, onSelect }: Props) => {
               "flex flex-col items-center rounded-xl border px-2.5 py-2 text-xs",
               activeId === type.id ? "border-emerald-400" : "border-transparent"
             )}
-            style={{ backgroundColor: chipBg ?? undefined, color: "#0b1120" }}
+            style={{ backgroundColor: chipBg ?? undefined, color: "rgba(248,250,252,0.85)" }}
             onClick={() => onSelect(type.id)}
             title={type.description ?? undefined}
           >
             <span className="font-semibold">{label}</span>
-            <span className="text-xs text-slate-900/70">{type.default_hotkey?.trim() || "-"}</span>
+            <span className="text-xs text-slate-100/70">{type.default_hotkey?.trim() || "-"}</span>
           </button>
         );
       })}
