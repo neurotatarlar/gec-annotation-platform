@@ -43,3 +43,13 @@ export const colorWithAlpha = (color: string | null | undefined, alpha: number) 
 
   return `rgba(${r}, ${g}, ${b}, ${safeAlpha})`;
 };
+
+export const resolveErrorTypeColor = (
+  color: string | null | undefined,
+  fallback = "#94a3b8"
+) => {
+  const normalized = color?.trim();
+  if (!normalized) return fallback;
+  const valid = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(normalized);
+  return valid ? normalized : fallback;
+};

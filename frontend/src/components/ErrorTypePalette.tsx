@@ -2,7 +2,7 @@ import clsx from "clsx";
 
 import { useI18n } from "../context/I18nContext";
 import { ErrorType } from "../types";
-import { colorWithAlpha, getErrorTypeLabel } from "../utils/errorTypes";
+import { getErrorTypeLabel, resolveErrorTypeColor } from "../utils/errorTypes";
 
 interface Props {
   errorTypes: ErrorType[];
@@ -16,7 +16,7 @@ export const ErrorTypePalette = ({ errorTypes, activeId, onSelect }: Props) => {
   return (
     <div className="flex flex-wrap gap-2 rounded-2xl border border-slate-800 bg-slate-900/80 p-3">
       {errorTypes.map((type) => {
-        const chipBg = colorWithAlpha(type.default_color, 0.15);
+        const chipBg = resolveErrorTypeColor(type.default_color);
         const label = getErrorTypeLabel(type, locale);
         return (
           <button
@@ -25,12 +25,12 @@ export const ErrorTypePalette = ({ errorTypes, activeId, onSelect }: Props) => {
               "flex flex-col items-center rounded-xl border px-2.5 py-2 text-xs",
               activeId === type.id ? "border-emerald-400" : "border-transparent"
             )}
-            style={{ backgroundColor: chipBg ?? undefined }}
+            style={{ backgroundColor: chipBg ?? undefined, color: "#0b1120" }}
             onClick={() => onSelect(type.id)}
             title={type.description ?? undefined}
           >
             <span className="font-semibold">{label}</span>
-            <span className="text-xs text-slate-400">{type.default_hotkey?.trim() || "-"}</span>
+            <span className="text-xs text-slate-900/70">{type.default_hotkey?.trim() || "-"}</span>
           </button>
         );
       })}

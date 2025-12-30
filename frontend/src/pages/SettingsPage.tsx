@@ -6,6 +6,7 @@ import { useNavigate } from "react-router-dom";
 import { useAuthedApi } from "../api/client";
 import { useI18n } from "../context/I18nContext";
 import { ErrorType } from "../types";
+import { resolveErrorTypeColor } from "../utils/errorTypes";
 
 interface UserProfile {
   id: string;
@@ -503,7 +504,7 @@ export const SettingsPage = () => {
                     <td className="px-3 py-2" colSpan={7}>
                       <span
                         className="inline-flex items-center self-start rounded-full px-2 py-1 text-xs font-semibold text-slate-900 shadow-sm"
-                        style={{ backgroundColor: row.default_color }}
+                        style={{ backgroundColor: resolveErrorTypeColor(row.default_color) }}
                       >
                         <span className="font-semibold">
                           {(locale ?? "").startsWith("tt") ? row.tt_name : row.en_name}{" "}

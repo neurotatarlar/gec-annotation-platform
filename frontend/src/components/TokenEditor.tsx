@@ -15,9 +15,9 @@ import { useTokenDragDrop } from "../hooks/useTokenDragDrop";
 import { useTokenDeleteRange } from "../hooks/useTokenDeleteRange";
 import { useTokenSelectionHandlers } from "../hooks/useTokenSelectionHandlers";
 import {
-  colorWithAlpha,
   getErrorTypeLabel,
   getErrorTypeSuperLabel,
+  resolveErrorTypeColor,
 } from "../utils/errorTypes";
 import {
   detectCapitalizationEdit,
@@ -1305,7 +1305,7 @@ export const TokenEditor: React.FC<{
       const resolvedType = typeId ? errorTypeById.get(typeId) ?? null : null;
       const typeObj = isMoveGroup && !isMoveDestination ? null : resolvedType;
       const badgeText = typeObj ? getErrorTypeLabel(typeObj, locale) : "";
-      const badgeColor = typeObj?.default_color ?? "#94a3b8";
+      const badgeColor = resolveErrorTypeColor(typeObj?.default_color);
       const badgeFontSize = Math.max(8, tokenFontSize * 0.45);
       const badgePaddingY = Math.max(0.5, tokenFontSize * 0.07);
       const badgePaddingX = Math.max(2, tokenFontSize * 0.18);
@@ -2131,9 +2131,10 @@ const ErrorTypePanel: React.FC<ErrorTypePanelProps> = ({
           <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
             {group.items.map((type, idx) => {
               const primary = getErrorTypeLabel(type, locale);
-              const chipBg =
-                colorWithAlpha(type.default_color, 0.3) ??
-                categoryColors[(groupIdx + idx) % categoryColors.length];
+              const chipBg = resolveErrorTypeColor(
+                type.default_color,
+                categoryColors[(groupIdx + idx) % categoryColors.length]
+              );
               const hotkey = (type.default_hotkey ?? "").trim();
               const isHover = hoveredTypeId === type.id;
               const isPressed = pressedTypeId === type.id;
@@ -2150,7 +2151,7 @@ const ErrorTypePanel: React.FC<ErrorTypePanelProps> = ({
                   key={type.id}
                   style={{
                     ...categoryChipStyle,
-                    background: isPressed ? colorWithAlpha(type.default_color, 0.45) ?? chipBg : chipBg,
+                    background: chipBg,
                     border: `${isFlash || isPressed ? 2 : 1}px solid ${borderColor}`,
                     boxShadow: isFlash
                       ? "0 0 0 2px rgba(16,185,129,0.25)"
@@ -2159,6 +2160,7 @@ const ErrorTypePanel: React.FC<ErrorTypePanelProps> = ({
                         : "none",
                     transform: isPressed ? "translateY(1px)" : "none",
                     transition: "transform 0.08s ease, box-shadow 0.2s ease, border-color 0.2s ease",
+                    color: "#0b1120",
                   }}
                   title={type.description ?? undefined}
                   role="button"
@@ -2189,11 +2191,11 @@ const ErrorTypePanel: React.FC<ErrorTypePanelProps> = ({
                       <span
                         style={{
                           fontSize: 10,
-                          color: "#cbd5e1",
-                          border: "1px solid rgba(148,163,184,0.5)",
+                          color: "#0b1120",
+                          border: "1px solid rgba(15,23,42,0.35)",
                           borderRadius: 6,
                           padding: "2px 6px",
-                          background: "rgba(15,23,42,0.6)",
+                          background: "rgba(255,255,255,0.35)",
                           lineHeight: 1.2,
                         }}
                       >
