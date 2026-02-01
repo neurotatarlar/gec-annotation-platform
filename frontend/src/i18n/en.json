@@ -57,7 +57,7 @@
     "noVisible": "No visible categories.",
     "uploadButton": "Add texts",
     "uploadEmptyError": "Provide at least one text via the field or file.",
-    "uploadFileLabel": "Or upload a .json or .m2 file",
+    "uploadFileLabel": "Or upload a .json file",
     "uploadRequiredLabel": "Required annotations per text",
     "uploadSubmit": "Upload",
     "uploadSuccess": "Uploaded {{count}} texts successfully.",
@@ -121,8 +121,8 @@
   "export": {
     "open": "Export",
     "title": "Export annotations",
-    "subtitle": "Download submitted texts in M2 format.",
-    "format": "Format: M2",
+    "subtitle": "Download submitted texts in JSONL format.",
+    "format": "Format: JSONL",
     "submittedOnly": "Only texts in submitted status are included.",
     "categories": "Categories",
     "download": "Export file",
@@ -224,9 +224,6 @@
     "spacing": "Spacing",
     "undo": "Undo",
     "original": "Original",
-    "corrected": "Corrected",
-    "m2": "M2",
-    "m2Author": "Annotator",
-    "m2Unknown": "Unknown"
+    "corrected": "Corrected"
   }
 }

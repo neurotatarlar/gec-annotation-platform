@@ -10,7 +10,6 @@ import {
   EditorHistoryState,
   buildTextFromTokens,
   buildTextFromTokensWithBreaks,
-  buildM2Preview,
   computeLineBreaksFromText,
   computeTokensSha256,
   buildAnnotationsPayloadStandalone,
@@ -149,6 +148,25 @@ const initState = (text = "hello world"): EditorHistoryState =>
 
 const tokensToDisplay = (tokens: Array<{ kind?: string; text: string; moveId?: string; previousTokens?: unknown[] }>) =>
   tokens.map((tok) => (tok.kind === "empty" ? "⬚" : tok.text));
+
+const readTokenButtons = (panel: HTMLElement) =>
+  Array.from(panel.querySelectorAll("[data-token-index]")) as HTMLElement[];
+
+const readGroupSnapshots = (panel: HTMLElement) => {
+  const groups = Array.from(panel.querySelectorAll("[data-group-start]")) as HTMLElement[];
+  return groups
+    .map((group) => {
+      const start = Number(group.dataset.groupStart ?? 0);
+      const end = Number(group.dataset.groupEnd ?? 0);
+      const tokens = Array.from(group.querySelectorAll("[data-token-index]"))
+        .map((node) => node.textContent?.trim())
+        .filter(Boolean) as string[];
+      const badgeEl = group.querySelector("[data-badge-text]") as HTMLElement | null;
+      const badgeText = badgeEl?.dataset.badgeText ?? null;
+      return { start, end, tokens, badgeText };
+    })
+    .sort((a, b) => a.start - b.start);
+};
 
 const findGroupContainer = (node: HTMLElement | null) => {
   let current: HTMLElement | null = node;
@@ -898,63 +916,6 @@ describe("tokenEditorReducer core flows", () => {
 
 });
 
-describe("buildM2Preview", () => {
-  it("formats replacements into M2 output", () => {
-    const originalTokens = tokenizeToTokens("hello world");
-    const tokens = tokenizeToTokens("hi world");
-    const preview = buildM2Preview({ originalTokens, tokens });
-    expect(preview.split("\n")).toEqual([
-      "S hello world",
-      "A 0 1|||OTHER|||hi|||REQUIRED|||-NONE-|||0",
-    ]);
-  });
-
-  it("uses provided type labels when available", () => {
-    const originalTokens = tokenizeToTokens("hello world");
-    const tokens = tokenizeToTokens("hello brave world");
-    const correctionByIndex = new Map<number, string>([[1, "card-1"]]);
-    const preview = buildM2Preview({
-      originalTokens,
-      tokens,
-      correctionByIndex,
-      correctionTypeMap: { "card-1": 7 },
-      resolveTypeLabel: (id) => (id === 7 ? "ADJ" : null),
-    });
-    expect(preview).toContain("A 1 1|||ADJ|||brave|||REQUIRED|||-NONE-|||0");
-  });
-
-  it("emits noop when there are no edits", () => {
-    const originalTokens = tokenizeToTokens("same text");
-    const tokens = tokenizeToTokens("same text");
-    const preview = buildM2Preview({ originalTokens, tokens });
-    expect(preview.split("\n")).toEqual([
-      "S same text",
-      "A -1 -1|||noop|||-NONE-|||REQUIRED|||-NONE-|||0",
-    ]);
-  });
-
-  it("handles deletions with -NONE- replacement", () => {
-    const originalTokens = tokenizeToTokens("hello world");
-    const tokens = tokenizeToTokens("hello");
-    const preview = buildM2Preview({ originalTokens, tokens });
-    expect(preview).toContain("A 1 2|||OTHER|||-NONE-|||REQUIRED|||-NONE-|||0");
-  });
-
-  it("derives type from correction map for insertions", () => {
-    const originalTokens = tokenizeToTokens("hello world");
-    const tokens = tokenizeToTokens("hello kind world");
-    const correctionByIndex = new Map<number, string>([[1, "card-1"]]);
-    const preview = buildM2Preview({
-      originalTokens,
-      tokens,
-      correctionByIndex,
-      correctionTypeMap: { "card-1": 3 },
-      resolveTypeLabel: (id) => (id === 3 ? "INS" : null),
-    });
-    expect(preview).toContain("A 1 1|||INS|||kind|||REQUIRED|||-NONE-|||0");
-  });
-});
-
 describe("tokenEditorReducer move operations", () => {
   it("moves a multi-token range to the right without shifting by length", () => {
     const base = initState("alpha beta gamma delta epsilon");
@@ -1046,6 +1007,27 @@ describe("buildAnnotationsPayloadStandalone", () => {
     const expectedHash = await computeTokensSha256(["hello", "world"]);
     expect(ann.payload.text_tokens_sha256).toBe(expectedHash);
     expect(ann.replacement).toBe("hi");
+  });
+
+  it("includes unassigned corrections when allowUnassigned is true", async () => {
+    const base = initState("hello world");
+    const edited = editTokenByText(base, "hello", "hi");
+    const moveMarkers = deriveMoveMarkers(edited.present.tokens);
+    const correctionCards = deriveCorrectionCards(edited.present.tokens, moveMarkers);
+
+    const payloads = await buildAnnotationsPayloadStandalone({
+      initialText: "hello world",
+      tokens: edited.present.tokens,
+      originalTokens: edited.present.originalTokens,
+      correctionCards,
+      correctionTypeMap: {},
+      moveMarkers,
+      allowUnassigned: true,
+      defaultErrorTypeId: 0,
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0].error_type_id).toBe(0);
   });
 
   it("adds deleted_ids when includeDeletedIds is true", async () => {
@@ -1996,6 +1978,30 @@ describe("revert clears selection", () => {
     expect(screen.queryByText("noop")).not.toBeInTheDocument();
   });
 
+  it("orders error types by sort order within a category", async () => {
+    localStorage.clear();
+    await renderEditor("hello world", {
+      getImpl: (url: string) => {
+        if (url.includes("/api/error-types")) {
+          return Promise.resolve({
+            data: [
+              { id: 10, en_name: "Beta", category_en: "Grammar", sort_order: 2, is_active: true, default_color: "#38bdf8" },
+              { id: 11, en_name: "Alpha", category_en: "Grammar", sort_order: 1, is_active: true, default_color: "#38bdf8" },
+            ],
+          });
+        }
+        return Promise.resolve({ data: {} });
+      },
+    });
+
+    const group = await screen.findByText("Grammar");
+    const groupContainer = group.parentElement;
+    if (!groupContainer) throw new Error("Missing error type group container");
+    const buttons = within(groupContainer).getAllByRole("button");
+    const labels = buttons.map((btn) => (btn.textContent ?? "").trim());
+    expect(labels.slice(0, 2)).toEqual(["Alpha", "Beta"]);
+  });
+
   it("auto-assigns Merge when adding a single whitespace", async () => {
     localStorage.clear();
     const base = initState("foobar");
@@ -2293,6 +2299,268 @@ describe("TokenEditor view toggles", () => {
       .map((c) => c.textContent?.trim())
       .filter((t) => t && t !== "↺") as string[];
     expect(chips.join(" ")).toBe("⬚ beta");
+  });
+
+  it("hydrates delete placeholders with history when spans fall outside the token range", async () => {
+    vi.resetModules();
+    const { hydrateFromServerAnnotations: hydrateIsolated } = await import("./TokenEditor");
+    const hydrated = hydrateIsolated({
+        items: [
+          {
+            id: 9,
+            author_id: "user-1",
+            start_token: 5,
+            end_token: 5,
+            replacement: null,
+            error_type_id: 1,
+            payload: {
+              operation: "delete",
+              before_tokens: ["beta"],
+              after_tokens: [],
+              text_tokens: ["alpha", "beta"],
+            },
+          },
+        ],
+        initialText: "alpha beta",
+        currentUserId: null,
+      });
+    if (!hydrated) throw new Error("Expected hydration result");
+    const placeholder = hydrated.present.tokens.find((tok) => tok.kind === "empty");
+    expect(placeholder?.previousTokens?.length).toBeGreaterThan(0);
+  });
+
+  it("rehydrates delete and insert corrections with error badges", async () => {
+    localStorage.clear();
+    const base = initState("alpha beta gamma");
+    let next = deleteTokenByText(base, "beta");
+    next = insertAfterToken(next, "alpha", "NEW");
+    const moveMarkers = deriveMoveMarkers(next.present.tokens);
+    const correctionCards = deriveCorrectionCards(next.present.tokens, moveMarkers);
+    const correctionTypeMap = Object.fromEntries(correctionCards.map((card) => [card.id, 1]));
+    const annotations = await buildAnnotationsPayloadStandalone({
+      initialText: "alpha beta gamma",
+      tokens: next.present.tokens,
+      originalTokens: next.present.originalTokens,
+      correctionCards,
+      correctionTypeMap,
+      moveMarkers,
+    });
+
+    await renderEditor("alpha beta gamma", {
+      getImpl: (url: string) => {
+        if (url.includes("/api/error-types")) {
+          return Promise.resolve({
+            data: [{ id: 1, en_name: "Type A", tt_name: "Type A", default_color: "#94a3b8", is_active: true }],
+          });
+        }
+        if (url.includes("/annotations")) {
+          return Promise.resolve({
+            data: annotations.map((annotation, idx) => ({
+              id: 100 + idx,
+              author_id: "user-1",
+              start_token: annotation.start_token,
+              end_token: annotation.end_token,
+              replacement: annotation.replacement,
+              error_type_id: annotation.error_type_id,
+              payload: annotation.payload,
+            })),
+          });
+        }
+        return Promise.resolve({ data: {} });
+      },
+    });
+
+    const corrected = await screen.findByTestId("corrected-panel");
+    await waitFor(() => {
+      const badges = within(corrected).getAllByText("Type A");
+      expect(badges).toHaveLength(2);
+    });
+  });
+
+  it("persists delete and insert error types across refresh", async () => {
+    const originalEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = "development";
+    localStorage.clear();
+
+    const errorTypes = [
+      { id: 1, en_name: "Type A", tt_name: "Type A", default_color: "#94a3b8", is_active: true },
+    ];
+    let serverAnnotations: any[] = [];
+
+    const getImpl = (url: string) => {
+      if (url.includes("/api/error-types")) return Promise.resolve({ data: errorTypes });
+      if (url.includes("/annotations")) return Promise.resolve({ data: serverAnnotations });
+      return Promise.resolve({ data: {} });
+    };
+
+    mockPost.mockReset();
+    mockPost.mockImplementation((url: string, payload: any) => {
+      if (url.includes("/annotations")) {
+        serverAnnotations = (payload.annotations ?? []).map((ann: any, idx: number) => ({
+          ...ann,
+          id: 200 + idx,
+          author_id: "user-1",
+          version: 1,
+        }));
+        return Promise.resolve({ data: serverAnnotations });
+      }
+      return Promise.resolve({ data: {} });
+    });
+
+    await renderEditor("alpha beta", { getImpl });
+    const user = userEvent.setup();
+
+    const beta = await screen.findByRole("button", { name: "beta" });
+    await user.click(beta);
+    const deleteBtn = await screen.findByTitle("tokenEditor.delete (Del)");
+    await user.click(deleteBtn);
+
+    const placeholder = await screen.findByRole("button", { name: "⬚" });
+    await user.click(placeholder);
+    const typeChip = await screen.findByRole("button", { name: "Type A" });
+    await user.click(typeChip);
+
+    const alpha = await screen.findByRole("button", { name: "alpha" });
+    await user.click(alpha);
+    const insertAfter = await screen.findByTitle("tokenEditor.insertAfter (Insert)");
+    await user.click(insertAfter);
+    const insertInput = await screen.findByPlaceholderText("tokenEditor.editPlaceholder");
+    await user.type(insertInput, "NEW");
+    fireEvent.blur(insertInput);
+
+    const inserted = await screen.findByRole("button", { name: "NEW" });
+    await user.click(inserted);
+    const typeChipAgain = await screen.findByRole("button", { name: "Type A" });
+    await user.click(typeChipAgain);
+
+    await waitFor(() => expect(mockPost).toHaveBeenCalled(), { timeout: 2000 });
+    await waitFor(() => expect(serverAnnotations).toHaveLength(2), { timeout: 2000 });
+    serverAnnotations.forEach((annotation) => {
+      expect(annotation.error_type_id).toBe(1);
+    });
+
+    cleanup();
+    await renderEditor("alpha beta", { getImpl });
+
+    const corrected = await screen.findByTestId("corrected-panel");
+    await waitFor(() => {
+      const badges = within(corrected).getAllByText("Type A");
+      expect(badges).toHaveLength(2);
+    });
+
+    process.env.NODE_ENV = originalEnv;
+  }, 12000);
+
+  it("re-saves when assigning a type after an autosave", async () => {
+    const originalEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = "development";
+    localStorage.clear();
+
+    const errorTypes = [
+      { id: 1, en_name: "Type A", tt_name: "Type A", default_color: "#94a3b8", is_active: true },
+    ];
+
+    let annotationPostCount = 0;
+    let serverAnnotations: any[] = [];
+    mockPost.mockReset();
+    mockPost.mockImplementation((url: string, payload: any) => {
+      if (url.includes("/annotations")) {
+        annotationPostCount += 1;
+        serverAnnotations = (payload.annotations ?? []).map((ann: any, idx: number) => ({
+          ...ann,
+          id: 300 + idx,
+          author_id: "user-1",
+          version: 1,
+        }));
+        return Promise.resolve({
+          data: serverAnnotations,
+        });
+      }
+      return Promise.resolve({ data: {} });
+    });
+
+    await renderEditor("alpha beta", {
+      getImpl: (url: string) => {
+        if (url.includes("/api/error-types")) return Promise.resolve({ data: errorTypes });
+        if (url.includes("/annotations")) return Promise.resolve({ data: serverAnnotations });
+        return Promise.resolve({ data: {} });
+      },
+    });
+
+    const user = userEvent.setup();
+    const beta = await screen.findByRole("button", { name: "beta" });
+    await user.click(beta);
+    const deleteBtn = await screen.findByTitle("tokenEditor.delete (Del)");
+    await user.click(deleteBtn);
+
+    await new Promise((resolve) => setTimeout(resolve, 900));
+    expect(annotationPostCount).toBe(0);
+
+    const placeholder = await screen.findByRole("button", { name: "⬚" });
+    await user.click(placeholder);
+    const typeChip = await screen.findByRole("button", { name: "Type A" });
+    await user.click(typeChip);
+
+    await new Promise((resolve) => setTimeout(resolve, 900));
+    expect(annotationPostCount).toBe(1);
+    expect(serverAnnotations).toHaveLength(1);
+
+    cleanup();
+    await renderEditor("alpha beta", {
+      getImpl: (url: string) => {
+        if (url.includes("/api/error-types")) return Promise.resolve({ data: errorTypes });
+        if (url.includes("/annotations")) return Promise.resolve({ data: serverAnnotations });
+        return Promise.resolve({ data: {} });
+      },
+    });
+
+    const corrected = await screen.findByTestId("corrected-panel");
+    await waitFor(() => {
+      const badges = within(corrected).getAllByText("Type A");
+      expect(badges).toHaveLength(1);
+    });
+
+    process.env.NODE_ENV = originalEnv;
+  }, 12000);
+
+  it("rehydrates error types from server even with stale local type state", async () => {
+    localStorage.clear();
+    localStorage.setItem(
+      "tokenEditorPrefs:types:1",
+      JSON.stringify({ assignments: { "stale-card": 99 } })
+    );
+    await renderEditor("alpha beta", {
+      getImpl: (url: string) => {
+        if (url.includes("/api/error-types")) {
+          return Promise.resolve({
+            data: [{ id: 1, en_name: "Type A", tt_name: "Type A", default_color: "#94a3b8", is_active: true }],
+          });
+        }
+        if (url.includes("/annotations")) {
+          return Promise.resolve({
+            data: [
+              {
+                id: 12,
+                author_id: "user-1",
+                start_token: 0,
+                end_token: 0,
+                replacement: null,
+                error_type_id: 1,
+                payload: {
+                  operation: "delete",
+                  before_tokens: ["alpha"],
+                  after_tokens: [],
+                  text_tokens: ["alpha", "beta"],
+                },
+              },
+            ],
+          });
+        }
+        return Promise.resolve({ data: {} });
+      },
+    });
+    const corrected = await screen.findByTestId("corrected-panel");
+    expect(within(corrected).getByText("Type A")).toBeInTheDocument();
   });
 
   it("hydrates server insertions from another annotator", async () => {
@@ -3108,28 +3376,6 @@ describe("TokenEditor view toggles", () => {
     await waitFor(() => expect(screen.getByTestId("text-view-panel")).toBeInTheDocument());
   });
 
-  it("loads M2 preview from the backend on demand", async () => {
-    await renderEditor("hello world", {
-      getImpl: (url: string, options?: any) => {
-        if (url.includes("/api/error-types")) {
-          return Promise.resolve({ data: [] });
-        }
-        if (url.includes("/api/texts/1/export") && options?.params?.include_all) {
-          return Promise.resolve({
-            data: [{ author_id: "user-1", author_name: "User One", block: "S hello world" }],
-          });
-        }
-        if (url.includes("/api/texts/1/export")) {
-          return Promise.resolve({ data: "S hello world" });
-        }
-        return Promise.resolve({ data: {} });
-      },
-    });
-    const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "tokenEditor.m2" }));
-    await waitFor(() => expect(screen.getAllByTestId("m2-preview")[0]).toHaveTextContent("S hello world"));
-    expect(mockGet.mock.calls.some(([url]) => url === "/api/texts/1/export")).toBe(true);
-  });
 });
 
 describe("hydrates combined corrections", () => {
@@ -3243,6 +3489,356 @@ describe("hydrates combined corrections", () => {
     const expectedTokens = tokensToDisplay(finalState.present.tokens);
     expect(renderedTokens).toEqual(expectedTokens);
   });
+
+  it("round-trips multi-correction UI edits through autosave and refresh", async () => {
+    const originalEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = "development";
+    localStorage.clear();
+
+    const errorTypes = [
+      { id: 1, en_name: "Type A", tt_name: "Type A", default_color: "#38bdf8", is_active: true },
+      { id: 2, en_name: "Type B", tt_name: "Type B", default_color: "#fbbf24", is_active: true },
+      { id: 3, en_name: "Type C", tt_name: "Type C", default_color: "#f472b6", is_active: true },
+    ];
+
+    let serverAnnotations: any[] = [];
+    mockPost.mockReset();
+    mockPost.mockImplementation((url: string, payload: any) => {
+      if (url.includes("/render")) {
+        return Promise.resolve({ data: { corrected_text: "rendered" } });
+      }
+      if (url.includes("/annotations")) {
+        serverAnnotations = (payload.annotations ?? []).map((ann: any, idx: number) => ({
+          ...ann,
+          id: 500 + idx,
+          author_id: "user-1",
+          version: 1,
+        }));
+        return Promise.resolve({ data: serverAnnotations });
+      }
+      return Promise.resolve({ data: {} });
+    });
+
+    const getImpl = (url: string) => {
+      if (url.includes("/api/error-types")) return Promise.resolve({ data: errorTypes });
+      if (url.includes("/annotations")) return Promise.resolve({ data: serverAnnotations });
+      return Promise.resolve({ data: {} });
+    };
+
+    await renderEditor(baseText, { getImpl });
+    const user = userEvent.setup();
+
+    const panel = await screen.findByTestId("corrected-panel");
+
+    await user.click(within(panel).getByRole("button", { name: "zeta" }));
+    await user.keyboard("{Delete}");
+    const deletePlaceholder = await screen.findByRole("button", { name: "⬚" });
+    await user.click(deletePlaceholder);
+    await user.click(await screen.findByRole("button", { name: "Type A" }));
+
+    await user.click(within(panel).getByRole("button", { name: "beta" }));
+    const insertAfter = await screen.findByTitle("tokenEditor.insertAfter (Insert)");
+    await user.click(insertAfter);
+    const insertInput = await screen.findByPlaceholderText("tokenEditor.editPlaceholder");
+    await user.type(insertInput, "NEW1");
+    fireEvent.blur(insertInput);
+    const newToken = await screen.findByRole("button", { name: "NEW1" });
+    await user.click(newToken);
+    await user.click(await screen.findByRole("button", { name: "Type B" }));
+
+    const delta = await screen.findByRole("button", { name: "delta" });
+    await user.dblClick(delta);
+    const deltaInput = await screen.findByDisplayValue("delta");
+    await user.clear(deltaInput);
+    await user.type(deltaInput, "deltaX");
+    fireEvent.blur(deltaInput);
+    const deltaX = await screen.findByRole("button", { name: "deltaX" });
+    await user.click(deltaX);
+    await user.click(await screen.findByRole("button", { name: "Type C" }));
+
+    const gamma = await screen.findByRole("button", { name: "gamma" });
+    await user.dblClick(gamma);
+    const gammaInput = await screen.findByDisplayValue("gamma");
+    await user.clear(gammaInput);
+    await user.type(gammaInput, "g1 g2");
+    fireEvent.blur(gammaInput);
+    const g1 = await screen.findByRole("button", { name: "g1" });
+    await user.click(g1);
+    await user.click(await screen.findByRole("button", { name: "Type B" }));
+
+    const updatedPanel = await screen.findByTestId("corrected-panel");
+    stubTokenRects(updatedPanel);
+    const iota = within(updatedPanel).getByRole("button", { name: "iota" });
+    const alpha = within(updatedPanel).getByRole("button", { name: "alpha" });
+    const dataTransfer = {
+      setData: () => {},
+      setDragImage: () => {},
+      effectAllowed: "",
+    };
+    fireEvent.dragStart(iota, { dataTransfer });
+    fireEvent.dragOver(alpha, { dataTransfer, clientX: 100, clientY: 5 });
+    fireEvent.drop(alpha, { dataTransfer, clientX: 100, clientY: 5 });
+    const movedIota = await screen.findByRole("button", { name: "iota" });
+    await user.click(movedIota);
+    await user.click(await screen.findByRole("button", { name: "Type A" }));
+
+    await waitFor(() => expect(serverAnnotations.length).toBeGreaterThan(0), { timeout: 4000 });
+
+    const beforePanel = await screen.findByTestId("corrected-panel");
+    const beforeTokens = within(beforePanel)
+      .getAllByRole("button")
+      .filter((el) => el.getAttribute("data-token-index") !== null)
+      .map((el) => el.textContent?.trim())
+      .filter(Boolean) as string[];
+    const beforeBadgeCounts = new Map(
+      errorTypes.map((type) => [type.en_name, within(beforePanel).queryAllByText(type.en_name).length])
+    );
+
+    cleanup();
+    await renderEditor(baseText, { getImpl });
+
+    const afterPanel = await screen.findByTestId("corrected-panel");
+    const afterTokens = within(afterPanel)
+      .getAllByRole("button")
+      .filter((el) => el.getAttribute("data-token-index") !== null)
+      .map((el) => el.textContent?.trim())
+      .filter(Boolean) as string[];
+    expect(afterTokens).toEqual(beforeTokens);
+
+    errorTypes.forEach((type) => {
+      const count = within(afterPanel).queryAllByText(type.en_name).length;
+      expect(count).toBe(beforeBadgeCounts.get(type.en_name));
+    });
+
+    process.env.NODE_ENV = originalEnv;
+  }, 20000);
+  it("rehydrates complex multi-correction badges after refresh", async () => {
+    mockGet.mockReset();
+    mockPost.mockReset();
+    localStorage.clear();
+
+    const errorTypes = [
+      { id: 1, en_name: "Type A", tt_name: "Type A", default_color: "#38bdf8", is_active: true },
+      { id: 2, en_name: "Type B", tt_name: "Type B", default_color: "#fbbf24", is_active: true },
+      { id: 3, en_name: "Type C", tt_name: "Type C", default_color: "#f472b6", is_active: true },
+    ];
+
+    let state = initState(baseText);
+    state = moveTokensByText(state, ["delta", "epsilon"], "iota", "after");
+    state = editRangeByText(state, "delta", "epsilon", "deltaEpsilon");
+    state = insertAfterToken(state, "beta", "NEW1");
+    state = editTokenByText(state, "gamma", "g1 g2");
+    state = deleteTokenByText(state, "zeta");
+    state = deleteTokenByText(state, "mu");
+
+    const tokens = state.present.tokens;
+    const originalTokens = state.present.originalTokens;
+    const moveMarkers = deriveMoveMarkers(tokens);
+    const correctionCards = deriveCorrectionCards(tokens, moveMarkers);
+    const correctionTypeMap: Record<string, number> = {};
+    const expectedBadgeCounts = new Map<number, number>();
+    correctionCards.forEach((card, idx) => {
+      const typeId = errorTypes[idx % errorTypes.length].id;
+      correctionTypeMap[card.id] = typeId;
+      expectedBadgeCounts.set(typeId, (expectedBadgeCounts.get(typeId) ?? 0) + 1);
+    });
+
+    const payloads = await buildAnnotationsPayloadStandalone({
+      initialText: baseText,
+      tokens,
+      originalTokens,
+      correctionCards,
+      correctionTypeMap,
+      moveMarkers,
+    });
+    const annotations = payloads.map((payload, idx) => ({
+      id: 400 + idx,
+      author_id: "user-1",
+      start_token: payload.start_token,
+      end_token: payload.end_token,
+      replacement: payload.replacement,
+      error_type_id: payload.error_type_id,
+      payload: payload.payload,
+    }));
+
+    await renderEditor(baseText, {
+      getImpl: (url: string) => {
+        if (url.includes("/api/error-types")) return Promise.resolve({ data: errorTypes });
+        if (url.includes("/annotations")) return Promise.resolve({ data: annotations });
+        return Promise.resolve({ data: {} });
+      },
+    });
+
+    const corrected = await screen.findByTestId("corrected-panel");
+    const renderedTokens = within(corrected)
+      .getAllByRole("button")
+      .filter((el) => el.getAttribute("data-token-index") !== null)
+      .map((el) => el.textContent?.trim())
+      .filter(Boolean) as string[];
+    const expectedTokens = tokensToDisplay(tokens);
+    expect(renderedTokens).toEqual(expectedTokens);
+
+    await waitFor(() => {
+      errorTypes.forEach((type) => {
+        const expected = expectedBadgeCounts.get(type.id) ?? 0;
+        const badges = within(corrected).queryAllByText(type.en_name);
+        expect(badges).toHaveLength(expected);
+      });
+    });
+  });
+});
+
+describe("UI hydration matrix", () => {
+  const baseText =
+    "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu";
+  const errorTypes = [
+    { id: 1, en_name: "Type A", tt_name: "Type A", default_color: "#38bdf8", is_active: true },
+    { id: 2, en_name: "Type B", tt_name: "Type B", default_color: "#fbbf24", is_active: true },
+    { id: 3, en_name: "Type C", tt_name: "Type C", default_color: "#f472b6", is_active: true },
+    { id: 4, en_name: "Type D", tt_name: "Type D", default_color: "#34d399", is_active: true },
+  ];
+
+  const permute = (items: string[]): string[][] => {
+    if (items.length <= 1) return [items];
+    const result: string[][] = [];
+    items.forEach((item, idx) => {
+      const rest = [...items.slice(0, idx), ...items.slice(idx + 1)];
+      permute(rest).forEach((suffix) => result.push([item, ...suffix]));
+    });
+    return result;
+  };
+
+  const pickPlaceholderBetween = (panel: HTMLElement, leftText: string, rightText: string) => {
+    const buttons = readTokenButtons(panel);
+    const labels = buttons.map((el) => el.textContent?.trim() ?? "");
+    const leftIdx = labels.indexOf(leftText);
+    if (leftIdx === -1) throw new Error(`Missing token ${leftText}`);
+    const rightIdx = labels.indexOf(rightText);
+    if (rightIdx === -1) throw new Error(`Missing token ${rightText}`);
+    const targetIdx = leftIdx + 1;
+    if (targetIdx >= rightIdx) {
+      throw new Error(`Expected placeholder between ${leftText} and ${rightText}`);
+    }
+    return buttons[targetIdx];
+  };
+
+  const operations = {
+    delete: async (user: ReturnType<typeof userEvent.setup>) => {
+      const zeta = await screen.findByRole("button", { name: "zeta" });
+      await user.click(zeta);
+      const deleteBtn = await screen.findByTitle("tokenEditor.delete (Del)");
+      await user.click(deleteBtn);
+      const panel = await screen.findByTestId("corrected-panel");
+      const placeholder = pickPlaceholderBetween(panel, "epsilon", "eta");
+      await user.click(placeholder);
+      await user.click(await screen.findByRole("button", { name: "Type A" }));
+    },
+    insert: async (user: ReturnType<typeof userEvent.setup>) => {
+      const beta = await screen.findByRole("button", { name: "beta" });
+      await user.click(beta);
+      const insertAfter = await screen.findByTitle("tokenEditor.insertAfter (Insert)");
+      await user.click(insertAfter);
+      const insertInput = await screen.findByPlaceholderText("tokenEditor.editPlaceholder");
+      await user.type(insertInput, "NEW1");
+      fireEvent.blur(insertInput);
+      const newToken = await screen.findByRole("button", { name: "NEW1" });
+      await user.click(newToken);
+      await user.click(await screen.findByRole("button", { name: "Type B" }));
+    },
+    edit: async (user: ReturnType<typeof userEvent.setup>) => {
+      const delta = await screen.findByRole("button", { name: "delta" });
+      await user.dblClick(delta);
+      const deltaInput = await screen.findByDisplayValue("delta");
+      await user.clear(deltaInput);
+      await user.type(deltaInput, "deltaX");
+      fireEvent.blur(deltaInput);
+      const deltaX = await screen.findByRole("button", { name: "deltaX" });
+      await user.click(deltaX);
+      await user.click(await screen.findByRole("button", { name: "Type C" }));
+    },
+    move: async (user: ReturnType<typeof userEvent.setup>) => {
+      const panel = await screen.findByTestId("corrected-panel");
+      stubTokenRects(panel);
+      const iota = within(panel).getByRole("button", { name: "iota" });
+      const gap = panel.querySelector("[data-drop-index='0']") as HTMLElement | null;
+      if (!gap) throw new Error("Expected gap index 0");
+      const dataTransfer = {
+        setData: () => {},
+        setDragImage: () => {},
+        effectAllowed: "",
+      };
+      fireEvent.dragStart(iota, { dataTransfer });
+      fireEvent.dragOver(gap, { dataTransfer, clientX: 0, clientY: 5 });
+      fireEvent.drop(gap, { dataTransfer, clientX: 0, clientY: 5 });
+      const movedIota = await screen.findByRole("button", { name: "iota" });
+      await user.click(movedIota);
+      await user.click(await screen.findByRole("button", { name: "Type D" }));
+    },
+  };
+
+  const sequences = permute(["delete", "insert", "edit", "move"]).map((sequence) => [sequence]);
+
+  it.each(sequences)("round-trips UI sequence %s", async (sequence) => {
+    const originalEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = "development";
+    localStorage.clear();
+    mockGet.mockReset();
+    mockPost.mockReset();
+
+    let serverAnnotations: any[] = [];
+    try {
+      mockPost.mockImplementation((url: string, payload: any) => {
+        if (url.includes("/render")) {
+          return Promise.resolve({ data: { corrected_text: "rendered" } });
+        }
+        if (url.includes("/annotations")) {
+          serverAnnotations = (payload.annotations ?? []).map((ann: any, idx: number) => ({
+            ...ann,
+            id: 600 + idx,
+            author_id: "user-1",
+            version: 1,
+          }));
+          return Promise.resolve({ data: serverAnnotations });
+        }
+        return Promise.resolve({ data: {} });
+      });
+
+      const getImpl = (url: string) => {
+        if (url.includes("/api/error-types")) return Promise.resolve({ data: errorTypes });
+        if (url.includes("/annotations")) return Promise.resolve({ data: serverAnnotations });
+        return Promise.resolve({ data: {} });
+      };
+
+      await renderEditor(baseText, { getImpl });
+      const user = userEvent.setup();
+
+      for (const op of sequence) {
+        await operations[op as keyof typeof operations](user);
+      }
+
+      await waitFor(() => expect(serverAnnotations).toHaveLength(4), { timeout: 8000 });
+
+      const beforePanel = await screen.findByTestId("corrected-panel");
+      const beforeTokens = readTokenButtons(beforePanel)
+        .map((el) => el.textContent?.trim())
+        .filter(Boolean) as string[];
+      const beforeGroups = readGroupSnapshots(beforePanel);
+
+      cleanup();
+      await renderEditor(baseText, { getImpl });
+
+      const afterPanel = await screen.findByTestId("corrected-panel");
+      const afterTokens = readTokenButtons(afterPanel)
+        .map((el) => el.textContent?.trim())
+        .filter(Boolean) as string[];
+      expect(afterTokens).toEqual(beforeTokens);
+
+      const afterGroups = readGroupSnapshots(afterPanel);
+      expect(afterGroups).toEqual(beforeGroups);
+    } finally {
+      process.env.NODE_ENV = originalEnv;
+    }
+  }, 30000);
 });
 
 describe("navigation when category is empty", () => {

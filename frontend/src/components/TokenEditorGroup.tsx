@@ -174,6 +174,9 @@ export const TokenEditorGroup: React.FC<TokenEditorGroupProps> = ({
         alignSelf: isMoveDestination ? "flex-start" : undefined,
         position: "relative",
       }}
+      data-group-start={group.start}
+      data-group-end={group.end}
+      data-group-move={moveId ?? undefined}
       ref={setGroupRef}
       onClick={() => {
         if (!showBorder) return;
@@ -192,7 +195,9 @@ export const TokenEditorGroup: React.FC<TokenEditorGroupProps> = ({
           gap: 0,
           flexWrap: "wrap",
           justifyContent: "flex-start",
-          alignItems: "center",
+          alignItems: "flex-start",
+          alignContent: "flex-start",
+          lineHeight: 1.05,
           marginBottom: isMoveSource ? 0 : Math.max(0, tokenFontSize * 0.03),
         }}
       >
@@ -278,6 +283,7 @@ export const TokenEditorGroup: React.FC<TokenEditorGroupProps> = ({
             marginTop: 0,
           }}
           title={badgeText}
+          data-badge-text={badgeText}
         >
           {badgeText}
         </div>

@@ -20,6 +20,7 @@ type UseAnnotationsLoaderParams = {
   annotationIdMap: React.RefObject<Map<string, number>>;
   annotationDeleteMap: React.RefObject<Map<string, number[]>>;
   setServerAnnotationVersion: (value: number) => void;
+  onLoaded?: (textId: number) => void;
 };
 
 export const useAnnotationsLoader = ({
@@ -34,6 +35,7 @@ export const useAnnotationsLoader = ({
   annotationIdMap,
   annotationDeleteMap,
   setServerAnnotationVersion,
+  onLoaded,
 }: UseAnnotationsLoaderParams) => {
   const loadedRef = useRef<number | null>(null);
   const promiseRef = useRef<Promise<any> | null>(null);
@@ -96,6 +98,9 @@ export const useAnnotationsLoader = ({
       } catch {
         // ignore load errors; optimistic saves will still work
       } finally {
+        if (!cancelled) {
+          onLoaded?.(textId);
+        }
         if (promiseTextIdRef.current === textId) {
           promiseRef.current = null;
         }
@@ -117,5 +122,6 @@ export const useAnnotationsLoader = ({
     annotationIdMap,
     annotationDeleteMap,
     setServerAnnotationVersion,
+    onLoaded,
   ]);
 };

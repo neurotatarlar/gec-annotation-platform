@@ -77,6 +77,7 @@ class ErrorType(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     description: Mapped[Optional[str]]
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     default_color: Mapped[str] = mapped_column(String(16), default="#ff7f50")
     default_hotkey: Mapped[Optional[str]] = mapped_column(Text)
     category_en: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)

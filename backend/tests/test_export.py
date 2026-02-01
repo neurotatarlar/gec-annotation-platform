@@ -1,5 +1,7 @@
+import json
 import os
 import uuid
+from datetime import datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -127,41 +129,24 @@ def client():
     return TestClient(app)
 
 
-def parse_m2_block(block: str) -> dict:
-    lines = [line.strip() for line in block.strip().splitlines() if line.strip()]
-    assert lines and lines[0].startswith("S ")
-    tokens = lines[0][2:].split()
-    anns = []
-    for line in lines[1:]:
-        assert line.startswith("A ")
-        parts = line[2:].split("|||")
-        span = parts[0].split()
-        start, end = int(span[0]), int(span[1])
-        label = parts[1]
-        replacement = parts[2]
-        annotator = parts[5] if len(parts) > 5 else None
-        anns.append(
-            {
-                "start": start,
-                "end": end,
-                "label": label,
-                "replacement": replacement,
-                "annotator": annotator,
-            }
-        )
-    return {"tokens": tokens, "annotations": anns}
+def parse_jsonl(text: str) -> list[dict]:
+    return [json.loads(line) for line in text.splitlines() if line.strip()]
 
 
 def test_export_includes_only_submitted(client):
     resp = client.get("/api/texts/export")
     assert resp.status_code == 200, resp.text
-    body = resp.text.strip()
-    assert "S hello world" in body
-    assert f"A 0 0|||ART|||hi|||REQUIRED|||-NONE-|||{TEST_USER_ID}" in body
-    assert "trash me" not in body
+    records = parse_jsonl(resp.text)
+    assert len(records) == 1
+    record = records[0]
+    assert record["source"] == "hello world"
+    assert record["target"] == "hi world"
+    assert record["edits"]
+    assert record["edits"][0]["error_type"] == "ART"
+    assert "trash me" not in resp.text
 
 
-def test_export_single_text_include_all_returns_all_authors(client):
+def test_export_single_text_picks_latest_variant(client):
     other_id = uuid.uuid4()
     with db.SessionLocal() as session:
         session.add(
@@ -211,20 +196,28 @@ def test_export_single_text_include_all_returns_all_authors(client):
                 },
             )
         )
+        session.add(
+            AnnotationTask(
+                text_id=text.id,
+                annotator_id=TEST_USER_ID,
+                status="submitted",
+                updated_at=datetime.utcnow(),
+            )
+        )
+        session.add(
+            AnnotationTask(
+                text_id=text.id,
+                annotator_id=other_id,
+                status="submitted",
+                updated_at=datetime.utcnow() + timedelta(seconds=5),
+            )
+        )
         session.commit()
 
-    resp = client.get(f"/api/texts/{text_id}/export", params={"include_all": "true"})
+    resp = client.get(f"/api/texts/{text_id}/export")
     assert resp.status_code == 200, resp.text
-    blocks = [b for b in resp.text.strip().split("\n\n") if b.strip()]
-    assert len(blocks) == 2
-    parsed = [parse_m2_block(block) for block in blocks]
-    assert parsed[0]["tokens"] == ["alpha", "beta"]
-    assert parsed[1]["tokens"] == ["alpha", "beta"]
-    labels = {ann["label"] for block in parsed for ann in block["annotations"]}
-    assert "ART" in labels
-    annotators = {ann["annotator"] for block in parsed for ann in block["annotations"]}
-    assert "tester" in annotators
-    assert "other" in annotators
+    record = json.loads(resp.text.strip())
+    assert record["target"] == "alpha BETA"
 
 
 def test_export_includes_noop_when_no_annotations(client):
@@ -234,19 +227,19 @@ def test_export_includes_noop_when_no_annotations(client):
         session.add(text)
         session.flush()
         session.add(
-          AnnotationTask(
-            text_id=text.id,
-            annotator_id=TEST_USER_ID,
-            status="submitted",
-          )
+            AnnotationTask(
+                text_id=text.id,
+                annotator_id=TEST_USER_ID,
+                status="submitted",
+            )
         )
         session.commit()
 
     resp = client.get("/api/texts/export")
     assert resp.status_code == 200, resp.text
-    body = resp.text
-    assert "S plain sample" in body
-    assert f"A -1 -1|||noop|||-NONE-|||REQUIRED|||-NONE-|||{TEST_USER_ID}" in body
+    record = next(item for item in parse_jsonl(resp.text) if item["source"] == "plain sample")
+    assert record["edits"] == []
+    assert record["target"] == "plain sample"
 
 
 def test_export_filters_by_category(client):
@@ -281,7 +274,10 @@ def test_export_uses_payload_token_snapshot_and_orders_annotations(client):
                     "operation": "replace",
                     "text_tokens": ["foo", "bar", "baz"],
                     "text_tokens_sha256": "hash",
-                    "after_tokens": [{"id": "a3", "text": "qux", "origin": "base"}, {"id": "a4", "text": "quux", "origin": "base"}],
+                    "after_tokens": [
+                        {"id": "a3", "text": "qux", "origin": "base"},
+                        {"id": "a4", "text": "quux", "origin": "base"},
+                    ],
                 },
             )
         )
@@ -305,11 +301,9 @@ def test_export_uses_payload_token_snapshot_and_orders_annotations(client):
 
     resp = client.get("/api/texts/export")
     assert resp.status_code == 200, resp.text
-    block = next(b for b in resp.text.strip().split("\n\n") if b.startswith("S foo bar baz"))
-    lines = block.splitlines()
-    assert lines[0] == "S foo bar baz"
-    assert lines[1] == f"A 1 1|||ART|||-NONE-|||REQUIRED|||-NONE-|||{TEST_USER_ID}"
-    assert lines[2] == f"A 2 2|||ART|||qux quux|||REQUIRED|||-NONE-|||{TEST_USER_ID}"
+    record = next(item for item in parse_jsonl(resp.text) if item["source"] == "foo-bar baz")
+    edits = record["edits"]
+    assert [edit["start_token"] for edit in edits] == [1, 2]
 
 
 def test_export_handles_move_and_insert_payloads(client):
@@ -342,10 +336,12 @@ def test_export_handles_move_and_insert_payloads(client):
                     "text_tokens": ["alpha", "beta", "gamma"],
                     "text_tokens_sha256": "hash",
                     "after_tokens": [{"id": "m1", "text": "gamma", "origin": "base"}],
+                    "move_from": 2,
+                    "move_to": 0,
+                    "move_len": 1,
                 },
             )
         )
-        # Represent an insertion before index 1 by using a zero-length span.
         session.add(
             Annotation(
                 text_id=text.id,
@@ -366,10 +362,10 @@ def test_export_handles_move_and_insert_payloads(client):
 
     resp = client.get("/api/texts/export")
     assert resp.status_code == 200, resp.text
-    block = next(b for b in resp.text.strip().split("\n\n") if b.startswith("S alpha beta gamma"))
-    lines = block.splitlines()
-    assert f"A 0 0|||MOVE|||gamma|||REQUIRED|||-NONE-|||{TEST_USER_ID}" in lines
-    assert f"A 1 0|||INS|||new|||REQUIRED|||-NONE-|||{TEST_USER_ID}" in lines
+    record = next(item for item in parse_jsonl(resp.text) if item["source"] == "alpha beta gamma")
+    ops = {edit["operation"] for edit in record["edits"]}
+    assert "move" in ops
+    assert "insert" in ops
 
 
 def test_export_omits_non_matching_annotators_and_states(client):
@@ -379,7 +375,11 @@ def test_export_omits_non_matching_annotators_and_states(client):
         session.add(text)
         session.flush()
         other_user = User(
-            id=uuid.uuid4(), username="other", password_hash="x", role="annotator", is_active=True
+            id=uuid.uuid4(),
+            username="other",
+            password_hash="x",
+            role="annotator",
+            is_active=True,
         )
         session.add(other_user)
         err = session.query(ErrorType).first()
@@ -403,51 +403,85 @@ def test_export_omits_non_matching_annotators_and_states(client):
                 },
             )
         )
-        # same text, but our user has not submitted
         session.add(AnnotationTask(text_id=text.id, annotator_id=TEST_USER_ID, status="in_progress"))
         session.commit()
 
     resp = client.get("/api/texts/export")
     assert resp.status_code == 200, resp.text
-    blocks = [b for b in resp.text.strip().split("\n\n") if b.strip()]
-    parsed = [parse_m2_block(b) for b in blocks]
-    target = next((b for b in parsed if b["tokens"] == ["multi", "annotator"]), None)
-    assert target is not None
-    assert any(a["label"] == "ART" and a["replacement"] == "x" for a in target["annotations"])
+    records = parse_jsonl(resp.text)
+    assert any(item["source"] == "multi annotator" for item in records)
+
+
+def test_render_endpoint_returns_corrected_text(client):
+    with db.SessionLocal() as session:
+        text = session.query(TextSample).filter_by(content="hello world").one()
+        error_type = session.query(ErrorType).first()
+        assert error_type is not None
+        payload = {
+            "annotations": [
+                {
+                    "start_token": 0,
+                    "end_token": 0,
+                    "replacement": "hi",
+                    "error_type_id": error_type.id,
+                    "payload": {
+                        "operation": "replace",
+                        "before_tokens": ["hello"],
+                        "after_tokens": [{"id": "a1", "text": "hi", "origin": "base"}],
+                        "text_tokens": ["hello", "world"],
+                    },
+                }
+            ]
+        }
+
+    resp = client.post(f"/api/texts/{text.id}/render", json=payload)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["corrected_text"] == "hi world"
 
 
 def test_import_export_round_trip_preserves_blocks(client):
-    # Import a small M2, then export and ensure the block matches structure.
-    sample_m2 = f"""S Rainy day
-A 0 0|||PUNC|||Rainy|||REQUIRED|||-NONE-|||{TEST_USER_ID}
-A -1 -1|||noop|||-NONE-|||REQUIRED|||-NONE-|||{TEST_USER_ID}
-"""
     with db.SessionLocal() as session:
         category = session.query(Category).filter_by(name="ExportCat").one()
-        session.add(
-            TextSample(content="placeholder", category_id=category.id, required_annotations=1)
-        )
+        error_type = ErrorType(en_name="PUNC", default_color="#f97316", is_active=True)
+        session.add(error_type)
+        session.add(TextSample(content="placeholder", category_id=category.id, required_annotations=1))
         session.commit()
         cat_id = category.id
+        error_type_id = error_type.id
 
-    # import into a fresh category so we don't collide with earlier fixtures
     resp = client.post(
         "/api/texts/import",
         json={
             "category_id": cat_id,
             "required_annotations": 1,
-            "texts": [],
-            "m2_content": sample_m2,
+            "texts": [
+                {
+                    "text": "Rainy day",
+                    "annotations": [
+                        {
+                            "start_token": 0,
+                            "end_token": 0,
+                            "replacement": "Sunny",
+                            "error_type_id": error_type_id,
+                            "payload": {
+                                "operation": "replace",
+                                "text_tokens": ["Rainy", "day"],
+                                "after_tokens": [
+                                    {"id": "a1", "text": "Sunny", "origin": "base"}
+                                ],
+                            },
+                        }
+                    ],
+                }
+            ],
         },
     )
     assert resp.status_code == 201, resp.text
 
     export_resp = client.get("/api/texts/export")
     assert export_resp.status_code == 200, export_resp.text
-    blocks = [b for b in export_resp.text.strip().split("\n\n") if b.strip()]
-    parsed_blocks = [parse_m2_block(b) for b in blocks]
-    assert any(pb["tokens"] == ["Rainy", "day"] for pb in parsed_blocks)
-    target_block = next(pb for pb in parsed_blocks if pb["tokens"] == ["Rainy", "day"])
-    # Expect two annotations with noop present
-    assert any(a["label"] == "noop" and a["start"] == -1 for a in target_block["annotations"])
-    assert any(a["label"] == "PUNC" and a["start"] == 0 for a in target_block["annotations"])
+    records = parse_jsonl(export_resp.text)
+    record = next(item for item in records if item["source"].startswith("Rainy day"))
+    assert record["edits"]
+    assert any(edit["error_type"] == "PUNC" for edit in record["edits"])

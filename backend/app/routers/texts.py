@@ -1,5 +1,7 @@
 import hashlib
+import json
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 from itertools import combinations
 from typing import Iterable, Literal
@@ -23,6 +25,8 @@ from ..models import (
     User,
 )
 from ..schemas.common import (
+    AnnotationRenderRequest,
+    AnnotationRenderResponse,
     AnnotationPayload,
     AnnotationRead,
     AnnotationSaveRequest,
@@ -77,6 +81,19 @@ def _parse_int_list(raw: str | None) -> list[int]:
     return parsed
 
 
+def _annotation_payload_to_dict(item: AnnotationPayload | dict) -> dict:
+    if isinstance(item, BaseModel):
+        data = item.model_dump()
+    else:
+        data = dict(item)
+    payload = data.get("payload")
+    if isinstance(payload, BaseModel):
+        data["payload"] = payload.model_dump()
+    elif payload is None:
+        data["payload"] = {}
+    return data
+
+
 @router.post("/import", response_model=TextImportResponse, status_code=status.HTTP_201_CREATED)
 def import_texts(
     request: TextImportRequest,
@@ -87,97 +104,12 @@ def import_texts(
     if not category:
         raise HTTPException(status_code=404, detail=f"Category with id '{request.category_id}' not found")
 
-    def _resolve_error_type(label: str) -> int:
-        name = label.strip() or "OTHER"
-        existing = (
-            db.query(ErrorType)
-            .filter(
-                or_(
-                    ErrorType.en_name == name,
-                    ErrorType.tt_name == name,
-                    ErrorType.category_en == name,
-                    ErrorType.category_tt == name,
-                )
-            )
-            .one_or_none()
-        )
-        if existing:
-            return existing.id
-        new = ErrorType(en_name=name, default_color="#f97316", is_active=True)
-        db.add(new)
-        db.flush()
-        return new.id
-
     normalized: list[dict[str, object]] = []
 
     def _append_normalized(body: str, ext_id: str | None, annotations: list[dict] | None = None):
         if not isinstance(body, str) or not body.strip():
             return
         normalized.append({"body": body, "ext_id": ext_id, "annotations": annotations or []})
-
-    # Parse m2 content if provided.
-    if request.m2_content:
-        blocks = [b.strip() for b in request.m2_content.strip().split("\n\n") if b.strip()]
-        for block in blocks:
-            lines = [line.strip() for line in block.splitlines() if line.strip()]
-            if not lines or not lines[0].startswith("S "):
-                continue
-            tokens = lines[0][2:].split()
-            annotations: list[dict] = []
-            sha_tokens = _sha256_tokens(tokens)
-            for line in lines[1:]:
-                if not line.startswith("A "):
-                    continue
-                try:
-                    parts = line[2:].split("|||")
-                    span = parts[0].strip().split()
-                    start = int(span[0])
-                    end = int(span[1])
-                    label = parts[1].strip() or "OTHER"
-                    replacement_raw = parts[2].strip()
-                except Exception:
-                    continue
-                replacement = None if replacement_raw == "-NONE-" else replacement_raw
-                op = "noop" if start < 0 else ("delete" if replacement is None else "replace")
-                before_tokens = tokens[start : end + 1] if start >= 0 and end >= start else []
-                after_tokens = (
-                    []
-                    if replacement is None
-                    else [{"id": f"m2-{idx}", "text": tok, "origin": "base"} for idx, tok in enumerate(replacement.split())]
-                )
-                error_type_id = _resolve_error_type(label)
-                annotations.append(
-                    {
-                        "start_token": start,
-                        "end_token": end,
-                        "replacement": replacement,
-                        "error_type_id": error_type_id,
-                        "payload": {
-                            "operation": op,
-                            "before_tokens": before_tokens,
-                            "after_tokens": after_tokens,
-                            "text_tokens": tokens,
-                            "text_tokens_sha256": sha_tokens,
-                        },
-                    }
-                )
-            if not annotations:
-                annotations.append(
-                    {
-                        "start_token": -1,
-                        "end_token": -1,
-                        "replacement": None,
-                        "error_type_id": _resolve_error_type("noop"),
-                        "payload": {
-                            "operation": "noop",
-                            "before_tokens": [],
-                            "after_tokens": [],
-                            "text_tokens": tokens,
-                            "text_tokens_sha256": sha_tokens,
-                        },
-                    }
-                )
-            _append_normalized(" ".join(tokens), hashlib.sha256(" ".join(tokens).encode("utf-8")).hexdigest(), annotations)
 
     for item in request.texts:
         if isinstance(item, str):
@@ -227,15 +159,16 @@ def import_texts(
             task = AnnotationTask(text_id=text.id, annotator_id=current_user.id, status="submitted")
             db.add(task)
             for item in annotations:
-                payload = item.get("payload") or {}
+                item_data = _annotation_payload_to_dict(item)
+                payload = item_data.get("payload") or {}
                 db.add(
                     Annotation(
                         text_id=text.id,
                         author_id=current_user.id,
-                        start_token=item.get("start_token", 0),
-                        end_token=item.get("end_token", 0),
-                        replacement=item.get("replacement"),
-                        error_type_id=item.get("error_type_id"),
+                        start_token=item_data.get("start_token", 0),
+                        end_token=item_data.get("end_token", 0),
+                        replacement=item_data.get("replacement"),
+                        error_type_id=item_data.get("error_type_id"),
                         payload=payload,
                     )
                 )
@@ -378,6 +311,20 @@ def list_annotations(
     if not all_authors:
         query = query.filter(Annotation.author_id == current_user.id)
     return query.order_by(Annotation.id).all()
+
+
+@router.post("/{text_id}/render", response_model=AnnotationRenderResponse)
+def render_annotations(
+    text_id: int,
+    request: AnnotationRenderRequest,
+    db: Session = Depends(get_db),
+    _: str = Depends(get_current_user),
+):
+    text = db.get(TextSample, text_id)
+    if not text:
+        raise HTTPException(status_code=404, detail="Text not found")
+    corrected = _render_corrected_text(text.content or "", request.annotations)
+    return AnnotationRenderResponse(corrected_text=corrected)
 
 
 @router.post("/{text_id}/annotations", response_model=list[AnnotationRead])
@@ -1022,60 +969,377 @@ def _render_replacement(ann: Annotation) -> str:
     return "-NONE-"
 
 
-def _build_m2_block(
-    tokens: Iterable[str],
-    annotations: list[Annotation],
-    annotator_label: str | None = None,
-) -> str:
-    base_tokens = [t for t in tokens if t is not None]
-    lines = [f"S {' '.join(base_tokens)}"]
-    annotator = annotator_label or "0"
-    if not annotations:
-        lines.append(f"A -1 -1|||noop|||-NONE-|||REQUIRED|||-NONE-|||{annotator}")
-        return "\n".join(lines)
-    sorted_anns = sorted(
-        annotations,
-        key=lambda ann: (ann.start_token, ann.end_token, ann.id or 0),
-    )
-    for ann in sorted_anns:
-        label = _resolve_label(ann)
-        replacement = _render_replacement(ann)
-        lines.append(
-            f"A {ann.start_token} {ann.end_token}|||{label}|||{replacement}|||REQUIRED|||-NONE-|||{annotator}"
+_SPECIAL_TOKEN_SOURCES = [
+    r"\+\d[\d()\- ]*\d",
+    r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}",
+    r"(https?:\/\/[^\s,;:!]+|www\.[^\s,;:!]+)",
+]
+_SPECIAL_TOKEN_FULL = [re.compile(rf"^{src}$") for src in _SPECIAL_TOKEN_SOURCES]
+_SPECIAL_TOKEN_MATCHERS = [re.compile(src) for src in _SPECIAL_TOKEN_SOURCES]
+_BASE_REGEX = re.compile(r"(\w+)|[^\w\s]", re.UNICODE)
+
+
+def _is_punct_only(value: str) -> bool:
+    return bool(value) and all(not ch.isalnum() for ch in value)
+
+
+def _is_special_token(value: str) -> bool:
+    trimmed = re.sub(r"[.,;:!?]+$", "", value or "")
+    if not trimmed:
+        return False
+    return any(regex.match(trimmed) for regex in _SPECIAL_TOKEN_FULL)
+
+
+def _tokenize_to_tokens(text: str) -> list[dict]:
+    tokens: list[dict] = []
+    if not text:
+        return tokens
+    idx = 0
+    while idx < len(text):
+        had_space = False
+        while idx < len(text) and text[idx].isspace():
+            had_space = True
+            idx += 1
+        if idx >= len(text):
+            break
+        matched = False
+        for matcher in _SPECIAL_TOKEN_MATCHERS:
+            res = matcher.match(text, idx)
+            if not res:
+                continue
+            raw = res.group(0)
+            value = re.sub(r"[.,;:!?]+$", "", raw)
+            advance_by = len(value) or len(raw)
+            if value:
+                tokens.append(
+                    {
+                        "text": value,
+                        "kind": "special",
+                        "space_before": False if not tokens else had_space,
+                    }
+                )
+            idx += advance_by
+            matched = True
+            break
+        if matched:
+            continue
+        base_match = _BASE_REGEX.match(text, idx)
+        if base_match:
+            value = base_match.group(0)
+            tokens.append(
+                {
+                    "text": value,
+                    "kind": "punct" if _is_punct_only(value) else "word",
+                    "space_before": False if not tokens else had_space,
+                }
+            )
+            idx += len(value)
+            continue
+        idx += 1
+    return tokens
+
+
+def _compute_line_breaks(text: str) -> list[int]:
+    breaks: list[int] = []
+    if not text:
+        return breaks
+    lines = text.split("\n")
+    count = 0
+    for idx, line in enumerate(lines):
+        line_tokens = _tokenize_to_tokens(line)
+        count += len(line_tokens)
+        if idx < len(lines) - 1:
+            breaks.append(count)
+    return breaks
+
+
+def _build_tokens_from_snapshot(snapshot: list[str], source_text: str) -> list[dict]:
+    tokens: list[dict] = []
+    cursor = 0
+    for idx, text in enumerate(snapshot):
+        has_space = False
+        while cursor < len(source_text) and source_text[cursor].isspace():
+            has_space = True
+            cursor += 1
+        next_index = source_text.find(text, cursor) if text else -1
+        if next_index > cursor:
+            chunk = source_text[cursor:next_index]
+            if any(ch.isspace() for ch in chunk):
+                has_space = True
+            cursor = next_index
+        kind = "special" if _is_special_token(text) else "punct" if _is_punct_only(text) else "word"
+        tokens.append(
+            {
+                "text": text,
+                "kind": kind,
+                "space_before": False if idx == 0 else has_space,
+            }
         )
-    return "\n".join(lines)
+        if next_index >= 0:
+            cursor = next_index + len(text)
+    return tokens
 
 
-def _resolve_tokens_snapshot(text: TextSample, annotations: list[Annotation]) -> list[str]:
-    snapshot = None
+def _resolve_tokens_snapshot_for_source(source: str, annotations: Iterable[object]) -> list[dict]:
+    snapshot: list[str] | None = None
     for ann in annotations:
-        payload = ann.payload or {}
+        payload = _coerce_payload(getattr(ann, "payload", None))
         maybe_tokens = payload.get("text_tokens")
         if isinstance(maybe_tokens, list) and maybe_tokens:
-            snapshot = maybe_tokens
+            snapshot = [str(token) for token in maybe_tokens if token is not None]
             break
-    tokens = snapshot or (text.content.split() if text.content else [])
-    return [t for t in tokens if t is not None]
+    if snapshot:
+        return _build_tokens_from_snapshot(snapshot, source)
+    return _tokenize_to_tokens(source)
 
 
-def _build_m2_block_for_text(
+def _resolve_tokens_snapshot(text: TextSample, annotations: list[Annotation]) -> list[dict]:
+    return _resolve_tokens_snapshot_for_source(text.content or "", annotations)
+
+
+def _tokenize_edited_text(text: str) -> list[dict]:
+    tokens: list[dict] = []
+    if not text:
+        return tokens
+    parts = re.split(r"(\s+)", text)
+    space_before = False
+    for part in parts:
+        if not part:
+            continue
+        if part.isspace():
+            space_before = True
+            continue
+        tokens.append(
+            {
+                "text": part,
+                "kind": "punct" if _is_punct_only(part) else "word",
+                "space_before": space_before,
+            }
+        )
+        space_before = False
+    return tokens
+
+
+def _build_tokens_from_fragments(
+    fragments: list[dict],
+    fallback_text: str,
+    default_first_space: bool | None,
+) -> list[dict]:
+    built: list[dict] = []
+    base_fragments = fragments if fragments else ([{"text": fallback_text}] if fallback_text else [])
+    for frag_index, frag in enumerate(base_fragments):
+        text = frag.get("text") if isinstance(frag, dict) else str(frag)
+        if not text:
+            continue
+        explicit_space = None
+        if isinstance(frag, dict):
+            if isinstance(frag.get("space_before"), bool):
+                explicit_space = frag.get("space_before")
+            if isinstance(frag.get("spaceBefore"), bool):
+                explicit_space = frag.get("spaceBefore")
+        base_tokens = _tokenize_edited_text(text)
+        for idx, tok in enumerate(base_tokens):
+            space_before = tok["space_before"]
+            if idx == 0:
+                if explicit_space is not None:
+                    space_before = explicit_space
+                elif frag_index > 0:
+                    space_before = False if tok["kind"] == "punct" else True
+                elif default_first_space is not None:
+                    space_before = default_first_space
+            if idx == 0 and frag_index > 0 and space_before is False and tok["kind"] != "punct":
+                space_before = True
+            built.append(
+                {
+                    "text": tok["text"],
+                    "kind": tok["kind"],
+                    "space_before": space_before,
+                }
+            )
+    return built
+
+
+def _get_leading_space(tokens: list[dict], index: int) -> bool:
+    if index <= 0:
+        return False
+    if index >= len(tokens):
+        return True
+    return tokens[index].get("space_before") is not False
+
+
+def _build_text_from_tokens_with_breaks(tokens: list[dict], breaks: list[int]) -> str:
+    break_counts: dict[int, int] = {}
+    for idx in breaks:
+        break_counts[idx] = break_counts.get(idx, 0) + 1
+    visible_idx = 0
+    at_line_start = True
+    result_parts: list[str] = []
+    for tok in tokens:
+        text = tok.get("text") or ""
+        if not text:
+            continue
+        needs_space = not at_line_start and tok.get("space_before") is not False
+        if needs_space:
+            result_parts.append(" ")
+        result_parts.append(text)
+        visible_idx += 1
+        count = break_counts.get(visible_idx, 0)
+        if count:
+            result_parts.append("\n" * count)
+            at_line_start = True
+        else:
+            at_line_start = False
+    return "".join(result_parts)
+
+
+def _coerce_payload(payload: object | None) -> dict:
+    if payload is None:
+        return {}
+    if isinstance(payload, dict):
+        return payload
+    if isinstance(payload, BaseModel):
+        return payload.model_dump()
+    if hasattr(payload, "model_dump"):
+        return payload.model_dump()
+    if hasattr(payload, "dict"):
+        return payload.dict()
+    return dict(payload)
+
+
+def _normalize_operation(ann: Annotation) -> str:
+    payload = _coerce_payload(getattr(ann, "payload", None))
+    op = payload.get("operation") or ("replace" if ann.replacement else "noop")
+    before_tokens = payload.get("before_tokens") or []
+    after_tokens = payload.get("after_tokens") or []
+    has_replacement = bool(ann.replacement)
+    if op == "noop" and (before_tokens or after_tokens or has_replacement):
+        return "replace"
+    return str(op)
+
+
+def _apply_annotations(tokens: list[dict], annotations: list[Annotation]) -> list[dict]:
+    working = [dict(tok) for tok in tokens]
+    offset_deltas: list[tuple[int, int]] = []
+
+    def offset_at(index: int) -> int:
+        return sum(delta for start, delta in offset_deltas if start <= index)
+
+    def clamp_index(idx: int) -> int:
+        return max(0, min(len(working), idx))
+
+    sorted_anns = sorted(
+        annotations,
+        key=lambda ann: (
+            0 if _normalize_operation(ann) == "move" else 1,
+            ann.start_token or 0,
+            ann.end_token or 0,
+            ann.id or 0,
+        ),
+    )
+    for ann in sorted_anns:
+        payload = _coerce_payload(getattr(ann, "payload", None))
+        operation = _normalize_operation(ann)
+        if operation == "noop":
+            continue
+        if operation == "move":
+            move_from = payload.get("move_from")
+            if not isinstance(move_from, int):
+                move_from = payload.get("moveFrom")
+            if not isinstance(move_from, int):
+                move_from = ann.start_token or 0
+            move_to = payload.get("move_to")
+            if not isinstance(move_to, int):
+                move_to = payload.get("moveTo")
+            if not isinstance(move_to, int):
+                move_to = ann.start_token or 0
+            move_len = payload.get("move_len")
+            after_tokens = payload.get("after_tokens") or []
+            before_tokens = payload.get("before_tokens") or []
+            if not isinstance(move_len, int):
+                move_len = len(after_tokens) or len(before_tokens) or max(1, (ann.end_token or 0) - (ann.start_token or 0) + 1)
+            source_start = clamp_index(move_from + offset_at(move_from))
+            source_end = max(source_start, min(len(working) - 1, source_start + move_len - 1))
+            moved = working[source_start:source_end + 1]
+            del working[source_start:source_end + 1]
+            insertion_index = clamp_index(move_to + offset_at(move_to))
+            if insertion_index > source_start:
+                insertion_index -= len(moved)
+            insertion_index = clamp_index(insertion_index)
+            leading_space = _get_leading_space(working, insertion_index)
+            if moved:
+                moved[0]["space_before"] = leading_space
+            working[insertion_index:insertion_index] = moved
+            continue
+
+        start_original = ann.start_token or 0
+        end_original = ann.end_token or start_original
+        target_start = clamp_index(start_original + offset_at(start_original))
+        leading_space = _get_leading_space(working, target_start)
+        before_tokens = payload.get("before_tokens") or []
+        remove_count = 0
+        if operation != "insert":
+            if isinstance(before_tokens, list) and before_tokens:
+                remove_count = len(before_tokens)
+            else:
+                remove_count = max(0, end_original - start_original + 1)
+        if target_start + remove_count > len(working):
+            remove_count = max(0, len(working) - target_start)
+        after_tokens = payload.get("after_tokens") or []
+        replacement_text = ann.replacement or ""
+        new_tokens = _build_tokens_from_fragments(after_tokens if isinstance(after_tokens, list) else [], replacement_text, leading_space)
+        if operation == "delete":
+            new_tokens = []
+        working[target_start:target_start + remove_count] = new_tokens
+        offset_deltas.append((start_original, len(new_tokens) - remove_count))
+    return working
+
+
+def _render_corrected_text(source: str, annotations: Iterable[object]) -> str:
+    base_tokens = _resolve_tokens_snapshot_for_source(source, annotations)
+    line_breaks = _compute_line_breaks(source)
+    corrected_tokens = _apply_annotations(base_tokens, annotations)
+    return _build_text_from_tokens_with_breaks(corrected_tokens, line_breaks)
+
+
+def _annotation_to_edit(ann: Annotation) -> dict:
+    payload = ann.payload or {}
+    operation = _normalize_operation(ann)
+    move_from = payload.get("move_from") or payload.get("moveFrom")
+    move_to = payload.get("move_to") or payload.get("moveTo")
+    move_len = payload.get("move_len") or payload.get("moveLen")
+    return {
+        "start_token": ann.start_token,
+        "end_token": ann.end_token,
+        "operation": operation,
+        "error_type": _resolve_label(ann),
+        "replacement": None if ann.replacement is None else str(ann.replacement),
+        "move_from": move_from if isinstance(move_from, int) else None,
+        "move_to": move_to if isinstance(move_to, int) else None,
+        "move_len": move_len if isinstance(move_len, int) else None,
+    }
+
+
+def _build_export_record(
     text: TextSample,
     annotations: list[Annotation],
-    annotator_label: str | None = None,
-) -> str:
-    tokens = _resolve_tokens_snapshot(text, annotations)
-    if not tokens:
-        return ""
-    return _build_m2_block(tokens, annotations, annotator_label=annotator_label)
+) -> dict:
+    source = text.content or ""
+    target = _render_corrected_text(source, annotations)
+    edits = [_annotation_to_edit(ann) for ann in sorted(annotations, key=lambda ann: (ann.start_token, ann.end_token, ann.id or 0))]
+    return {
+        "id": text.id,
+        "source": source,
+        "target": target,
+        "edits": edits,
+    }
 
 
-def _build_m2_blocks_for_tasks(
+def _fetch_annotations_for_tasks(
     db: Session,
     tasks: list[AnnotationTask],
-    include_meta: bool = False,
-) -> list[object]:
+) -> dict[int, list[Annotation]]:
     if not tasks:
-        return []
+        return {}
     task_ids = [task.id for task in tasks]
     ann_rows = (
         db.query(Annotation, AnnotationTask.id)
@@ -1087,69 +1351,15 @@ def _build_m2_blocks_for_tasks(
     anns_by_task: dict[int, list[Annotation]] = {task.id: [] for task in tasks}
     for ann, task_id in ann_rows:
         anns_by_task.setdefault(task_id, []).append(ann)
-
-    blocks: list[object] = []
-    for task in tasks:
-        anns = anns_by_task.get(task.id) or []
-        text = task.text
-        if not text:
-            continue
-        block = _build_m2_block_for_text(text, anns, annotator_label=str(task.annotator_id))
-        if block:
-            if include_meta:
-                blocks.append({"author_id": str(task.annotator_id), "block": block})
-            else:
-                blocks.append(block)
-    return blocks
+    return anns_by_task
 
 
 @router.get("/{text_id}/export", response_class=PlainTextResponse)
 def export_single_text(
     text_id: int,
-    include_all: bool = Query(False, description="Include all annotations for preview"),
-    format: Literal["text", "json"] = Query("text", description="Response format"),
     db: Session = Depends(get_db),
     _: str = Depends(get_current_user),
 ):
-    if include_all:
-        text = db.get(TextSample, text_id)
-        if not text:
-            raise HTTPException(status_code=404, detail="Text not found")
-        annotations = (
-            db.query(Annotation)
-            .filter(Annotation.text_id == text_id)
-            .options(joinedload(Annotation.error_type))
-            .all()
-        )
-        if not annotations:
-            block = _build_m2_block_for_text(text, [], annotator_label="Unknown")
-            if format == "json":
-                return JSONResponse(
-                    [{"author_id": None, "author_name": "Unknown", "block": block}] if block else []
-                )
-            return PlainTextResponse(block, media_type="text/plain")
-        anns_by_author: dict[object, list[Annotation]] = {}
-        for ann in annotations:
-            anns_by_author.setdefault(ann.author_id, []).append(ann)
-        author_ids = list(anns_by_author.keys())
-        users = db.query(User).filter(User.id.in_(author_ids)).all()
-        author_names = {user.id: user.username for user in users}
-        blocks: list[dict[str, object]] = []
-        for author_id, anns in sorted(
-            anns_by_author.items(),
-            key=lambda item: min(ann.id for ann in item[1]),
-        ):
-            ordered = sorted(anns, key=lambda ann: ann.id or 0)
-            author_name = author_names.get(author_id) or "Unknown"
-            block = _build_m2_block_for_text(text, ordered, annotator_label=author_name)
-            if block:
-                blocks.append(
-                    {"author_id": str(author_id), "author_name": author_name, "block": block}
-                )
-        if format == "json":
-            return JSONResponse(blocks)
-        return PlainTextResponse("\n\n".join(item["block"] for item in blocks), media_type="text/plain")
-
     task_query = (
         db.query(AnnotationTask)
         .join(TextSample, AnnotationTask.text_id == TextSample.id)
@@ -1158,11 +1368,26 @@ def export_single_text(
         .filter(AnnotationTask.status == "submitted")
         .filter(TextSample.state.notin_(["trash", "skipped"]))
     )
-    tasks = task_query.order_by(AnnotationTask.updated_at.desc()).all()
-    if format == "json":
-        return JSONResponse(_build_m2_blocks_for_tasks(db, tasks, include_meta=True))
-    blocks = _build_m2_blocks_for_tasks(db, tasks)
-    return PlainTextResponse("\n\n".join(blocks), media_type="text/plain")
+    tasks = task_query.order_by(AnnotationTask.updated_at.desc(), AnnotationTask.id.desc()).all()
+    if not tasks:
+        return PlainTextResponse("", media_type="application/x-jsonlines")
+
+    anns_by_task = _fetch_annotations_for_tasks(db, tasks)
+    text = tasks[0].text
+    if not text:
+        return PlainTextResponse("", media_type="application/x-jsonlines")
+
+    variants: list[dict] = []
+    for task in tasks:
+        annotations = anns_by_task.get(task.id) or []
+        variants.append(_build_export_record(text, annotations))
+
+    chosen = variants[0]
+    if len({record["target"] for record in variants}) == 1 and variants:
+        chosen = variants[0]
+
+    payload = json.dumps(chosen, ensure_ascii=False)
+    return PlainTextResponse(payload, media_type="application/x-jsonlines")
 
 
 @router.get("/export", response_class=PlainTextResponse)
@@ -1188,16 +1413,33 @@ def export_submitted_texts(
     if end:
         task_query = task_query.filter(AnnotationTask.updated_at <= end)
 
-    tasks = task_query.order_by(AnnotationTask.updated_at.desc()).all()
+    tasks = task_query.order_by(AnnotationTask.updated_at.desc(), AnnotationTask.id.desc()).all()
     if not tasks:
-        return PlainTextResponse("", media_type="text/plain")
+        return PlainTextResponse("", media_type="application/x-jsonlines")
 
-    blocks = _build_m2_blocks_for_tasks(db, tasks)
+    anns_by_task = _fetch_annotations_for_tasks(db, tasks)
+    tasks_by_text: dict[int, list[AnnotationTask]] = {}
+    for task in tasks:
+        tasks_by_text.setdefault(task.text_id, []).append(task)
 
-    filename = f"export_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.m2"
+    records: list[str] = []
+    for text_id, text_tasks in tasks_by_text.items():
+        text = text_tasks[0].text
+        if not text:
+            continue
+        variants: list[dict] = []
+        for task in text_tasks:
+            annotations = anns_by_task.get(task.id) or []
+            variants.append(_build_export_record(text, annotations))
+        chosen = variants[0]
+        if len({record["target"] for record in variants}) == 1 and variants:
+            chosen = variants[0]
+        records.append(json.dumps(chosen, ensure_ascii=False))
+
+    filename = f"export_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.jsonl"
     return PlainTextResponse(
-        "\n\n".join(blocks),
-        media_type="text/plain",
+        "\n".join(records),
+        media_type="application/x-jsonlines",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 

@@ -84,6 +84,7 @@ def test_list_error_types_filters_inactive_and_orders(client):
                 ErrorType(
                     en_name="B",
                     category_en="Grammar",
+                    sort_order=2,
                     default_color="#111",
                     default_hotkey="shift+b",
                     is_active=True,
@@ -91,6 +92,7 @@ def test_list_error_types_filters_inactive_and_orders(client):
                 ErrorType(
                     en_name="A",
                     category_en="Grammar",
+                    sort_order=1,
                     default_color="#222",
                     default_hotkey="shift+a",
                     is_active=True,
@@ -98,6 +100,7 @@ def test_list_error_types_filters_inactive_and_orders(client):
                 ErrorType(
                     en_name="Z",
                     category_en="WordError",
+                    sort_order=1,
                     default_color="#333",
                     default_hotkey="shift+z",
                     is_active=False,
@@ -109,12 +112,80 @@ def test_list_error_types_filters_inactive_and_orders(client):
     resp = client.get("/api/error-types/")
     assert resp.status_code == 200
     names = [et["en_name"] for et in resp.json()]
-    # Only active; sorted by category then en_name
+    # Only active; sorted by category then sort_order
     assert names == ["A", "B"]
 
     resp_all = client.get("/api/error-types/?include_inactive=true")
     assert resp_all.status_code == 200
     assert [et["en_name"] for et in resp_all.json()] == ["A", "B", "Z"]
+
+
+def test_create_error_type_assigns_sort_order(client):
+    with db.SessionLocal() as session:
+        session.add_all(
+            [
+                ErrorType(
+                    en_name="A",
+                    category_en="Grammar",
+                    sort_order=1,
+                    default_color="#111",
+                    is_active=True,
+                ),
+                ErrorType(
+                    en_name="B",
+                    category_en="Grammar",
+                    sort_order=2,
+                    default_color="#222",
+                    is_active=True,
+                ),
+            ]
+        )
+        session.commit()
+
+    resp = client.post(
+        "/api/error-types/",
+        json={
+            "en_name": "C",
+            "category_en": "Grammar",
+            "default_color": "#333",
+            "is_active": True,
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["sort_order"] == 3
+
+
+def test_update_error_type_assigns_sort_order_when_category_changes(client):
+    with db.SessionLocal() as session:
+        grammar = ErrorType(
+            en_name="Case",
+            category_en="Grammar",
+            sort_order=1,
+            default_color="#111",
+            is_active=True,
+        )
+        fluency = ErrorType(
+            en_name="Fluency",
+            category_en="Fluency",
+            sort_order=2,
+            default_color="#222",
+            is_active=True,
+        )
+        session.add_all([grammar, fluency])
+        session.commit()
+        session.refresh(grammar)
+        session.refresh(fluency)
+        grammar_id = grammar.id
+
+    resp = client.put(
+        f"/api/error-types/{grammar_id}",
+        json={"category_en": "Fluency"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["category_en"] == "Fluency"
+    assert body["sort_order"] == 3
 
 
 def test_punctuation_and_wordorder_share_other_category(client):

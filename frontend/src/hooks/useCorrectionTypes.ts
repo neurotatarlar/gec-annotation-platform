@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { CorrectionCardLite } from "../components/TokenEditorModel";
 
@@ -34,17 +34,30 @@ type UseCorrectionTypesArgs = {
 export const useCorrectionTypes = ({ textId, correctionCards, defaultTypeForCard }: UseCorrectionTypesArgs) => {
   const [correctionTypeMap, setCorrectionTypeMap] = useState<Record<string, number | null>>({});
   const [hasLoadedTypeState, setHasLoadedTypeState] = useState(false);
+  const hasSeenCorrectionsRef = useRef(false);
 
   useEffect(() => {
     setHasLoadedTypeState(false);
     const typeState = loadCorrectionTypes(textId);
-    setCorrectionTypeMap(typeState.assignments);
+    setCorrectionTypeMap((prev) =>
+      Object.keys(prev).length > 0 ? prev : typeState.assignments
+    );
     setHasLoadedTypeState(true);
+    hasSeenCorrectionsRef.current = false;
   }, [textId]);
+
+  useEffect(() => {
+    if (correctionCards.length > 0) {
+      hasSeenCorrectionsRef.current = true;
+    }
+  }, [correctionCards.length]);
 
   useEffect(() => {
     if (!hasLoadedTypeState) return;
     setCorrectionTypeMap((prev) => {
+      if (correctionCards.length === 0 && !hasSeenCorrectionsRef.current) {
+        return prev;
+      }
       const next: Record<string, number | null> = {};
       correctionCards.forEach((card) => {
         const defaultType = defaultTypeForCard ? defaultTypeForCard(card.id) : null;
@@ -87,7 +100,7 @@ export const useCorrectionTypes = ({ textId, correctionCards, defaultTypeForCard
   }, []);
 
   const seedCorrectionTypes = useCallback((seedMap: Record<string, number | null>) => {
-    setCorrectionTypeMap((prev) => (Object.keys(prev).length === 0 ? seedMap : prev));
+    setCorrectionTypeMap(() => ({ ...seedMap }));
   }, []);
 
   return {

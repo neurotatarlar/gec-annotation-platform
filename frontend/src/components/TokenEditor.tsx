@@ -239,24 +239,26 @@ export const TokenEditor: React.FC<{
   useEffect(() => {
     selectionRef.current = selection;
   }, [selection]);
-  const initialViewTab = useMemo<"original" | "corrected" | "m2">(() => {
-    if (prefs.viewTab === "original" || prefs.viewTab === "corrected" || prefs.viewTab === "m2") {
+  const initialViewTab = useMemo<"original" | "corrected">(() => {
+    if (prefs.viewTab === "original" || prefs.viewTab === "corrected") {
       return prefs.viewTab;
     }
     return "corrected";
   }, [prefs.viewTab]);
-  const [viewTab, setViewTab] = useState<"original" | "corrected" | "m2">(initialViewTab);
+  const [viewTab, setViewTab] = useState<"original" | "corrected">(initialViewTab);
   const [isTextPanelOpen, setIsTextPanelOpen] = useState<boolean>(prefs.textPanelOpen ?? true);
-  const [m2Blocks, setM2Blocks] = useState<
-    Array<{ authorId: string | null; authorName: string | null; block: string }>
-  >([]);
-  const [m2Loading, setM2Loading] = useState(false);
-  const [m2Error, setM2Error] = useState<string | null>(null);
-  const lastM2TextIdRef = useRef<number | null>(null);
+  const [hasLoadedAnnotations, setHasLoadedAnnotations] = useState(false);
   const lineBreaks = useMemo(
     () => computeLineBreaksFromText(initialText),
     [initialText]
   );
+  const [renderEpoch, setRenderEpoch] = useState(0);
+  const [canonicalEpoch, setCanonicalEpoch] = useState(0);
+  const [canonicalCorrectedText, setCanonicalCorrectedText] = useState<string | null>(null);
+  const [isRenderPending, setIsRenderPending] = useState(false);
+  const [hasCanonicalRender, setHasCanonicalRender] = useState(false);
+  const renderRequestIdRef = useRef(0);
+  const renderAbortRef = useRef<AbortController | null>(null);
   const { lineBreakSet, lineBreakCountMap } = useMemo(() => {
     const set = new Set(lineBreaks);
     const map = new Map<number, number>();
@@ -275,12 +277,6 @@ export const TokenEditor: React.FC<{
   const pendingLocalStateRef = useRef<EditorPresentState | null>(null);
   const hydratedFromServerRef = useRef(false);
 
-  useEffect(() => {
-    setM2Blocks([]);
-    setM2Error(null);
-    setM2Loading(false);
-    lastM2TextIdRef.current = null;
-  }, [textId]);
   const handleRevert = (rangeStart: number, rangeEnd: number) => {
     markSkipAutoSelect();
     setPendingSelectIndex(rangeStart);
@@ -337,6 +333,12 @@ export const TokenEditor: React.FC<{
     setServerAnnotationVersion(0);
     hydratedFromServerRef.current = false;
     resetUI();
+    setCanonicalCorrectedText(null);
+    setCanonicalEpoch(0);
+    setRenderEpoch(0);
+    setIsRenderPending(false);
+    setHasCanonicalRender(false);
+    setHasLoadedAnnotations(false);
   }, [resetUI, textId]);
 
   useEffect(() => {
@@ -382,7 +384,28 @@ export const TokenEditor: React.FC<{
   // Update selection highlight by toggling selected flag (not stored in history).
   const selectedSet = useMemo(() => new Set(selectedIndices), [selectedIndices]);
   const activeErrorTypes = useMemo(
-    () => errorTypes.filter((type) => type.is_active),
+    () =>
+      errorTypes
+        .filter((type) => type.is_active)
+        .slice()
+        .sort((a, b) => {
+          const aCategory = (a.category_en ?? "").toLowerCase();
+          const bCategory = (b.category_en ?? "").toLowerCase();
+          if (aCategory !== bCategory) {
+            return aCategory.localeCompare(bCategory);
+          }
+          const aOrder = a.sort_order ?? 0;
+          const bOrder = b.sort_order ?? 0;
+          if (aOrder !== bOrder) {
+            return aOrder - bOrder;
+          }
+          const aName = (a.en_name ?? "").toLowerCase();
+          const bName = (b.en_name ?? "").toLowerCase();
+          if (aName !== bName) {
+            return aName.localeCompare(bName);
+          }
+          return a.id - b.id;
+        }),
     [errorTypes]
   );
 
@@ -560,6 +583,30 @@ export const TokenEditor: React.FC<{
     }
     return false;
   }, []);
+  const isSingleTokenDelta = useCallback(
+    (beforeTokens: Token[], afterTokens: Token[], predicate: (tok: Token) => boolean) => {
+      const matches = (left: Token, right: Token) =>
+        left.text === right.text && left.kind === right.kind;
+      if (afterTokens.length === beforeTokens.length + 1) {
+        for (let i = 0; i < afterTokens.length; i += 1) {
+          if (!predicate(afterTokens[i])) continue;
+          const without = [...afterTokens.slice(0, i), ...afterTokens.slice(i + 1)];
+          if (without.length !== beforeTokens.length) continue;
+          if (without.every((tok, idx) => matches(tok, beforeTokens[idx]))) return true;
+        }
+      }
+      if (beforeTokens.length === afterTokens.length + 1) {
+        for (let i = 0; i < beforeTokens.length; i += 1) {
+          if (!predicate(beforeTokens[i])) continue;
+          const without = [...beforeTokens.slice(0, i), ...beforeTokens.slice(i + 1)];
+          if (without.length !== afterTokens.length) continue;
+          if (without.every((tok, idx) => matches(tok, afterTokens[idx]))) return true;
+        }
+      }
+      return false;
+    },
+    []
+  );
   const isHyphenCorrection = useCallback(
     (cardId: string) => {
       if (moveCardIds.has(cardId)) return false;
@@ -571,6 +618,9 @@ export const TokenEditor: React.FC<{
       const historyTokens = anchor?.previousTokens ?? [];
       const historyNonEmpty = historyTokens.filter((tok) => tok.kind !== "empty");
       const currentNonEmpty = slice.filter((tok) => tok.kind !== "empty");
+      if (isSingleTokenDelta(historyNonEmpty, currentNonEmpty, (tok) => tok.text === "-")) {
+        return true;
+      }
       if (
         slice.length === 1 &&
         slice[0].kind === "empty" &&
@@ -592,7 +642,7 @@ export const TokenEditor: React.FC<{
       const afterText = buildEditableTextFromTokens(currentNonEmpty);
       return isSingleHyphenEdit(beforeText, afterText);
     },
-    [correctionCardById, isSingleHyphenEdit, moveCardIds, tokens]
+    [correctionCardById, isSingleHyphenEdit, isSingleTokenDelta, moveCardIds, tokens]
   );
   const isPunctuationCorrection = useCallback(
     (cardId: string) => {
@@ -605,6 +655,15 @@ export const TokenEditor: React.FC<{
       const historyTokens = anchor?.previousTokens ?? [];
       const historyNonEmpty = historyTokens.filter((tok) => tok.kind !== "empty");
       const currentNonEmpty = slice.filter((tok) => tok.kind !== "empty");
+      if (
+        isSingleTokenDelta(
+          historyNonEmpty,
+          currentNonEmpty,
+          (tok) => tok.kind === "punct" && tok.text !== "-"
+        )
+      ) {
+        return true;
+      }
       if (
         slice.length === 1 &&
         slice[0].kind === "empty" &&
@@ -625,7 +684,7 @@ export const TokenEditor: React.FC<{
       }
       return false;
     },
-    [correctionCardById, moveCardIds, tokens]
+    [correctionCardById, isSingleTokenDelta, moveCardIds, tokens]
   );
   const getWhitespaceCorrection = useCallback(
     (cardId: string) => {
@@ -741,6 +800,7 @@ export const TokenEditor: React.FC<{
     annotationIdMap,
     annotationDeleteMap,
     setServerAnnotationVersion,
+    onLoaded: () => setHasLoadedAnnotations(true),
   });
 
   const requestNextText = useCallback(async () => {
@@ -1476,6 +1536,23 @@ export const TokenEditor: React.FC<{
     [annotationIdMap, correctionCards, correctionTypeMap, initialText, moveMarkers, originalTokens, tokens]
   );
 
+  const buildRenderPayload = useCallback(
+    () =>
+      buildAnnotationsPayloadStandalone({
+        initialText,
+        tokens,
+        originalTokens,
+        correctionCards,
+        correctionTypeMap,
+        moveMarkers,
+        annotationIdMap: annotationIdMap.current,
+        allowUnassigned: true,
+        defaultErrorTypeId: 0,
+        includeClientCorrectionId: true,
+      }),
+    [annotationIdMap, correctionCards, correctionTypeMap, initialText, moveMarkers, originalTokens, tokens]
+  );
+
   const { saveAnnotations } = useSaveController({
     tokens: history.present.tokens,
     buildAnnotationsPayload,
@@ -1491,6 +1568,91 @@ export const TokenEditor: React.FC<{
     statusTrigger: lastDecision,
   });
 
+  const localCorrectedText = useMemo(
+    () => buildTextFromTokensWithBreaks(tokens, lineBreaks),
+    [tokens, lineBreaks]
+  );
+
+  useEffect(() => {
+    if (process.env.NODE_ENV === "test") return;
+    if (!tokens.length) return;
+    renderRequestIdRef.current += 1;
+    const requestId = renderRequestIdRef.current;
+    setRenderEpoch(requestId);
+    const hasCorrections = correctionCards.length > 0;
+    if (!hasCorrections) {
+      setCanonicalCorrectedText(localCorrectedText);
+      setCanonicalEpoch(requestId);
+      setIsRenderPending(false);
+      if (hasLoadedAnnotations) {
+        setHasCanonicalRender(true);
+      }
+      return;
+    }
+    setIsRenderPending(true);
+    let timer: number | null = window.setTimeout(async () => {
+      if (renderAbortRef.current) {
+        renderAbortRef.current.abort();
+      }
+      const controller = new AbortController();
+      renderAbortRef.current = controller;
+      try {
+        const annotations = await buildRenderPayload();
+        const response = await post(
+          `/api/texts/${textId}/render`,
+          { annotations },
+          { signal: controller.signal }
+        );
+        if (renderRequestIdRef.current !== requestId) return;
+        const correctedText = response?.data?.corrected_text ?? localCorrectedText;
+        setCanonicalCorrectedText(correctedText);
+        setCanonicalEpoch(requestId);
+        setHasCanonicalRender(true);
+      } catch (error: any) {
+        if (!controller.signal.aborted && renderRequestIdRef.current === requestId) {
+          setCanonicalCorrectedText(localCorrectedText);
+          setCanonicalEpoch(requestId);
+          setHasCanonicalRender(true);
+        }
+      } finally {
+        if (renderRequestIdRef.current === requestId) {
+          setIsRenderPending(false);
+          timer = null;
+        }
+      }
+    }, 450);
+    return () => {
+      if (timer) {
+        window.clearTimeout(timer);
+      }
+    };
+  }, [
+    buildRenderPayload,
+    correctionCards.length,
+    hasLoadedAnnotations,
+    localCorrectedText,
+    post,
+    textId,
+    tokens.length,
+  ]);
+
+  const correctedText = useMemo(() => {
+    if (canonicalEpoch === renderEpoch && canonicalCorrectedText != null) {
+      return canonicalCorrectedText;
+    }
+    return localCorrectedText;
+  }, [canonicalCorrectedText, canonicalEpoch, localCorrectedText, renderEpoch]);
+  const showCorrectedSpinner =
+    viewTab === "corrected" && (!hasLoadedAnnotations || (isRenderPending && !hasCanonicalRender));
+
+  useEffect(() => {
+    return () => {
+      if (renderAbortRef.current) {
+        renderAbortRef.current.abort();
+      }
+    };
+  }, []);
+
   useEffect(() => {
     persistPrefs({
       tokenGap,
@@ -1502,48 +1664,6 @@ export const TokenEditor: React.FC<{
       textPanelOpen: isTextPanelOpen,
     });
   }, [tokenGap, tokenFontSize, spaceMarker, lastDecision, textId, viewTab, isTextPanelOpen]);
-
-  const requestM2Preview = useCallback(async () => {
-    if (m2Loading) return;
-    setM2Loading(true);
-    setM2Error(null);
-    try {
-      const response = await get(`/api/texts/${textId}/export`, {
-        responseType: "json",
-        params: { include_all: true, format: "json" },
-      });
-      const data = response.data;
-      let nextBlocks: Array<{ authorId: string | null; authorName: string | null; block: string }> = [];
-      if (Array.isArray(data)) {
-        nextBlocks = data
-          .map((item) => {
-            if (!item || typeof item !== "object") return null;
-            const block = typeof item.block === "string" ? item.block : "";
-            if (!block) return null;
-            const authorId = item.author_id ?? item.authorId ?? null;
-            const authorName = item.author_name ?? item.authorName ?? null;
-            return {
-              authorId: authorId ? String(authorId) : null,
-              authorName: authorName ? String(authorName) : null,
-              block,
-            };
-          })
-          .filter(Boolean) as Array<{ authorId: string | null; authorName: string | null; block: string }>;
-      } else if (typeof data === "string" && data.trim()) {
-        nextBlocks = [{ authorId: null, authorName: null, block: data }];
-      }
-      if (nextBlocks.length) {
-        setM2Blocks(nextBlocks);
-      } else {
-        setM2Blocks([]);
-      }
-      lastM2TextIdRef.current = textId;
-    } catch {
-      setM2Error(t("common.error"));
-    } finally {
-      setM2Loading(false);
-    }
-  }, [get, m2Loading, textId, t]);
 
   const handleSubmit = async () => {
     const unassigned = correctionCards.filter((card) => !correctionTypeMap[card.id]);
@@ -1884,7 +2004,7 @@ export const TokenEditor: React.FC<{
               borderBottom: "1px solid rgba(148,163,184,0.25)",
             }}
           >
-            <div style={{ display: "flex", gap: 6 }}>
+            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
               <button
                 style={{
                   ...miniNeutralButton,
@@ -1923,44 +2043,10 @@ export const TokenEditor: React.FC<{
               >
                 {t("tokenEditor.corrected") ?? "Corrected"}
               </button>
-              <button
-                style={{
-                  ...miniNeutralButton,
-                  background:
-                    isTextPanelOpen && viewTab === "m2" ? "rgba(59,130,246,0.3)" : miniNeutralButton.background,
-                  borderColor: isTextPanelOpen && viewTab === "m2" ? "rgba(59,130,246,0.6)" : "rgba(148,163,184,0.6)",
-                }}
-                onClick={() => {
-                  if (viewTab === "m2") {
-                    setIsTextPanelOpen((v) => {
-                      const next = !v;
-                      if (next) {
-                        requestM2Preview();
-                      }
-                      return next;
-                    });
-                  } else {
-                    setViewTab("m2");
-                    setIsTextPanelOpen(true);
-                    requestM2Preview();
-                  }
-                }}
-                aria-pressed={isTextPanelOpen && viewTab === "m2"}
-              >
-                {t("tokenEditor.m2") ?? "M2"}
-              </button>
             </div>
             <button
               style={miniNeutralButton}
-              onClick={() =>
-                setIsTextPanelOpen((v) => {
-                  const next = !v;
-                  if (next && viewTab === "m2") {
-                    requestM2Preview();
-                  }
-                  return next;
-                })
-              }
+              onClick={() => setIsTextPanelOpen((v) => !v)}
               aria-expanded={isTextPanelOpen}
               data-testid="text-panel-toggle"
             >
@@ -1969,57 +2055,35 @@ export const TokenEditor: React.FC<{
           </div>
           {isTextPanelOpen && (
             <div style={{ padding: "10px 12px" }} data-testid="text-view-panel">
-              {viewTab === "m2" ? (
-                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                  {m2Blocks.length ? (
-                    m2Blocks.map((item, idx) => (
-                      <div key={`${item.authorId ?? "unknown"}-${idx}`}>
-                        <div
-                          style={{
-                            color: "rgba(148,163,184,0.9)",
-                            fontSize: 12,
-                            marginBottom: 4,
-                            letterSpacing: "0.02em",
-                            textTransform: "uppercase",
-                          }}
-                        >
-                          {t("tokenEditor.m2Author") ?? "Annotator"}:{" "}
-                          {item.authorName || item.authorId || t("tokenEditor.m2Unknown") || "—"}
-                        </div>
-                        <pre
-                          data-testid="m2-preview"
-                          style={{
-                            color: "#e2e8f0",
-                            fontSize: 13,
-                            wordBreak: "break-word",
-                            whiteSpace: "pre-wrap",
-                            fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
-                            margin: 0,
-                          }}
-                        >
-                          {item.block}
-                        </pre>
-                      </div>
-                    ))
-                  ) : (
-                    <pre
-                      data-testid="m2-preview"
-                      style={{
-                        color: "#e2e8f0",
-                        fontSize: 13,
-                        wordBreak: "break-word",
-                        whiteSpace: "pre-wrap",
-                        fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
-                        margin: 0,
-                      }}
+              {viewTab === "corrected" && showCorrectedSpinner ? (
+                <div style={{ display: "flex", alignItems: "center", gap: 8, color: "#94a3b8", fontSize: 13 }}>
+                  <svg
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    aria-hidden="true"
+                  >
+                    <circle
+                      cx="12"
+                      cy="12"
+                      r="9"
+                      fill="none"
+                      stroke="#94a3b8"
+                      strokeWidth="2.5"
+                      strokeLinecap="round"
+                      strokeDasharray="24 12"
                     >
-                      {m2Error
-                        ? m2Error
-                        : m2Loading
-                          ? t("common.loading")
-                          : ""}
-                    </pre>
-                  )}
+                      <animateTransform
+                        attributeName="transform"
+                        type="rotate"
+                        from="0 12 12"
+                        to="360 12 12"
+                        dur="0.9s"
+                        repeatCount="indefinite"
+                      />
+                    </circle>
+                  </svg>
+                  <span>{t("common.loading") ?? "Loading"}</span>
                 </div>
               ) : (
                 <span
@@ -2032,7 +2096,7 @@ export const TokenEditor: React.FC<{
                 >
                   {viewTab === "original"
                     ? buildTextFromTokensWithBreaks(originalTokens, lineBreaks)
-                    : buildTextFromTokensWithBreaks(tokens, lineBreaks)}
+                    : correctedText}
                 </span>
               )}
             </div>
@@ -2045,6 +2109,7 @@ export const TokenEditor: React.FC<{
           renderTokenGroups={renderTokenGroups}
           rowRef={tokenRowRef}
           moveLine={moveLine}
+          showSpinner={isRenderPending}
           onDragOver={handleRowDragOver}
           onDrop={handleRowDrop}
         />
@@ -2149,6 +2214,7 @@ type TokenRowProps = {
   renderTokenGroups: (tokens: Token[]) => React.ReactNode[];
   rowRef: React.RefObject<HTMLDivElement>;
   moveLine: { x1: number; y1: number; x2: number; y2: number } | null;
+  showSpinner?: boolean;
   onDragOver?: (event: React.DragEvent<HTMLDivElement>) => void;
   onDrop?: (event: React.DragEvent<HTMLDivElement>) => void;
 };
@@ -2159,6 +2225,7 @@ const TokenRow: React.FC<TokenRowProps> = ({
   renderTokenGroups,
   rowRef,
   moveLine,
+  showSpinner,
   onDragOver,
   onDrop,
 }) => (
@@ -2209,6 +2276,47 @@ const TokenRow: React.FC<TokenRowProps> = ({
     <div
       style={{ width: 24, height: 24 }}
     />
+    {showSpinner && (
+      <div
+        aria-hidden="true"
+        style={{
+          position: "absolute",
+          top: 10,
+          right: 10,
+          width: 22,
+          height: 22,
+          borderRadius: 999,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          background: "rgba(15,23,42,0.7)",
+          border: "1px solid rgba(148,163,184,0.4)",
+          pointerEvents: "none",
+        }}
+      >
+        <svg width="12" height="12" viewBox="0 0 24 24">
+          <circle
+            cx="12"
+            cy="12"
+            r="9"
+            fill="none"
+            stroke="#94a3b8"
+            strokeWidth="2.5"
+            strokeLinecap="round"
+            strokeDasharray="24 12"
+          >
+            <animateTransform
+              attributeName="transform"
+              type="rotate"
+              from="0 12 12"
+              to="360 12 12"
+              dur="0.9s"
+              repeatCount="indefinite"
+            />
+          </circle>
+        </svg>
+      </div>
+    )}
   </div>
 );
 

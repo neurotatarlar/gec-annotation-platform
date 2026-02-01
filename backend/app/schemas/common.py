@@ -116,6 +116,23 @@ class AnnotationSaveRequest(BaseModel):
     deleted_ids: list[int] = Field(default_factory=list)
 
 
+class AnnotationRenderPayload(BaseModel):
+    id: Optional[int] = None
+    start_token: int
+    end_token: int
+    replacement: Optional[str] = None
+    error_type_id: Optional[int] = None
+    payload: AnnotationDetailPayload = Field(default_factory=AnnotationDetailPayload)
+
+
+class AnnotationRenderRequest(BaseModel):
+    annotations: list[AnnotationRenderPayload]
+
+
+class AnnotationRenderResponse(BaseModel):
+    corrected_text: str
+
+
 class TextAssignmentResponse(BaseModel):
     text: TextRead
     annotations: list[AnnotationRead]
@@ -132,7 +149,6 @@ class TextImportRequest(BaseModel):
     category_id: int
     texts: list[TextImportItem | str] = Field(default_factory=list)
     required_annotations: int = Field(default=2, ge=1)
-    m2_content: Optional[str] = None
 
 
 class TextImportResponse(BaseModel):

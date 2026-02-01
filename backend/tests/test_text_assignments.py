@@ -286,13 +286,37 @@ def test_import_skips_duplicates_by_external_id(client):
         assert existing.content == "existing"
 
 
-def test_import_m2_creates_annotations(client):
-    m2 = f"""S hello world
-A 0 0|||ART|||hi|||REQUIRED|||-NONE-|||{TEST_USER_ID}
-"""
+def test_import_creates_annotations(client):
+    with db.SessionLocal() as session:
+        err = session.query(ErrorType).first()
+        assert err is not None
+        err_id = err.id
     resp = client.post(
         "/api/texts/import",
-        json={"category_id": 1, "required_annotations": 1, "m2_content": m2},
+        json={
+            "category_id": 1,
+            "required_annotations": 1,
+            "texts": [
+                {
+                    "text": "hello world",
+                    "annotations": [
+                        {
+                            "start_token": 0,
+                            "end_token": 0,
+                            "replacement": "hi",
+                            "error_type_id": err_id,
+                            "payload": {
+                                "operation": "replace",
+                                "text_tokens": ["hello", "world"],
+                                "after_tokens": [
+                                    {"id": "a1", "text": "hi", "origin": "base"}
+                                ],
+                            },
+                        }
+                    ],
+                }
+            ],
+        },
     )
     assert resp.status_code == 201, resp.text
     assert resp.json()["inserted"] == 1

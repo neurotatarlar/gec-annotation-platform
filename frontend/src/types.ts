@@ -1,6 +1,7 @@
 export interface ErrorType {
   id: number;
   description?: string | null;
+  sort_order?: number | null;
   scope?: string | null;
   default_color: string;
   default_hotkey?: string | null;

@@ -7,7 +7,7 @@ export type TokenEditorPrefs = {
   spaceMarker?: SpaceMarker;
   lastDecision?: "skip" | "trash" | "submit" | null;
   lastTextId?: number;
-  viewTab?: "original" | "corrected" | "m2";
+  viewTab?: "original" | "corrected";
   textPanelOpen?: boolean;
 };
 

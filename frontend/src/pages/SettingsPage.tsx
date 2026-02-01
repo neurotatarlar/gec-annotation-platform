@@ -17,6 +17,7 @@ interface UserProfile {
 
 interface GlobalTypeDraft {
   description: string;
+  sort_order?: number;
   default_color: string;
   default_hotkey: string;
   category_en?: string;
@@ -80,12 +81,15 @@ export const SettingsPage = () => {
   const [savingAll, setSavingAll] = useState(false);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [dragState, setDragState] = useState<{ id: number; categoryKey: string } | null>(null);
+  const [dragOverId, setDragOverId] = useState<number | null>(null);
   const formatError = (error: any) =>
     error?.response?.data?.detail ?? error?.message ?? t("settings.profileError");
   const createErrorTypeMutation = useMutation({
     mutationFn: async (payload: GlobalTypeDraft) => {
       const response = await api.post("/api/error-types/", {
         description: payload.description || null,
+        sort_order: payload.sort_order ?? null,
         default_color: payload.default_color || "#f97316",
         default_hotkey: payload.default_hotkey?.trim() || null,
         category_en: payload.category_en?.trim() || null,
@@ -120,6 +124,7 @@ export const SettingsPage = () => {
   ];
   const fields: (keyof GlobalTypeDraft)[] = [
     "description",
+    "sort_order",
     "default_color",
     "default_hotkey",
     "category_en",
@@ -174,6 +179,7 @@ export const SettingsPage = () => {
     errorTypes.forEach((type) => {
       drafts[type.id] = {
         description: type.description ?? "",
+        sort_order: type.sort_order ?? 0,
         default_color: type.default_color,
         default_hotkey: type.default_hotkey ?? "",
         category_en: type.category_en ?? "",
@@ -243,11 +249,17 @@ export const SettingsPage = () => {
     }
   };
 
+  const normalizeCategoryKey = React.useCallback((value?: string) => {
+    const trimmed = (value ?? "").trim();
+    return trimmed ? trimmed.toLowerCase() : "uncategorized";
+  }, []);
+
   const rows = useMemo(() => {
     const existing = errorTypes.map((type) => ({
       ...(globalDrafts[type.id] ?? {
         name: type.name,
         description: type.description ?? "",
+        sort_order: type.sort_order ?? 0,
         default_color: type.default_color,
         default_hotkey: type.default_hotkey ?? "",
         category_en: type.category_en ?? "",
@@ -256,10 +268,12 @@ export const SettingsPage = () => {
         tt_name: type.tt_name ?? "",
         is_active: type.is_active,
       }),
+      sort_order: globalDrafts[type.id]?.sort_order ?? type.sort_order ?? 0,
       id: type.id,
     }));
     const normalizedNew = pendingNew.map((p) => ({
       description: p.description ?? "",
+      sort_order: p.sort_order ?? 0,
       default_color: p.default_color ?? "#f97316",
       default_hotkey: p.default_hotkey ?? "",
       category_en: p.category_en ?? "",
@@ -269,12 +283,56 @@ export const SettingsPage = () => {
       is_active: p.is_active ?? true,
       id: p.id ?? nextTempId,
     }));
-    const allRows = [...existing, ...normalizedNew];
+    const allRows = [...existing, ...normalizedNew].map((row) => ({
+      ...row,
+      categoryKey: normalizeCategoryKey(row.category_en),
+    }));
     return allRows.sort((a, b) => {
-      if (a.is_active === b.is_active) return 0;
-      return a.is_active ? -1 : 1;
+      if (a.categoryKey !== b.categoryKey) {
+        return a.categoryKey.localeCompare(b.categoryKey);
+      }
+      if (a.sort_order !== b.sort_order) {
+        return (a.sort_order ?? 0) - (b.sort_order ?? 0);
+      }
+      const aName = (a.en_name ?? "").toLowerCase();
+      const bName = (b.en_name ?? "").toLowerCase();
+      if (aName !== bName) {
+        return aName.localeCompare(bName);
+      }
+      return (a.id ?? 0) - (b.id ?? 0);
     });
-  }, [errorTypes, globalDrafts, pendingNew, nextTempId]);
+  }, [errorTypes, globalDrafts, pendingNew, nextTempId, normalizeCategoryKey]);
+
+  const reorderWithinCategory = React.useCallback(
+    (sourceId: number, targetId: number, categoryKey: string) => {
+      if (sourceId === targetId) return;
+      const categoryRows = rows.filter((row) => row.categoryKey === categoryKey);
+      const sourceIndex = categoryRows.findIndex((row) => row.id === sourceId);
+      const targetIndex = categoryRows.findIndex((row) => row.id === targetId);
+      if (sourceIndex < 0 || targetIndex < 0) return;
+      const nextRows = [...categoryRows];
+      const [moved] = nextRows.splice(sourceIndex, 1);
+      nextRows.splice(targetIndex, 0, moved);
+      const updates = nextRows.map((row, index) => ({ id: row.id, sort_order: index + 1 }));
+      setGlobalDrafts((prev) => {
+        const next = { ...prev };
+        updates.forEach(({ id, sort_order }) => {
+          if (id > 0) {
+            next[id] = { ...next[id], sort_order };
+          }
+        });
+        return next;
+      });
+      setPendingNew((prev) =>
+        prev.map((item) => {
+          const update = updates.find((row) => row.id === item.id);
+          if (!update) return item;
+          return { ...item, sort_order: update.sort_order };
+        })
+      );
+    },
+    [rows]
+  );
 
   const isTypeChanged = (orig: ErrorType, draft: GlobalTypeDraft | undefined) => {
     if (!draft) return false;
@@ -314,6 +372,7 @@ export const SettingsPage = () => {
         .map((item) =>
           api.post("/api/error-types/", {
             description: item.description,
+            sort_order: item.sort_order ?? null,
             default_color: item.default_color,
             default_hotkey: item.default_hotkey || null,
             category_en: item.category_en || null,
@@ -328,6 +387,7 @@ export const SettingsPage = () => {
         if (!draft) return Promise.resolve();
         return api.put(`/api/error-types/${type.id}`, {
           description: draft.description,
+          sort_order: draft.sort_order ?? null,
           default_color: draft.default_color,
           default_hotkey: draft.default_hotkey || null,
           category_en: draft.category_en || null,
@@ -478,12 +538,14 @@ export const SettingsPage = () => {
         <table className="min-w-full border-collapse text-left text-sm text-slate-100">
           <thead className="border-b border-slate-800 bg-slate-900/80 text-xs uppercase text-slate-400">
             <tr>
+              <th className="px-3 py-2">Order</th>
               <th className="px-3 py-2">Category (TT)</th>
               <th className="px-3 py-2">Category (EN)</th>
               <th className="px-3 py-2">{t("settings.ttName")}</th>
               <th className="px-3 py-2">{t("settings.enNameLabel")}</th>
               <th className="px-3 py-2">{t("settings.hotkey")}</th>
               <th className="px-3 py-2">{t("settings.color")}</th>
+              <th className="px-3 py-2">{t("settings.hotkey")}</th>
               <th className="px-3 py-2">{t("settings.inactive")}</th>
             </tr>
           </thead>
@@ -491,6 +553,45 @@ export const SettingsPage = () => {
             {rows.map((row, idx) => {
               const rowId = row.id ?? -(idx + 1);
               const isExisting = row.id !== undefined && row.id > 0;
+              const categoryKey = row.categoryKey ?? normalizeCategoryKey(row.category_en);
+              const isDragOver = dragOverId === rowId;
+              const rowClassName = [
+                !row.is_active ? "bg-slate-900/40" : "",
+                isDragOver ? "bg-slate-800/60" : "",
+              ]
+                .filter(Boolean)
+                .join(" ");
+              const onDragStart = (event: React.DragEvent<HTMLTableRowElement>) => {
+                setDragState({ id: rowId, categoryKey });
+                setDragOverId(null);
+                event.dataTransfer.effectAllowed = "move";
+                try {
+                  event.dataTransfer.setData("text/plain", String(rowId));
+                } catch {
+                  // ignore missing dataTransfer in test environments
+                }
+              };
+              const onDragOver = (event: React.DragEvent<HTMLTableRowElement>) => {
+                if (!dragState || dragState.id === rowId) return;
+                if (dragState.categoryKey !== categoryKey) return;
+                event.preventDefault();
+                setDragOverId(rowId);
+              };
+              const onDragLeave = () => {
+                setDragOverId((prev) => (prev === rowId ? null : prev));
+              };
+              const onDrop = (event: React.DragEvent<HTMLTableRowElement>) => {
+                if (!dragState || dragState.id === rowId) return;
+                if (dragState.categoryKey !== categoryKey) return;
+                event.preventDefault();
+                reorderWithinCategory(dragState.id, rowId, categoryKey);
+                setDragState(null);
+                setDragOverId(null);
+              };
+              const onDragEnd = () => {
+                setDragState(null);
+                setDragOverId(null);
+              };
               const onChangeField = (patch: Partial<GlobalTypeDraft>) => {
                 if (isExisting && row.id) {
                   updateGlobalDraft(row.id, patch);
@@ -498,10 +599,28 @@ export const SettingsPage = () => {
                   updatePendingNew(rowId, patch);
                 }
               };
+              const topRowClassName = [
+                rowClassName,
+                "cursor-grab",
+                dragState?.id === rowId ? "opacity-70" : "",
+              ]
+                .filter(Boolean)
+                .join(" ");
               return (
                 <React.Fragment key={rowId}>
-                  <tr className={!row.is_active ? "bg-slate-900/40" : ""}>
-                    <td className="px-3 py-2" colSpan={7}>
+                  <tr
+                    className={topRowClassName}
+                    draggable
+                    onDragStart={onDragStart}
+                    onDragEnd={onDragEnd}
+                    onDragOver={onDragOver}
+                    onDrop={onDrop}
+                    onDragLeave={onDragLeave}
+                  >
+                    <td className="relative px-3 py-2" colSpan={9}>
+                      {isDragOver && (
+                        <div className="absolute left-3 right-3 top-0 h-0.5 rounded-full bg-emerald-400" />
+                      )}
                       <span
                         className="inline-flex items-center self-start rounded-full px-2 py-1 text-xs font-semibold text-slate-100 shadow-sm"
                         style={{ backgroundColor: resolveErrorTypeColor(row.default_color) }}
@@ -524,7 +643,10 @@ export const SettingsPage = () => {
                       </span>
                     </td>
                   </tr>
-                  <tr className={!row.is_active ? "bg-slate-900/40" : ""}>
+                  <tr className={rowClassName} onDragOver={onDragOver} onDrop={onDrop} onDragLeave={onDragLeave}>
+                    <td className="px-3 py-2 align-top text-xs text-slate-400">
+                      {row.sort_order ?? ""}
+                    </td>
                     <td className="px-3 py-2 align-top">
                       <input
                         className="w-full rounded-lg border border-slate-700 bg-slate-900/40 px-2 py-1"
@@ -538,7 +660,18 @@ export const SettingsPage = () => {
                         className="w-full rounded-lg border border-slate-700 bg-slate-900/40 px-2 py-1"
                         value={row.category_en}
                         list="category-en-options"
-                        onChange={(event) => onChangeField({ category_en: event.target.value })}
+                        onChange={(event) => {
+                          const nextValue = event.target.value;
+                          const nextCategoryKey = normalizeCategoryKey(nextValue);
+                          if (nextCategoryKey !== categoryKey) {
+                            const nextOrder =
+                              rows.filter((entry) => entry.categoryKey === nextCategoryKey && entry.id !== rowId)
+                                .length + 1;
+                            onChangeField({ category_en: nextValue, sort_order: nextOrder });
+                          } else {
+                            onChangeField({ category_en: nextValue });
+                          }
+                        }}
                       />
                     </td>
                     <td className="px-3 py-2 align-top">
@@ -601,7 +734,8 @@ export const SettingsPage = () => {
                       </button>
                     </td>
                   </tr>
-                  <tr className={!row.is_active ? "bg-slate-900/40" : ""}>
+                  <tr className={rowClassName} onDragOver={onDragOver} onDrop={onDrop} onDragLeave={onDragLeave}>
+                    <td className="px-3 pb-3 text-xs text-slate-400 border-b-2 border-slate-500"></td>
                     <td className="px-3 pb-3 text-xs text-slate-400 border-b-2 border-slate-500" colSpan={8}>
                       <textarea
                         className="w-full rounded-lg border border-slate-700 bg-slate-900/40 px-2 py-2 text-sm text-slate-100"
