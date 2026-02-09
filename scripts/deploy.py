@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+"""
+Deployment helper that builds assets, uploads artifacts over SSH, and runs remote setup
+steps. Handles environment-specific configuration, migrations, and service restarts.
+"""
+
 from __future__ import annotations
 
 import argparse

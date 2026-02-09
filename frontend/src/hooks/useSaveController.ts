@@ -1,3 +1,7 @@
+/**
+ * Coordinates saving annotations with debounce, optimistic updates, and server reconciliation.
+ * Exposes save/flush helpers and integrates render responses.
+ */
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { MutableRefObject } from "react";
 

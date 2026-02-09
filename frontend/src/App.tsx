@@ -1,3 +1,6 @@
+/**
+ * Top-level application routes and layout composition.
+ */
 import { Navigate, Outlet, Route, Routes } from "react-router-dom";
 
 import { AppLayout } from "./components/AppLayout";

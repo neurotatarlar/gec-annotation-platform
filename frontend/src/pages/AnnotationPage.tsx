@@ -1,3 +1,6 @@
+/**
+ * Page container for a single annotation task, wiring data loaders to the workspace.
+ */
 import { useQuery } from "@tanstack/react-query";
 import React, { useEffect } from "react";
 import { useParams, useSearchParams } from "react-router-dom";

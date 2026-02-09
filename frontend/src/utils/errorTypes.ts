@@ -1,3 +1,6 @@
+/**
+ * Helpers for sorting, grouping, and formatting error types.
+ */
 import { Locale } from "../context/I18nContext";
 import { ErrorType } from "../types";
 

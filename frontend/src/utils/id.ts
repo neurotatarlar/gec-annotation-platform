@@ -1,3 +1,6 @@
+/**
+ * Small ID utilities for stable keys and temporary identifiers.
+ */
 export const generateId = () => {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
     return crypto.randomUUID();

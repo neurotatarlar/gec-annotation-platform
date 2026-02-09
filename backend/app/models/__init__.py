@@ -1,3 +1,7 @@
+"""
+Convenience exports for ORM base and entity models.
+"""
+
 from .base import Base
 from .entities import (
     Annotation,

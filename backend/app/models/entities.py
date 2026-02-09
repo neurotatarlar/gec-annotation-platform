@@ -1,3 +1,8 @@
+"""
+ORM models for users, texts, annotations, tasks, and error types, including relationships
+and defaults.
+"""
+
 import uuid
 from datetime import datetime
 from typing import Optional

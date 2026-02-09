@@ -1,3 +1,6 @@
+/**
+ * Dashboard page showing annotation metrics, charts, and recent activity with filters.
+ */
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";

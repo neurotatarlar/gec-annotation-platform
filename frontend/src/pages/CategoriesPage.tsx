@@ -1,3 +1,6 @@
+/**
+ * Categories management page with CRUD UI, filters, and status feedback.
+ */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChangeEvent, FormEvent, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";

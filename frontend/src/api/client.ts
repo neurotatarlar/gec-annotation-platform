@@ -1,3 +1,6 @@
+/**
+ * Axios client wrapper with shared base URL and response handling.
+ */
 import axios from "axios";
 import { useMemo } from "react";
 

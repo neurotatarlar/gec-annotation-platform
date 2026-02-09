@@ -1,3 +1,8 @@
+"""
+Alembic environment configuration that loads app settings and exposes model metadata for
+migrations.
+"""
+
 import sys
 from logging.config import fileConfig
 from pathlib import Path

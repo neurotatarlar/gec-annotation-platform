@@ -1,5 +1,9 @@
+"""
+Dashboard endpoints that aggregate annotation/task metrics and summary data for the UI.
+"""
+
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query

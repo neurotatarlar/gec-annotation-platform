@@ -1,3 +1,7 @@
+"""
+Authentication endpoints for login and token issuance.
+"""
+
 from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, status

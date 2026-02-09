@@ -1,3 +1,6 @@
+/**
+ * Context for save status tracking and UI indicators.
+ */
 import React, { createContext, useContext, useState } from "react";
 
 import { SaveStatus } from "../types";

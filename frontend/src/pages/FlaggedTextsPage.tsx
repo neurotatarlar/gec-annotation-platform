@@ -1,3 +1,6 @@
+/**
+ * Page listing flagged texts with review actions.
+ */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo } from "react";
 import { useNavigate, useParams } from "react-router-dom";

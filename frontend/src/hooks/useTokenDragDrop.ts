@@ -1,3 +1,7 @@
+/**
+ * Drag-and-drop behavior for token moves and reordering within the editor. Tracks drag state,
+ * drop targets, and dispatches move actions.
+ */
 import { useCallback, useRef, useState } from "react";
 
 import { buildEditableTextFromTokens, Token } from "../components/TokenEditorModel";

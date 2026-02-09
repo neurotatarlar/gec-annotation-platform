@@ -1,3 +1,8 @@
+/**
+ * State model and pure helpers for the token editor. Implements reducer actions for
+ * insert/delete/move/edit, history handling, and grouping metadata. Includes hydration from
+ * server annotations and serialization back to API payloads.
+ */
 import { AnnotationDetailPayload, AnnotationDraft, ErrorType, TokenFragmentPayload } from "../types";
 import { createSpecialTokenMatchers, isSpecialTokenText } from "../utils/specialTokens";
 

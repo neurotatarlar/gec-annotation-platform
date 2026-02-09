@@ -1,3 +1,6 @@
+/**
+ * Heuristics for auto-selecting error types in the token editor.
+ */
 export type WhitespaceEditKind = "split" | "merge" | null;
 
 export const isPlainWordToken = (value: string) => /^[\p{L}\p{N}]+$/u.test(value);

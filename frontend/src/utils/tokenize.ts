@@ -1,3 +1,6 @@
+/**
+ * Tokenization helpers for splitting text into editor tokens.
+ */
 const punctuationRegex = /([.,!?;:()\[\]{}"'«»“”<>…])/g;
 
 export const tokenizeText = (text: string): string[] => {

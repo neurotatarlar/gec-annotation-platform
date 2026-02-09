@@ -1,3 +1,6 @@
+/**
+ * Authentication context provider and hooks for session state.
+ */
 import { ReactNode, createContext, useContext, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 

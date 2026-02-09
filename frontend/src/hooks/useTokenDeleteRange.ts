@@ -1,3 +1,6 @@
+/**
+ * Helper hook to delete token ranges and manage selection aftermath.
+ */
 import { useCallback } from "react";
 
 import { Token } from "../components/TokenEditorModel";

@@ -1,3 +1,6 @@
+/**
+ * Hook for mouse/keyboard selection logic in the token editor.
+ */
 import { useCallback } from "react";
 
 import { Token } from "../components/TokenEditorModel";

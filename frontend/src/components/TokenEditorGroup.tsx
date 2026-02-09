@@ -1,3 +1,6 @@
+/**
+ * Renders a correction group card with tokens, badges, and controls.
+ */
 import React from "react";
 
 import { ErrorType } from "../types";

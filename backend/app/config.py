@@ -1,3 +1,7 @@
+"""
+Application settings and environment-driven configuration helpers.
+"""
+
 from functools import lru_cache
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict

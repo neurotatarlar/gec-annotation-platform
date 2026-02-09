@@ -1,3 +1,7 @@
+"""
+Declarative base and shared model helpers for SQLAlchemy entities.
+"""
+
 from datetime import datetime
 
 from sqlalchemy import DateTime, func

@@ -1,3 +1,6 @@
+/**
+ * Shared TypeScript types for API models and annotation state.
+ */
 export interface ErrorType {
   id: number;
   description?: string | null;

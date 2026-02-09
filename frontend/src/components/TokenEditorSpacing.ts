@@ -1,3 +1,6 @@
+/**
+ * Whitespace and spacing helpers for token rendering.
+ */
 import type { CSSProperties } from "react";
 
 import { Token } from "./TokenEditorModel";

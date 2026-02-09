@@ -1,13 +1,19 @@
+"""
+Text and annotation workflow routes for assignment, saving, rendering, and export. Includes
+import helpers, corrected-text rendering, and export formatting. Provides utilities for
+normalizing payloads and token snapshots used by the editor.
+"""
+
 import hashlib
 import json
 import logging
 import re
 from datetime import datetime, timedelta, timezone
 from itertools import combinations
-from typing import Iterable, Literal
+from typing import Iterable
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import PlainTextResponse
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy.orm.exc import StaleDataError
@@ -22,7 +28,6 @@ from ..models import (
     ErrorType,
     SkippedText,
     TextSample,
-    User,
 )
 from ..schemas.common import (
     AnnotationRenderRequest,

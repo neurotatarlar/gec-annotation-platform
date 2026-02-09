@@ -1,3 +1,7 @@
+"""
+FastAPI application setup that wires middleware, routers, and lifecycle hooks for the API.
+"""
+
 import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware

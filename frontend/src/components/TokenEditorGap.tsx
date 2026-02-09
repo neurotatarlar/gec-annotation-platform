@@ -1,3 +1,6 @@
+/**
+ * Visual gap/drop target rendered between tokens.
+ */
 import React from "react";
 
 type TokenGapProps = {

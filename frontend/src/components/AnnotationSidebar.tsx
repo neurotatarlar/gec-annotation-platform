@@ -1,3 +1,7 @@
+/**
+ * Sidebar listing corrections, error types, and context actions for the active annotation
+ * session.
+ */
 import clsx from "clsx";
 import { useEffect, useState } from "react";
 

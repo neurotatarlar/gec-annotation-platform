@@ -1,3 +1,7 @@
+"""
+SQLAlchemy engine/session setup plus scoped helpers for transactional work.
+"""
+
 from contextlib import contextmanager
 
 from typing import Optional

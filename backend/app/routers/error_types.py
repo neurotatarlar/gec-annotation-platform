@@ -1,3 +1,7 @@
+"""
+Error type CRUD endpoints with category-aware ordering and preference handling.
+"""
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy import func

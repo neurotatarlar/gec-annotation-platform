@@ -1,3 +1,6 @@
+/**
+ * Shell layout component that positions the header and page content.
+ */
 import { ReactNode } from "react";
 
 import { AppHeader } from "./AppHeader";

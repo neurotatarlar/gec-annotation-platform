@@ -1,3 +1,6 @@
+/**
+ * Toolbar for annotation actions such as save, skip, and trash.
+ */
 import { useI18n } from "../context/I18nContext";
 
 interface Props {

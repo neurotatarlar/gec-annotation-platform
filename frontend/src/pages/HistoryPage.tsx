@@ -1,3 +1,6 @@
+/**
+ * Page showing annotation history and task status for the current user.
+ */
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 

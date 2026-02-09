@@ -1,3 +1,8 @@
+/**
+ * Interactive token editor UI for creating, moving, deleting, and editing corrections.
+ * Coordinates selection, drag-and-drop, hotkeys, and error type badges while rendering token
+ * groups. Acts as the view layer over TokenEditorModel state and related hooks.
+ */
 import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useLocation, useNavigate } from "react-router-dom";
@@ -39,19 +44,13 @@ import {
   buildEditableTextFromTokens,
   buildHotkeyMap,
   buildTextFromTokensWithBreaks,
-  cloneTokens,
-  createId,
-  dedupeTokens,
   deriveCorrectionByIndex,
   deriveCorrectionCards,
   deriveMoveMarkers,
   isInsertPlaceholder,
-  makeEmptyPlaceholder,
   normalizeHotkeySpec,
   rangeToArray,
-  tokenizeToTokens,
   tokenEditorReducer,
-  unwindToOriginal,
 } from "./TokenEditorModel";
 import { createGapCalculator, SpaceMarker } from "./TokenEditorSpacing";
 import {
@@ -2105,7 +2104,6 @@ export const TokenEditor: React.FC<{
 
         <TokenRow
           tokens={tokens}
-          tokenGap={tokenGap}
           renderTokenGroups={renderTokenGroups}
           rowRef={tokenRowRef}
           moveLine={moveLine}
@@ -2210,7 +2208,6 @@ export const TokenEditor: React.FC<{
 
 type TokenRowProps = {
   tokens: Token[];
-  tokenGap: number;
   renderTokenGroups: (tokens: Token[]) => React.ReactNode[];
   rowRef: React.RefObject<HTMLDivElement>;
   moveLine: { x1: number; y1: number; x2: number; y2: number } | null;
@@ -2221,7 +2218,6 @@ type TokenRowProps = {
 
 const TokenRow: React.FC<TokenRowProps> = ({
   tokens,
-  tokenGap,
   renderTokenGroups,
   rowRef,
   moveLine,

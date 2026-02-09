@@ -1,3 +1,7 @@
+"""
+Pydantic schemas for dashboard filters and summary responses.
+"""
+
 from datetime import datetime
 from typing import Literal, Optional
 from uuid import UUID

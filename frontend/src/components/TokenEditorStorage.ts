@@ -1,3 +1,6 @@
+/**
+ * Local persistence helpers for token editor drafts and metadata.
+ */
 import { EditorPresentState } from "./TokenEditorModel";
 import { SpaceMarker } from "./TokenEditorSpacing";
 

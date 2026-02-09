@@ -1,3 +1,7 @@
+/**
+ * Settings page for managing error types, categories, and user preferences. Includes drag-and-
+ * drop ordering and bulk save flows.
+ */
 import React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";

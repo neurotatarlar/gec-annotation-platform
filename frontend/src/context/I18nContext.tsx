@@ -1,3 +1,6 @@
+/**
+ * Localization context and translation helpers.
+ */
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 
 import en from "../i18n/en.json";

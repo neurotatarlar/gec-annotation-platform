@@ -1,3 +1,7 @@
+"""
+Category CRUD endpoints and related helpers.
+"""
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import case, func
 from sqlalchemy.orm import Session

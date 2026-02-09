@@ -1,3 +1,8 @@
+"""
+Typer-based admin CLI for managing users, categories, and imports, with optional database
+overrides.
+"""
+
 import json
 from pathlib import Path
 from typing import Optional

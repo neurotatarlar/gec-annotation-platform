@@ -1,3 +1,6 @@
+/**
+ * Palette for selecting error types and displaying hotkeys/colors.
+ */
 import clsx from "clsx";
 
 import { useI18n } from "../context/I18nContext";

@@ -1,4 +1,4 @@
-import React, { useLayoutEffect } from "react";
+import { useLayoutEffect } from "react";
 import { render, screen, waitFor } from "@testing-library/react";
 import { describe, it, expect, beforeEach } from "vitest";
 

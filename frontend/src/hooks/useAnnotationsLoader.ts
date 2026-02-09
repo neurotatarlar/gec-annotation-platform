@@ -1,3 +1,6 @@
+/**
+ * Hook to load annotations for a text and hydrate editor state.
+ */
 import { useEffect, useRef, type Dispatch } from "react";
 
 import { EditorPresentState } from "../components/TokenEditorModel";

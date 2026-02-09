@@ -1,3 +1,6 @@
+/**
+ * Shared style tokens and class helpers for token editor visuals.
+ */
 import type { CSSProperties } from "react";
 
 export const chipBase: CSSProperties = {

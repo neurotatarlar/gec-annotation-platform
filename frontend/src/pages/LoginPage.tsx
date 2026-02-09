@@ -1,3 +1,6 @@
+/**
+ * Login screen with credential form and error handling.
+ */
 import { FormEvent, useMemo, useState } from "react";
 import { useLocation } from "react-router-dom";
 import axios from "axios";

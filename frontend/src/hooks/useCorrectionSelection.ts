@@ -1,3 +1,6 @@
+/**
+ * Hook to manage the currently selected correction and related UI state.
+ */
 import { useCallback, useEffect, useRef } from "react";
 
 import { CorrectionCardLite, Token, findGroupRangeForTokens } from "../components/TokenEditorModel";

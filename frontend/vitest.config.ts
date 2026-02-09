@@ -1,3 +1,6 @@
+/**
+ * Vitest configuration for frontend unit tests and environment setup.
+ */
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 

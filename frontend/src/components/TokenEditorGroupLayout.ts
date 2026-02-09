@@ -1,3 +1,6 @@
+/**
+ * Computes layout metadata for token groups in the editor.
+ */
 import { Token } from "./TokenEditorModel";
 
 type MeasureText = (text: string, size?: number) => number;

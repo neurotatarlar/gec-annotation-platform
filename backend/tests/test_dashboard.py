@@ -4,7 +4,6 @@ from datetime import datetime, timezone
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy.dialects.sqlite import JSON
 
 os.environ.setdefault("DATABASE__URL", "sqlite:///:memory:")
 os.environ.setdefault("SKIP_CREATE_ALL", "1")

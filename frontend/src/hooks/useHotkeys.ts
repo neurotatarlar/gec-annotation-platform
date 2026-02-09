@@ -1,3 +1,6 @@
+/**
+ * Hook for registering keyboard shortcuts in the editor.
+ */
 import { useEffect } from "react";
 
 export const useAnnotationHotkeys = (bindings: Record<string, () => void>) => {

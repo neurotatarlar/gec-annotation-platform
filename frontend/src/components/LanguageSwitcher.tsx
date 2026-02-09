@@ -1,3 +1,6 @@
+/**
+ * Locale switcher UI for changing application language.
+ */
 import { Locale, useI18n } from "../context/I18nContext";
 
 export const LanguageSwitcher = () => {

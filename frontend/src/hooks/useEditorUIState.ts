@@ -1,3 +1,6 @@
+/**
+ * Hook for editor UI state such as active tab and layout toggles.
+ */
 import { useCallback, useReducer } from "react";
 
 export type SelectionRange = { start: number | null; end: number | null };

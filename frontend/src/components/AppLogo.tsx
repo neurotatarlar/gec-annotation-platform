@@ -1,3 +1,6 @@
+/**
+ * Logo/wordmark component used in the application header.
+ */
 import { Link } from "react-router-dom";
 
 interface AppLogoProps {

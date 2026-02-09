@@ -1,3 +1,8 @@
+/**
+ * Main annotation workspace container that wires loading, saving, and rendering flows. Hosts
+ * the token editor, corrected text view, and sidebar while coordinating optimistic updates.
+ * Manages selection state, error types, and editor interactions for a session.
+ */
 import clsx from "clsx";
 import { MouseEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 

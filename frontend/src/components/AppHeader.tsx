@@ -1,3 +1,6 @@
+/**
+ * Top navigation bar with branding, user actions, and save status indicators.
+ */
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { useEffect, useMemo, useState } from "react";

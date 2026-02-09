@@ -1,3 +1,6 @@
+/**
+ * Definitions and helpers for special tokens used in the editor.
+ */
 const SPECIAL_TOKEN_SOURCES = [
   "\\+\\d[\\d()\\- ]*\\d",
   "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}",

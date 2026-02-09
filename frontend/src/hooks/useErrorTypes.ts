@@ -1,3 +1,6 @@
+/**
+ * Hook to fetch and cache error types from the API.
+ */
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 

@@ -1,3 +1,6 @@
+/**
+ * Hook mapping correction cards to error types with persistence and defaults.
+ */
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { CorrectionCardLite } from "../components/TokenEditorModel";

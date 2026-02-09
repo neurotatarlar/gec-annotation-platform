@@ -1,3 +1,6 @@
+/**
+ * Utilities for grouping tokens by groupId for rendering and interaction.
+ */
 import { Token } from "./TokenEditorModel";
 
 type TokenGroup = { tokens: Token[]; start: number; end: number };

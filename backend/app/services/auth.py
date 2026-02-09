@@ -1,3 +1,7 @@
+"""
+Password hashing and JWT helpers for authentication flows.
+"""
+
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from uuid import UUID

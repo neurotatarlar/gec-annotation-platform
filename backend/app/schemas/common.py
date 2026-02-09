@@ -1,3 +1,7 @@
+"""
+Shared Pydantic schemas for texts, annotations, error types, and core API payloads.
+"""
+
 from datetime import datetime
 from typing import Literal, Optional
 from uuid import UUID
