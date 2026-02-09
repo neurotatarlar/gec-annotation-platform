@@ -1,3 +1,8 @@
+/**
+ * Test-runtime setup for Vitest + Testing Library in jsdom.
+ * Adds canvas measurement mocks, prevents dangling timers from blocking process exit, and
+ * suppresses noisy React Router future-flag warnings so test output stays focused.
+ */
 import "@testing-library/jest-dom";
 import { vi } from "vitest";
 

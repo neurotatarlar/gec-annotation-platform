@@ -1,3 +1,6 @@
+/**
+ * Vitest teardown hook that forces process exit after reporting active handles.
+ */
 export default async function teardown() {
   // Force an exit after Vitest completes to avoid lingering handles in watchless runs.
   setTimeout(() => {
