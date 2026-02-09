@@ -5,14 +5,14 @@ Full-stack platform for collaborative grammatical error correction (GEC) of Tata
 ## Stack
 - FastAPI + SQLAlchemy + Alembic with JWT auth and Typer-based admin CLI.
 - PostgreSQL for storage; migrations live in `backend/alembic/`.
-- React 18 + Vite + Tailwind + React Query on the frontend.
+- React 19 + Vite + Tailwind CSS v4 + React Query on the frontend.
 - Dockerfiles and docker-compose for local dev, plus an SSH deploy helper (`scripts/deploy.py`).
 
 ## Features
 - Task orchestration with one active annotator per text, lock expiry, and required annotation counts.
 - Rich annotation workspace (color-coded corrections, hotkeys, undo, sidebar of active edits, cross-validation snapshots).
 - English/Tatar UI translations backed by JSON locale files.
-- Traceability via audit log entries, versioned annotations, and cross-validation queue.
+- Traceability via versioned annotations and cross-validation queue.
 - Admin CLI for creating users, importing/exporting annotations, and managing categories/error types.
 
 ## Quick start (Docker Compose)
@@ -81,7 +81,7 @@ From `backend/` (venv activated) or remotely with `--database-url`:
 
 ## Testing
 - Frontend: `cd frontend && npm test`
-- Backend: no automated suite yet; add pytest/httpx coverage before large changes.
+- Backend: `cd backend && pytest`
 
 ## Deployment
 - SSH helper lives at `scripts/deploy.py` with `init` (server bootstrap) and `deploy` (sync code, run Alembic, build frontend, restart services).
