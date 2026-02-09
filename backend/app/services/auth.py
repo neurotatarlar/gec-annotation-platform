@@ -60,10 +60,11 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
         user_id = payload.get("sub")
         if user_id is None:
             raise credentials_exception
-    except JWTError as exc:  # pragma: no cover - FastAPI handles response
+        user_uuid = UUID(user_id)
+    except (JWTError, ValueError, TypeError) as exc:  # pragma: no cover - FastAPI handles response
         raise credentials_exception from exc
 
-    user = db.get(User, UUID(user_id))
+    user = db.get(User, user_uuid)
     if user is None or not user.is_active:
         raise credentials_exception
     return user

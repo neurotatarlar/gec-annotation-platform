@@ -1972,21 +1972,13 @@ const toHex = (buffer: ArrayBuffer) =>
 
 export const computeSha256 = async (text: string): Promise<string | null> => {
   const subtle = globalThis.crypto?.subtle;
-  if (subtle) {
-    try {
-      const data = new TextEncoder().encode(text);
-      const digest = await subtle.digest("SHA-256", data);
-      return toHex(digest);
-    } catch {
-      // fall through to node crypto
-    }
+  if (!subtle) {
+    return null;
   }
   try {
-    // @ts-ignore - optional in browser
-    const crypto = await import("crypto");
-    const hash = crypto.createHash("sha256");
-    hash.update(text);
-    return hash.digest("hex");
+    const data = new TextEncoder().encode(text);
+    const digest = await subtle.digest("SHA-256", data);
+    return toHex(digest);
   } catch {
     return null;
   }
