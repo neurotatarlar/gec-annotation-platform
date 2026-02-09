@@ -10,27 +10,27 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@tanstack/react-query": "^5.87.1",
+    "@tanstack/react-query": "^5.90.9",
     "axios": "^1.13.2",
     "clsx": "^2.1.1",
-    "react": "^19.1.1",
-    "react-dom": "^19.1.1",
-    "react-router-dom": "^7.9.3"
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "react-router-dom": "^7.13.0"
   },
   "devDependencies": {
+    "@tailwindcss/postcss": "^4.1.18",
     "@testing-library/jest-dom": "^6.9.1",
-    "@testing-library/react": "^16.3.0",
+    "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",
-    "@types/node": "^24.5.2",
-    "@types/react": "^19.1.13",
-    "@types/react-dom": "^19.1.9",
-    "@vitejs/plugin-react": "^5.0.2",
-    "autoprefixer": "^10.4.21",
-    "jsdom": "^27.0.0",
+    "@types/node": "^24.10.9",
+    "@types/react": "^19.2.10",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.1.2",
+    "jsdom": "^27.4.0",
     "postcss": "^8.5.6",
-    "tailwindcss": "^4.1.13",
-    "typescript": "^5.9.2",
-    "vite": "^7.1.7",
+    "tailwindcss": "^4.1.18",
+    "typescript": "^5.9.3",
+    "vite": "^7.3.0",
     "vitest": "^4.0.16"
   }
 }
