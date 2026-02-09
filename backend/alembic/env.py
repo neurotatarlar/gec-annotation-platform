@@ -15,7 +15,7 @@ APP_DIR = BASE_DIR / "app"
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
-from app.config import get_settings
+from app.config import get_settings  # noqa: E402
 from app.models import Base  # noqa: E402
 
 config = context.config

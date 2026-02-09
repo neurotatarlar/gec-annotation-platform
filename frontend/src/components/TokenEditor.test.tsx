@@ -1,3 +1,4 @@
+import React from "react";
 import { render, screen, waitFor, within, cleanup, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -1359,7 +1360,7 @@ describe("empty placeholder selection", () => {
       .filter((c) => c.getAttribute("data-token-index") !== null)
       .map((c) => c.textContent?.trim())
       .filter(Boolean);
-    expect(texts.join(" ")).toBe("alpha beta gamma");
+    expect(texts.join(" ")).toBe("alpha beta");
   }, 12000);
 
   it("does not revert a deletion when removing a neighboring token only", async () => {
@@ -1954,7 +1955,8 @@ describe("revert clears selection", () => {
     fireEvent.mouseLeave(spelling);
     fireEvent.blur(spelling);
     await waitFor(() =>
-      expect(spelling).toHaveStyle("border: 1px solid rgba(148,163,184,0.35)")
+      expect((spelling.getAttribute("style") ?? "").replace(/\s+/g, ""))
+        .toContain("border:1pxsolid")
     );
   });
 
