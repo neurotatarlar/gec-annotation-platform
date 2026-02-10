@@ -32,7 +32,7 @@ Full-stack platform for collaborative grammatical error correction (GEC) of Tata
   ```bash
   cd backend
   python -m venv .venv && source .venv/bin/activate
-  pip install -r requirements.txt
+  pip install -r requirements-dev.txt
   cp .env.example .env  # ensure DATABASE__URL points at your Postgres (e.g., localhost:5433 from docker compose db)
   alembic -c alembic.ini upgrade head
   uvicorn app.main:app --reload
@@ -40,7 +40,7 @@ Full-stack platform for collaborative grammatical error correction (GEC) of Tata
 - **Frontend**
   ```bash
   cd frontend
-  npm install
+  npm ci
   cp .env.example .env  # adjust VITE_API_URL if the backend is on a different host/port
   npm run dev -- --host
   ```
@@ -81,7 +81,7 @@ From `backend/` (venv activated) or remotely with `--database-url`:
 
 ## Testing
 - Frontend: `cd frontend && npm test`
-- Backend: `cd backend && pytest`
+- Backend: `cd backend && pytest` (after `pip install -r requirements-dev.txt`)
 
 ## Deployment
 - SSH helper lives at `scripts/deploy.py` with `init` (server bootstrap) and `deploy` (sync code, run Alembic, build frontend, restart services).

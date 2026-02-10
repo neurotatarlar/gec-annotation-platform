@@ -32,7 +32,8 @@ exclude = ["alembic*", "tests*"]
 dev = [
     "pytest>=9.0.2",
     "ruff>=0.14.7",
-    "mypy>=1.19.0"
+    "mypy>=1.19.0",
+    "httpx>=0.28.0"
 ]
 
 [tool.ruff]

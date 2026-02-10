@@ -83,14 +83,13 @@ jobs:
           cache: "pip"
           cache-dependency-path: |
             backend/requirements.txt
+            backend/requirements-dev.txt
             backend/pyproject.toml
-
-      - name: Setup uv
-        uses: astral-sh/setup-uv@v5
 
       - name: Install backend dependencies
         run: |
-          uv pip install --system -r requirements.txt pytest ruff
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
 
       - name: Ruff
         run: python -m ruff check .
@@ -115,14 +114,13 @@ jobs:
           cache: "pip"
           cache-dependency-path: |
             backend/requirements.txt
+            backend/requirements-dev.txt
             backend/pyproject.toml
-
-      - name: Setup uv
-        uses: astral-sh/setup-uv@v5
 
       - name: Install backend dependencies
         run: |
-          uv pip install --system -r requirements.txt pytest
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
 
       - name: Pytest
         run: python -m pytest -q
