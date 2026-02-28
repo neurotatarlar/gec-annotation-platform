@@ -83,15 +83,74 @@ From `backend/` (venv activated) or remotely with `--database-url`:
 - Frontend: `cd frontend && npm test`
 - Backend: `cd backend && pytest` (after `pip install -r requirements-dev.txt`)
 
+## Coding conventions
+- Python: 4-space indentation; Ruff enforces a 100-character line length in `backend/pyproject.toml`. Keep route handlers thin, keep Pydantic schemas typed, and move business logic into `backend/app/services/`.
+- React/TypeScript: use functional components with PascalCase filenames. Keep hooks in `frontend/src/hooks/` with `use*` names, API adapters in `frontend/src/api/`, and shared types in `frontend/src/types.ts`.
+- Styling: prefer existing Tailwind utility patterns and `clsx` for conditional class composition.
+- Config: copy the `.env.example` files in `backend/` and `frontend/`, never commit secrets, and keep `VITE_API_URL` pointed to the backend origin without a trailing `/api`.
+
+## Test authoring guidelines
+- Backend tests use in-memory SQLite and set `SKIP_CREATE_ALL`; prefer fixtures and overrides over real network or database dependencies.
+- When changing persistence or validation logic, cover the affected router and service paths.
+- Frontend tests use Vitest and Testing Library; keep specs close to the code they cover and assert user-visible behavior such as hotkeys, annotation flows, and API adapter interactions.
+
+## Contributing
+- Commits should use concise, imperative subjects, for example `Add text assignment lock validation`.
+- Keep backend, frontend, and deploy changes separate when practical.
+- If a change affects migrations or seed data, mention that in the commit body or pull request.
+- Pull requests should include a short summary, linked issues when relevant, and the commands used to verify the change.
+- Attach screenshots or GIFs for UI changes, and call out database or environment changes explicitly.
+
 ## Deployment
 - SSH helper lives at `scripts/deploy.py` with `init` (server bootstrap) and `deploy` (sync code, run Alembic, build frontend, restart services).
-- Example:  
-  `python scripts/deploy.py init --host user@server --app-dir /opt/gec-app --db-password 'strong'`  
-  `python scripts/deploy.py deploy --host user@server --frontend-api-url https://your-domain`
-- See `docs/deployment.md` for full flags, backup options, and verification steps.
+- Requirements:
+  - Debian 12+ server reachable over SSH with a sudo-enabled user
+  - local machine with Python 3, `rsync`, and `ssh`
+  - DNS/SSL can be layered on later; the helper configures HTTP on port 80
+- One-time server bootstrap:
+  ```bash
+  python scripts/deploy.py init \
+    --host user@your-server \
+    --app-dir /opt/gec-app \
+    --frontend-dist-dir /var/www/gec-frontend \
+    --service-name gec-backend \
+    --db-name gec \
+    --db-user gec \
+    --db-password 'strong-password' \
+    --secret-key 'jwt-secret'
+    # --s3-bucket ...  # optional: enable daily DB backups
+  ```
+- Bootstrap provisions:
+  - system packages (`git`, `rsync`, Python, Node, nginx, PostgreSQL 15, `ufw`, `awscli`)
+  - PostgreSQL, including DB/user creation and WAL archive setup
+  - application directories, Python virtualenv, and `backend.env`
+  - nginx config to serve frontend and proxy `/api/` to uvicorn on port 8000
+  - systemd service for `uvicorn app.main:app`
+  - optional daily S3 database backup job
+- Deploy updates:
+  ```bash
+  python scripts/deploy.py deploy \
+    --host user@your-server \
+    --app-dir /opt/gec-app \
+    --frontend-dist-dir /var/www/gec-frontend \
+    --service-name gec-backend \
+    --frontend-api-url https://your-domain
+  ```
+- Use the base origin for `--frontend-api-url` with no trailing `/api`.
+- Deploy performs:
+  - repository sync into `$APP_DIR/app`
+  - backend dependency install and env loading
+  - `alembic -c alembic.ini upgrade head`
+  - frontend build with `VITE_API_URL=$FRONTEND_API_URL`
+  - systemd restart and nginx reload
+- Post-deploy checks:
+  - health check: `curl -f http://localhost:8000/health`
+  - service status: `sudo systemctl status gec-backend`
+  - remote admin CLI example:
+    `ssh user@your-server "/opt/gec-app/venv/bin/python -m app.cli create-user --username admin --password 'StrongPass123' --admin"`
+  - if S3 backups are enabled, archives live under `/var/backups/gec` with 7-day retention and errors go to `/var/log/gec-db-backup.log`
 
 ## Project layout
 - `backend/` – FastAPI app, SQLAlchemy models, Alembic migrations, Typer CLI.
 - `frontend/` – React/Vite SPA with RTL-friendly annotation workspace.
 - `scripts/deploy.py` – Debian bootstrap + deploy automation.
-- `docs/` – design notes and ops guides (see `docs/deployment.md`).
