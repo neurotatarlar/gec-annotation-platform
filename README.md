@@ -30,10 +30,10 @@ Full-stack platform for collaborative grammatical error correction (GEC) of Tata
 ## Manual development (native)
 - **Backend**
   ```bash
-  cd backend
   python -m venv .venv && source .venv/bin/activate
-  pip install -r requirements-dev.txt
+  pip install -r backend/requirements-dev.txt
   cp .env.example .env  # ensure DATABASE__URL points at your Postgres (e.g., localhost:5433 from docker compose db)
+  cd backend
   alembic -c alembic.ini upgrade head
   uvicorn app.main:app --reload
   ```
@@ -45,6 +45,19 @@ Full-stack platform for collaborative grammatical error correction (GEC) of Tata
   npm run dev -- --host
   ```
 The SPA calls `/api/...` paths, so set `VITE_API_URL` to the backend origin **without** a trailing `/api`.
+
+## Makefile shortcuts
+Use the root `Makefile` if you prefer one command entrypoint:
+- `make help` – list available targets
+- `make env` – copy missing `.env` files from examples
+- `make install` – install backend and frontend dependencies into the root `.venv` and `frontend/node_modules`
+- `make backend-run` – start the FastAPI backend locally
+- `make frontend-run` – start the Vite frontend locally
+- `make dev` – run backend and frontend together locally
+- `make backend-migrate` – run local Alembic migrations
+- `make test` – run backend and frontend test suites
+- `make check` – run backend lint, all tests, and frontend build
+- `make docker-up` – start PostgreSQL, apply migrations, and launch backend/frontend with Docker Compose
 
 ## Environment variables
 - **Backend** (uses nested env names via `__`):  
