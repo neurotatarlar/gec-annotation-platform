@@ -6,11 +6,14 @@ FRONTEND_DIR := frontend
 VENV := .venv
 VENV_PYTHON := $(VENV)/bin/python
 VENV_PIP := $(VENV)/bin/pip
+RUN_DIR := .run
+BACKEND_PID_FILE := $(RUN_DIR)/backend.pid
+FRONTEND_PID_FILE := $(RUN_DIR)/frontend.pid
 
 .PHONY: help env backend-env frontend-env install backend-install frontend-install \
-	backend-migrate backend-run frontend-run dev backend-lint backend-test \
-	frontend-test frontend-build lint test check docker-db docker-migrate \
-	docker-up docker-down
+	backend-migrate backend-run frontend-run dev native-start native-stop up down \
+	backend-lint backend-test frontend-test frontend-build lint test check \
+	docker-db docker-migrate docker-up docker-down
 
 help:
 	@echo "Available targets:"
@@ -22,6 +25,8 @@ help:
 	@echo "  make backend-run      Start FastAPI backend locally"
 	@echo "  make frontend-run     Start Vite frontend locally"
 	@echo "  make dev              Run backend and frontend together locally"
+	@echo "  make up               Idempotently start backend and frontend locally in background"
+	@echo "  make down             Stop local background services and docker compose services"
 	@echo "  make backend-lint     Run backend Ruff checks"
 	@echo "  make backend-test     Run backend pytest suite"
 	@echo "  make frontend-test    Run frontend Vitest suite"
@@ -67,6 +72,31 @@ dev:
 	$(MAKE) frontend-run & \
 	wait
 
+native-start:
+	@mkdir -p $(RUN_DIR)
+	@cd $(BACKEND_DIR) && nohup ../$(VENV)/bin/uvicorn app.main:app --reload > ../$(RUN_DIR)/backend.log 2>&1 & echo $$! > ../$(BACKEND_PID_FILE)
+	@cd $(FRONTEND_DIR) && nohup npm run dev -- --host > ../$(RUN_DIR)/frontend.log 2>&1 & echo $$! > ../$(FRONTEND_PID_FILE)
+	@echo "Backend started: http://localhost:8000"
+	@echo "Frontend started: http://localhost:4173"
+	@echo "Logs: $(RUN_DIR)/backend.log, $(RUN_DIR)/frontend.log"
+
+native-stop:
+	@mkdir -p $(RUN_DIR)
+	@if [ -f $(BACKEND_PID_FILE) ]; then \
+		pid=$$(cat $(BACKEND_PID_FILE)); \
+		kill $$pid 2>/dev/null || true; \
+		rm -f $(BACKEND_PID_FILE); \
+	fi
+	@if [ -f $(FRONTEND_PID_FILE) ]; then \
+		pid=$$(cat $(FRONTEND_PID_FILE)); \
+		kill $$pid 2>/dev/null || true; \
+		rm -f $(FRONTEND_PID_FILE); \
+	fi
+
+up: env native-stop backend-migrate native-start
+
+down: native-stop docker-down
+
 backend-lint:
 	cd $(BACKEND_DIR) && ../$(VENV)/bin/python -m ruff check .
 
@@ -91,8 +121,13 @@ docker-db:
 docker-migrate:
 	docker compose run --rm backend alembic -c alembic.ini upgrade head
 
-docker-up: docker-db docker-migrate
-	docker compose up --build backend frontend
+docker-up: env
+	docker compose down --remove-orphans
+	docker compose up db -d
+	docker compose run --rm backend alembic -c alembic.ini upgrade head
+	docker compose up -d --build backend frontend
+	@echo "Backend started: http://localhost:8000"
+	@echo "Frontend started: http://localhost:4173"
 
 docker-down:
 	docker compose down

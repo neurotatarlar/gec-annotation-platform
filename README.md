@@ -51,13 +51,17 @@ Use the root `Makefile` if you prefer one command entrypoint:
 - `make help` – list available targets
 - `make env` – copy missing `.env` files from examples
 - `make install` – install backend and frontend dependencies into the root `.venv` and `frontend/node_modules`
+- `make up` – idempotently start backend and frontend locally in the background
+- `make down` – stop local background services and Docker Compose services
 - `make backend-run` – start the FastAPI backend locally
 - `make frontend-run` – start the Vite frontend locally
 - `make dev` – run backend and frontend together locally
 - `make backend-migrate` – run local Alembic migrations
 - `make test` – run backend and frontend test suites
 - `make check` – run backend lint, all tests, and frontend build
-- `make docker-up` – start PostgreSQL, apply migrations, and launch backend/frontend with Docker Compose
+- `make docker-up` – idempotently restart PostgreSQL, apply migrations, and launch backend/frontend with Docker Compose
+
+Use either the native path (`make install` then `make up`) or the Docker path (`make docker-up`), not both at the same time.
 
 ## Environment variables
 - **Backend** (uses nested env names via `__`):  
