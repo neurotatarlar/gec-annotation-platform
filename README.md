@@ -82,6 +82,22 @@ Use either the native path (`make install` then `make up`) or the Docker path (`
 From `backend/` (venv activated) or remotely with `--database-url`:
 - Create a user:  
   `python -m app.cli create-user --username admin --password "StrongPass123" --admin`
+- Create an annotator through the HTTP API when you have an admin password:
+  ```bash
+  TOKEN=$(curl -sS -X POST "http://your-domain/api/auth/token" \
+    -H "Content-Type: application/x-www-form-urlencoded" \
+    -d "username=admin&password=ADMIN_PASSWORD" | jq -r .access_token)
+
+  curl -sS -X POST "http://your-domain/api/auth/users" \
+    -H "Authorization: Bearer $TOKEN" \
+    -H "Content-Type: application/json" \
+    -d '{
+      "username": "new_annotator",
+      "password": "StrongPass123",
+      "full_name": "Full Name",
+      "role": "annotator"
+    }'
+  ```
 - Add a category:  
   `python -m app.cli add-category --name general --description "General texts"`
 - Import texts from JSON:  
