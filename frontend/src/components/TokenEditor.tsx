@@ -1531,6 +1531,7 @@ export const TokenEditor: React.FC<{
         annotationIdMap: annotationIdMap.current,
         annotationDeleteMap: annotationDeleteMap.current,
         includeDeletedIds: true,
+        allowUnassigned: true,
       }),
     [annotationIdMap, correctionCards, correctionTypeMap, initialText, moveMarkers, originalTokens, tokens]
   );
@@ -1546,7 +1547,6 @@ export const TokenEditor: React.FC<{
         moveMarkers,
         annotationIdMap: annotationIdMap.current,
         allowUnassigned: true,
-        defaultErrorTypeId: 0,
         includeClientCorrectionId: true,
       }),
     [annotationIdMap, correctionCards, correctionTypeMap, initialText, moveMarkers, originalTokens, tokens]

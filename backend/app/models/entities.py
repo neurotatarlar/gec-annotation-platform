@@ -133,7 +133,7 @@ class Annotation(Base):
     start_token: Mapped[int] = mapped_column(Integer)
     end_token: Mapped[int] = mapped_column(Integer)
     replacement: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    error_type_id: Mapped[int] = mapped_column(ForeignKey("error_types.id"))
+    error_type_id: Mapped[Optional[int]] = mapped_column(ForeignKey("error_types.id"), nullable=True)
     payload: Mapped[dict] = mapped_column(JsonType, default=dict)
     version: Mapped[int] = mapped_column(Integer, default=1)
 

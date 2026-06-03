@@ -20,7 +20,7 @@ export interface AnnotationDraft {
   start_token: number;
   end_token: number;
   replacement?: string | null;
-  error_type_id: number;
+  error_type_id: number | null;
   payload: AnnotationDetailPayload;
 }
 
@@ -107,8 +107,8 @@ export interface TextDiffPairs {
   text_id: number;
   pairs: {
     pair: string[];
-    only_left: [number, number, string | null, number][];
-    only_right: [number, number, string | null, number][];
+    only_left: [number, number, string | null, number | null][];
+    only_right: [number, number, string | null, number | null][];
   }[];
 }
 

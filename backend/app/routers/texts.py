@@ -533,7 +533,7 @@ def save_annotations(
                 candidate: Annotation,
                 expected_sig: tuple,
                 expected_replacement: str | None,
-                expected_error_type: int,
+                expected_error_type: int | None,
             ) -> bool:
                 if (candidate.replacement or None) != (expected_replacement or None):
                     return False
@@ -690,6 +690,16 @@ def submit_annotations(
         .filter(Annotation.text_id == text_id, Annotation.author_id == current_user.id)
         .all()
     )
+    unlabeled_annotations = [
+        ann
+        for ann in existing_annotations
+        if (ann.payload or {}).get("operation") != "noop" and ann.error_type_id is None
+    ]
+    if unlabeled_annotations:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Assign an error type to all corrections before submitting.",
+        )
     if not existing_annotations:
         tokens_snapshot = text.content.split()
         noop_type = _get_or_create_noop_error_type(db)

@@ -141,6 +141,37 @@ def test_save_annotations_stores_snapshot_and_replacement(client):
     assert ann["payload"]["text_tokens_sha256"]
 
 
+def test_save_annotations_allows_missing_error_type_for_draft(client):
+    text_id, _ = get_seed_ids()
+    payload = {
+        "annotations": [
+            {
+                "start_token": 0,
+                "end_token": 0,
+                "replacement": "hi",
+                "error_type_id": None,
+                "payload": {
+                    "operation": "replace",
+                    "before_tokens": ["base-0"],
+                    "after_tokens": [{"id": "base-0", "text": "hi", "origin": "base"}],
+                    "text_sha256": sha256("hello world"),
+                    "text_tokens": ["hello", "world"],
+                },
+            }
+        ],
+        "client_version": 0,
+    }
+
+    resp = client.post(f"/api/texts/{text_id}/annotations", json=payload)
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data[0]["error_type_id"] is None
+    with db.SessionLocal() as session:
+        ann = session.query(Annotation).one()
+        assert ann.error_type_id is None
+
+
 def test_save_annotations_does_not_delete_missing_entries_and_allows_overlap(client):
     text_id, et_id = get_seed_ids()
     with db.SessionLocal() as session:

@@ -104,7 +104,7 @@ class AnnotationPayload(BaseModel):
     start_token: int
     end_token: int
     replacement: Optional[str]
-    error_type_id: int
+    error_type_id: Optional[int] = None
     payload: AnnotationDetailPayload = Field(default_factory=AnnotationDetailPayload)
 
 

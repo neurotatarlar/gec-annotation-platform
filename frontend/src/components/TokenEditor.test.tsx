@@ -1023,11 +1023,10 @@ describe("buildAnnotationsPayloadStandalone", () => {
       correctionTypeMap: {},
       moveMarkers,
       allowUnassigned: true,
-      defaultErrorTypeId: 0,
     });
 
     expect(payloads).toHaveLength(1);
-    expect(payloads[0].error_type_id).toBe(0);
+    expect(payloads[0].error_type_id).toBeNull();
   });
 
   it("adds deleted_ids when includeDeletedIds is true", async () => {
@@ -2495,7 +2494,9 @@ describe("TokenEditor view toggles", () => {
     await user.click(deleteBtn);
 
     await new Promise((resolve) => setTimeout(resolve, 900));
-    expect(annotationPostCount).toBe(0);
+    expect(annotationPostCount).toBe(1);
+    expect(serverAnnotations).toHaveLength(1);
+    expect(serverAnnotations[0].error_type_id).toBeNull();
 
     const placeholder = await screen.findByRole("button", { name: "⬚" });
     await user.click(placeholder);
@@ -2503,8 +2504,9 @@ describe("TokenEditor view toggles", () => {
     await user.click(typeChip);
 
     await new Promise((resolve) => setTimeout(resolve, 900));
-    expect(annotationPostCount).toBe(1);
+    expect(annotationPostCount).toBe(2);
     expect(serverAnnotations).toHaveLength(1);
+    expect(serverAnnotations[0].error_type_id).toBe(1);
 
     cleanup();
     await renderEditor("alpha beta", {
@@ -2522,6 +2524,7 @@ describe("TokenEditor view toggles", () => {
     });
 
     process.env.NODE_ENV = originalEnv;
+    mockPost.mockReset();
   }, 12000);
 
   it("rehydrates error types from server even with stale local type state", async () => {

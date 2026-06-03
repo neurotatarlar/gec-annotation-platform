@@ -480,6 +480,50 @@ def test_submit_creates_assignment_and_noop_when_missing(client):
         assert cv is not None
 
 
+def test_submit_rejects_unlabeled_draft_annotations(client):
+    with db.SessionLocal() as session:
+        text = session.query(TextSample).filter_by(content="text B").one()
+        session.query(AnnotationTask).delete()
+        session.query(Annotation).delete()
+        session.commit()
+        text_id = text.id
+        text_hash = hashlib.sha256(text.content.encode("utf-8")).hexdigest()
+
+    save_payload = {
+        "annotations": [
+            {
+                "start_token": 0,
+                "end_token": 0,
+                "replacement": "draft",
+                "error_type_id": None,
+                "payload": {
+                    "operation": "replace",
+                    "before_tokens": ["base-0"],
+                    "after_tokens": [{"id": "base-0", "text": "draft", "origin": "base"}],
+                    "text_sha256": text_hash,
+                    "text_tokens": ["text", "B"],
+                },
+            }
+        ],
+        "client_version": 0,
+    }
+    save_resp = client.post(f"/api/texts/{text_id}/annotations", json=save_payload)
+    assert save_resp.status_code == 200, save_resp.text
+    assert save_resp.json()[0]["error_type_id"] is None
+
+    submit_resp = client.post(f"/api/texts/{text_id}/submit")
+
+    assert submit_resp.status_code == 400, submit_resp.text
+    assert submit_resp.json()["detail"] == "Assign an error type to all corrections before submitting."
+    with db.SessionLocal() as session:
+        task = (
+            session.query(AnnotationTask)
+            .filter_by(text_id=text_id, annotator_id=TEST_USER_ID)
+            .one_or_none()
+        )
+        assert task is None
+
+
 def test_switch_between_skip_and_trash_is_exclusive(client):
     with db.SessionLocal() as session:
         text = session.query(TextSample).filter_by(content="text B").one()

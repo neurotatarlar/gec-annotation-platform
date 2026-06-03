@@ -2019,7 +2019,7 @@ type BuildPayloadInput = {
   annotationDeleteMap?: Map<string, number[]>;
   includeDeletedIds?: boolean;
   allowUnassigned?: boolean;
-  defaultErrorTypeId?: number;
+  defaultErrorTypeId?: number | null;
   includeClientCorrectionId?: boolean;
 };
 
@@ -2034,7 +2034,7 @@ export const buildAnnotationsPayloadStandalone = async ({
   annotationDeleteMap,
   includeDeletedIds = false,
   allowUnassigned = false,
-  defaultErrorTypeId = 0,
+  defaultErrorTypeId = null,
   includeClientCorrectionId = false,
 }: BuildPayloadInput): Promise<AnnotationDraft[]> => {
   const textHash = await computeSha256(initialText);
