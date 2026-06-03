@@ -74,8 +74,8 @@ dev:
 
 native-start:
 	@mkdir -p $(RUN_DIR)
-	@cd $(BACKEND_DIR) && nohup ../$(VENV)/bin/uvicorn app.main:app --reload > ../$(RUN_DIR)/backend.log 2>&1 & echo $$! > ../$(BACKEND_PID_FILE)
-	@cd $(FRONTEND_DIR) && nohup npm run dev -- --host > ../$(RUN_DIR)/frontend.log 2>&1 & echo $$! > ../$(FRONTEND_PID_FILE)
+	@(cd $(BACKEND_DIR) && nohup ../$(VENV)/bin/uvicorn app.main:app --reload > ../$(RUN_DIR)/backend.log 2>&1 & echo $$! > ../$(BACKEND_PID_FILE))
+	@(cd $(FRONTEND_DIR) && nohup npm run dev -- --host > ../$(RUN_DIR)/frontend.log 2>&1 & echo $$! > ../$(FRONTEND_PID_FILE))
 	@echo "Backend started: http://localhost:8000"
 	@echo "Frontend started: http://localhost:4173"
 	@echo "Logs: $(RUN_DIR)/backend.log, $(RUN_DIR)/frontend.log"
