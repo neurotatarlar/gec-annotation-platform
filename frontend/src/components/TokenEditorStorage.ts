@@ -1,5 +1,8 @@
 /**
- * Local persistence helpers for token editor drafts and metadata.
+ * Local persistence helpers for token editor UI preferences.
+ *
+ * Editor state storage is test-only. Production annotation state must hydrate
+ * from backend responses.
  */
 import { EditorPresentState } from "./TokenEditorModel";
 import { SpaceMarker } from "./TokenEditorSpacing";
@@ -46,8 +49,10 @@ export const persistPrefs = (prefs: TokenEditorPrefs) => {
 
 const stateKey = (textId: number) => `${PREFS_KEY}:state:${textId}`;
 
+export const isEditorStateStorageEnabled = () => process.env.NODE_ENV === "test";
+
 export const loadEditorState = (textId: number): EditorPresentState | null => {
-  if (process.env.NODE_ENV !== "test") return null;
+  if (!isEditorStateStorageEnabled()) return null;
   try {
     const raw = localStorage.getItem(stateKey(textId));
     if (!raw) return null;
@@ -64,7 +69,7 @@ export const loadEditorState = (textId: number): EditorPresentState | null => {
 };
 
 export const persistEditorState = (textId: number, state: EditorPresentState) => {
-  if (process.env.NODE_ENV !== "test") return;
+  if (!isEditorStateStorageEnabled()) return;
   try {
     localStorage.setItem(stateKey(textId), JSON.stringify(state));
   } catch {

@@ -85,6 +85,7 @@ describe("useAnnotationsLoader", () => {
         annotationIdMap,
         annotationDeleteMap,
         setServerAnnotationVersion,
+        allowPendingLocalStateFallback: true,
       })
     );
 
@@ -93,6 +94,42 @@ describe("useAnnotationsLoader", () => {
     );
     expect(seedCorrectionTypes).not.toHaveBeenCalled();
     expect(hydratedFromServerRef.current).toBe(true);
+  });
+
+  it("does not fall back to pending local state unless explicitly enabled", async () => {
+    const localState = emptyPresent();
+    const get = vi.fn().mockResolvedValue({
+      data: [{ id: 21, start_token: 0, end_token: 0, version: 1, author_id: "user-1" }],
+    });
+    const hydrateFromServerAnnotations = vi.fn().mockReturnValue(null);
+    const dispatch = vi.fn();
+    const seedCorrectionTypes = vi.fn();
+    const setServerAnnotationVersion = vi.fn();
+    const pendingLocalStateRef = { current: localState };
+    const hydratedFromServerRef = { current: false };
+    const annotationIdMap = { current: new Map<string, number>() };
+    const annotationDeleteMap = { current: new Map<string, number[]>() };
+
+    renderHook(() =>
+      useAnnotationsLoader({
+        textId: 7,
+        currentUserId: "user-1",
+        get,
+        hydrateFromServerAnnotations,
+        dispatch,
+        seedCorrectionTypes,
+        pendingLocalStateRef,
+        hydratedFromServerRef,
+        annotationIdMap,
+        annotationDeleteMap,
+        setServerAnnotationVersion,
+      })
+    );
+
+    await waitFor(() => expect(setServerAnnotationVersion).toHaveBeenCalledWith(1));
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(seedCorrectionTypes).not.toHaveBeenCalled();
+    expect(hydratedFromServerRef.current).toBe(false);
   });
 
   it("maps annotation ids for current user when already hydrated", async () => {

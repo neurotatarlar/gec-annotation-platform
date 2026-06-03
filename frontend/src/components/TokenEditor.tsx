@@ -57,6 +57,7 @@ import {
 } from "./TokenEditorModel";
 import { createGapCalculator, SpaceMarker } from "./TokenEditorSpacing";
 import {
+  isEditorStateStorageEnabled,
   loadEditorState,
   loadPrefs,
   normalizeSpaceMarker,
@@ -802,6 +803,7 @@ export const TokenEditor: React.FC<{
     annotationIdMap,
     annotationDeleteMap,
     setServerAnnotationVersion,
+    allowPendingLocalStateFallback: isEditorStateStorageEnabled(),
     onLoaded: () => setHasLoadedAnnotations(true),
   });
 

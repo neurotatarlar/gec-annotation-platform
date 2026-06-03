@@ -23,6 +23,7 @@ type UseAnnotationsLoaderParams = {
   annotationIdMap: React.RefObject<Map<string, number>>;
   annotationDeleteMap: React.RefObject<Map<string, number[]>>;
   setServerAnnotationVersion: (value: number) => void;
+  allowPendingLocalStateFallback?: boolean;
   onLoaded?: (textId: number) => void;
 };
 
@@ -38,6 +39,7 @@ export const useAnnotationsLoader = ({
   annotationIdMap,
   annotationDeleteMap,
   setServerAnnotationVersion,
+  allowPendingLocalStateFallback = false,
   onLoaded,
 }: UseAnnotationsLoaderParams) => {
   const loadedRef = useRef<number | null>(null);
@@ -76,7 +78,11 @@ export const useAnnotationsLoader = ({
           seedCorrectionTypes(hydrated.typeMap);
           annotationIdMap.current = hydrated.spanMap;
           hydratedFromServerRef.current = true;
-        } else if (!hydratedFromServerRef.current && pendingLocalStateRef.current) {
+        } else if (
+          allowPendingLocalStateFallback &&
+          !hydratedFromServerRef.current &&
+          pendingLocalStateRef.current
+        ) {
           dispatch({ type: "INIT_FROM_STATE", state: pendingLocalStateRef.current });
           hydratedFromServerRef.current = true;
         } else {
@@ -125,6 +131,7 @@ export const useAnnotationsLoader = ({
     annotationIdMap,
     annotationDeleteMap,
     setServerAnnotationVersion,
+    allowPendingLocalStateFallback,
     onLoaded,
   ]);
 };
