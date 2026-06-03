@@ -20,10 +20,8 @@ from pydantic import BaseModel
 from ..models import (
     Annotation,
     AnnotationTask,
-    AnnotationVersion,
     Category,
     CrossValidationResult,
-    ErrorType,
     SkippedText,
     TextSample,
 )
@@ -47,33 +45,15 @@ from ..services.auth import get_current_user, get_db
 from ..services.annotation_payloads import summarize_annotations
 from ..services.annotation_rendering import build_export_record, render_corrected_text
 from ..services.annotation_saves import AnnotationSaveError, save_annotation_drafts
+from ..services.annotation_submissions import (
+    AnnotationSubmitError,
+    queue_cross_validation,
+    submit_annotation_task,
+)
 
 router = APIRouter(prefix="/api/texts", tags=["texts"])
 LOCK_DURATION = timedelta(minutes=30)
 logger = logging.getLogger(__name__)
-
-
-def _sha256_text(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-
-def _sha256_tokens(tokens: list[str]) -> str:
-    joined = "\u241f".join(tokens)  # unit separator to minimize collision with token text
-    return _sha256_text(joined)
-
-
-def _get_or_create_noop_error_type(db: Session) -> ErrorType:
-    noop = (
-        db.query(ErrorType)
-        .filter(func.lower(ErrorType.en_name) == "noop")
-        .one_or_none()
-    )
-    if noop:
-        return noop
-    noop = ErrorType(en_name="noop", default_color="#94a3b8", is_active=True)
-    db.add(noop)
-    db.flush()
-    return noop
 
 
 def _parse_int_list(raw: str | None) -> list[int]:
@@ -185,7 +165,7 @@ def import_texts(
             )
             if completed_count >= text.required_annotations:
                 text.state = "awaiting_cross_validation"
-                _queue_cross_validation(db=db, text_id=text.id)
+                queue_cross_validation(db=db, text_id=text.id)
             else:
                 text.state = "pending"
         inserted += 1
@@ -405,93 +385,11 @@ def submit_annotations(
     if not text:
         raise HTTPException(status_code=404, detail="Text not found")
 
-    task = (
-        db.query(AnnotationTask)
-        .filter(AnnotationTask.text_id == text_id, AnnotationTask.annotator_id == current_user.id)
-        .one_or_none()
-    )
-    if not task:
-        task = AnnotationTask(text_id=text_id, annotator_id=current_user.id, status="submitted")
-        db.add(task)
-    else:
-        task.status = "submitted"
-    task.updated_at = datetime.now(timezone.utc)
-
-    text.locked_by_id = None
-    text.locked_at = None
-    # Clear any previous skip/trash markers for this annotator so the latest
-    # state (submission) is exclusive going forward.
-    (
-        db.query(SkippedText)
-        .filter(SkippedText.text_id == text_id, SkippedText.annotator_id == current_user.id)
-        .delete(synchronize_session=False)
-    )
-
-    existing_annotations = (
-        db.query(Annotation)
-        .filter(Annotation.text_id == text_id, Annotation.author_id == current_user.id)
-        .all()
-    )
-    unlabeled_annotations = [
-        ann
-        for ann in existing_annotations
-        if (ann.payload or {}).get("operation") != "noop" and ann.error_type_id is None
-    ]
-    if unlabeled_annotations:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Assign an error type to all corrections before submitting.",
-        )
-    if not existing_annotations:
-        tokens_snapshot = text.content.split()
-        noop_type = _get_or_create_noop_error_type(db)
-        payload = {
-            "operation": "noop",
-            "before_tokens": [],
-            "after_tokens": [],
-            "text_tokens": tokens_snapshot,
-            "text_tokens_sha256": _sha256_tokens(tokens_snapshot),
-            "text_sha256": _sha256_text(text.content),
-            "source": "manual",
-        }
-        annotation = Annotation(
-            text_id=text_id,
-            author_id=current_user.id,
-            start_token=-1,
-            end_token=-1,
-            replacement=None,
-            error_type_id=noop_type.id,
-            payload=payload,
-        )
-        db.add(annotation)
-        db.flush()
-        db.add(
-            AnnotationVersion(
-                annotation_id=annotation.id,
-                version=annotation.version,
-                snapshot={
-                    "start_token": annotation.start_token,
-                    "end_token": annotation.end_token,
-                    "replacement": annotation.replacement,
-                    "payload": annotation.payload,
-                    "error_type_id": annotation.error_type_id,
-                },
-            )
-        )
-
-    db.flush()
-    completed_count = (
-        db.query(AnnotationTask)
-        .filter(AnnotationTask.text_id == text_id, AnnotationTask.status == "submitted")
-        .count()
-    )
-    if completed_count >= text.required_annotations:
-        text.state = "awaiting_cross_validation"
-        _queue_cross_validation(db=db, text_id=text_id)
-    else:
-        # Return the text to the queue for other annotators if more submissions are needed.
-        text.state = "pending"
-    db.commit()
+    try:
+        submit_annotation_task(db, text, current_user.id)
+    except AnnotationSubmitError as exc:
+        db.rollback()
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     return {"status": "submitted"}
 
 
@@ -812,20 +710,6 @@ def get_text(text_id: int, db: Session = Depends(get_db), current_user=Depends(g
     if not text:
         raise HTTPException(status_code=404, detail="Text not found")
     return text
-
-
-def _queue_cross_validation(*, db: Session, text_id: int):
-    result = (
-        db.query(CrossValidationResult)
-        .filter(CrossValidationResult.text_id == text_id)
-        .one_or_none()
-    )
-    if not result:
-        result = CrossValidationResult(text_id=text_id, status="pending", result={})
-        db.add(result)
-    else:
-        result.status = "pending"
-        result.result = {}
 
 
 @router.get("/{text_id}/cross-validation", response_model=CrossValidationRead)
