@@ -295,6 +295,117 @@ type HydrationResult = {
   spanMap: Map<string, number>;
 };
 
+export type ServerAnnotationLike = {
+  id?: number | null;
+  author_id?: string | null;
+  start_token?: number | null;
+  end_token?: number | null;
+  replacement?: string | null;
+  error_type_id?: number | null;
+  payload?: Record<string, unknown> | null;
+};
+
+const serverPayload = (ann: ServerAnnotationLike): Record<string, unknown> => ann?.payload ?? {};
+
+export const getServerBeforeTokens = (ann: ServerAnnotationLike): string[] => {
+  const value = serverPayload(ann).before_tokens;
+  return Array.isArray(value) ? value.map((item) => String(item)) : [];
+};
+
+export const getServerAfterTokens = (ann: ServerAnnotationLike): TokenFragmentPayload[] => {
+  const value = serverPayload(ann).after_tokens;
+  return Array.isArray(value) ? (value as TokenFragmentPayload[]) : [];
+};
+
+export const getServerSnapshotTokens = (items: ServerAnnotationLike[]): string[] | undefined => {
+  const value = items.find((ann) => {
+    const tokens = serverPayload(ann).text_tokens;
+    return Array.isArray(tokens) && tokens.length > 0;
+  });
+  const tokens = value ? serverPayload(value).text_tokens : undefined;
+  return Array.isArray(tokens) ? tokens.map((token) => String(token)) : undefined;
+};
+
+export const getServerMoveFrom = (ann: ServerAnnotationLike): number => {
+  const payload = serverPayload(ann);
+  return typeof payload.move_from === "number"
+    ? payload.move_from
+    : typeof payload.moveFrom === "number"
+      ? payload.moveFrom
+      : typeof ann?.start_token === "number"
+        ? ann.start_token
+        : 0;
+};
+
+export const getServerMoveTo = (ann: ServerAnnotationLike): number => {
+  const payload = serverPayload(ann);
+  return typeof payload.move_to === "number"
+    ? payload.move_to
+    : typeof payload.moveTo === "number"
+      ? payload.moveTo
+      : typeof ann?.start_token === "number"
+        ? ann.start_token
+        : 0;
+};
+
+export const getServerMoveLen = (
+  ann: ServerAnnotationLike,
+  beforeTokens = getServerBeforeTokens(ann),
+  afterTokens = getServerAfterTokens(ann)
+): number => {
+  const payload = serverPayload(ann);
+  return typeof payload.move_len === "number"
+    ? payload.move_len
+    : afterTokens.length
+      ? afterTokens.length
+      : beforeTokens.length
+        ? beforeTokens.length
+        : 1;
+};
+
+export const getServerHydrationOperation = (ann: ServerAnnotationLike): string => {
+  const payload = serverPayload(ann);
+  const operation = payload.operation || (ann?.replacement ? "replace" : "noop");
+  const beforeTokensPayload = getServerBeforeTokens(ann);
+  const afterTokensPayload = getServerAfterTokens(ann);
+  const hasReplacement = Boolean(ann?.replacement && String(ann.replacement).length > 0);
+  if (operation === "noop" && (afterTokensPayload.length > 0 || beforeTokensPayload.length > 0 || hasReplacement)) {
+    return "replace";
+  }
+  return String(operation);
+};
+
+export const compareServerAnnotationsForHydration = (
+  a: ServerAnnotationLike,
+  b: ServerAnnotationLike
+): number => {
+  const opA = getServerHydrationOperation(a);
+  const opB = getServerHydrationOperation(b);
+  const priority = (op: string) => (op === "move" ? 0 : 1);
+  const prioDiff = priority(opA) - priority(opB);
+  if (prioDiff !== 0) return prioDiff;
+  if (opA === "move" && opB === "move") {
+    const moveToA = getServerMoveTo(a);
+    const moveToB = getServerMoveTo(b);
+    if (moveToA !== moveToB) return moveToA - moveToB;
+    const moveFromA = getServerMoveFrom(a);
+    const moveFromB = getServerMoveFrom(b);
+    const dirA = moveFromA < moveToA ? -1 : moveFromA > moveToA ? 1 : 0;
+    const dirB = moveFromB < moveToB ? -1 : moveFromB > moveToB ? 1 : 0;
+    if (dirA !== dirB) return dirA - dirB;
+    if (dirA === -1 && moveFromA !== moveFromB) return moveFromB - moveFromA;
+    if (dirA === 1 && moveFromA !== moveFromB) return moveFromA - moveFromB;
+    return (a?.id ?? 0) - (b?.id ?? 0);
+  }
+  const startA = a?.start_token ?? 0;
+  const startB = b?.start_token ?? 0;
+  if (startA !== startB) return startA - startB;
+  const endA = a?.end_token ?? 0;
+  const endB = b?.end_token ?? 0;
+  if (endA !== endB) return endA - endB;
+  return (a?.id ?? 0) - (b?.id ?? 0);
+};
+
 export const hydrateFromServerAnnotations = ({
   items,
   initialText,
@@ -305,9 +416,7 @@ export const hydrateFromServerAnnotations = ({
   currentUserId?: string | null;
 }): HydrationResult | null => {
   if (!items?.length) return null;
-  const snapshotTokens = items.find(
-    (ann: any) => Array.isArray(ann?.payload?.text_tokens) && ann.payload.text_tokens.length
-  )?.payload?.text_tokens as string[] | undefined;
+  const snapshotTokens = getServerSnapshotTokens(items);
   const baseTokens = snapshotTokens?.length
     ? buildTokensFromSnapshot(snapshotTokens, initialText)
     : tokenizeToTokens(initialText);
@@ -325,99 +434,19 @@ export const hydrateFromServerAnnotations = ({
     offsetDeltas.reduce((acc, entry) => (entry.start <= index ? acc + entry.delta : acc), 0);
   const typeMap: Record<string, number | null> = {};
   const spanMap = new Map<string, number>();
-  const readMoveTo = (ann: any) =>
-    typeof ann?.payload?.move_to === "number"
-      ? ann.payload.move_to
-      : typeof ann?.payload?.moveTo === "number"
-        ? ann.payload.moveTo
-        : typeof ann?.start_token === "number"
-          ? ann.start_token
-          : 0;
-  const readMoveFrom = (ann: any) =>
-    typeof ann?.payload?.move_from === "number"
-      ? ann.payload.move_from
-      : typeof ann?.payload?.moveFrom === "number"
-        ? ann.payload.moveFrom
-        : typeof ann?.start_token === "number"
-          ? ann.start_token
-          : 0;
-  const normalizeOperation = (ann: any) => {
-    const payload = ann?.payload || {};
-    const operation = payload.operation || (ann?.replacement ? "replace" : "noop");
-    const beforeTokensPayload = Array.isArray(payload.before_tokens) ? payload.before_tokens : [];
-    const afterTokensPayload = Array.isArray(payload.after_tokens) ? payload.after_tokens : [];
-    const hasReplacement = Boolean(ann?.replacement && String(ann.replacement).length > 0);
-    if (operation === "noop" && (afterTokensPayload.length > 0 || beforeTokensPayload.length > 0 || hasReplacement)) {
-      return "replace";
-    }
-    return String(operation);
-  };
-  const ordered = [...items].sort((a, b) => {
-    const opA = normalizeOperation(a);
-    const opB = normalizeOperation(b);
-    const priority = (op: string) => (op === "move" ? 0 : 1);
-    const prioDiff = priority(opA) - priority(opB);
-    if (prioDiff !== 0) return prioDiff;
-    if (opA === "move" && opB === "move") {
-      const moveToA = readMoveTo(a);
-      const moveToB = readMoveTo(b);
-      if (moveToA !== moveToB) return moveToA - moveToB;
-      const moveFromA = readMoveFrom(a);
-      const moveFromB = readMoveFrom(b);
-      const dirA = moveFromA < moveToA ? -1 : moveFromA > moveToA ? 1 : 0;
-      const dirB = moveFromB < moveToB ? -1 : moveFromB > moveToB ? 1 : 0;
-      if (dirA !== dirB) return dirA - dirB;
-      if (dirA === -1 && moveFromA !== moveFromB) return moveFromB - moveFromA;
-      if (dirA === 1 && moveFromA !== moveFromB) return moveFromA - moveFromB;
-      return (a?.id ?? 0) - (b?.id ?? 0);
-    }
-    const startA = a?.start_token ?? 0;
-    const startB = b?.start_token ?? 0;
-    if (startA !== startB) return startA - startB;
-    const endA = a?.end_token ?? 0;
-    const endB = b?.end_token ?? 0;
-    if (endA !== endB) return endA - endB;
-    return (a?.id ?? 0) - (b?.id ?? 0);
-  });
+  const ordered = [...items].sort(compareServerAnnotationsForHydration);
   ordered.forEach((ann: any) => {
-    const payload = ann?.payload || {};
-    const operation = payload.operation || (ann?.replacement ? "replace" : "noop");
-    const beforeTokensPayload = Array.isArray(payload.before_tokens) ? payload.before_tokens : [];
-    const afterTokensPayload = Array.isArray(payload.after_tokens) ? payload.after_tokens : [];
-    const hasReplacement = Boolean(ann?.replacement && String(ann.replacement).length > 0);
-    const normalizedOperation =
-      operation === "noop" &&
-      (afterTokensPayload.length > 0 || beforeTokensPayload.length > 0 || hasReplacement)
-        ? "replace"
-        : operation;
+    const payload = serverPayload(ann);
+    const beforeTokensPayload = getServerBeforeTokens(ann);
+    const afterTokensPayload = getServerAfterTokens(ann);
+    const normalizedOperation = getServerHydrationOperation(ann);
     if (normalizedOperation === "noop") return;
     if (String(normalizedOperation) === "move") {
       const afterRaw = afterTokensPayload;
-      const moveFrom =
-        typeof payload.move_from === "number"
-          ? payload.move_from
-          : typeof payload.moveFrom === "number"
-            ? payload.moveFrom
-            : typeof ann?.start_token === "number"
-              ? ann.start_token
-              : 0;
-      const moveTo =
-        typeof payload.move_to === "number"
-          ? payload.move_to
-          : typeof payload.moveTo === "number"
-            ? payload.moveTo
-            : typeof ann?.start_token === "number"
-              ? ann.start_token
-              : 0;
+      const moveFrom = getServerMoveFrom(ann);
+      const moveTo = getServerMoveTo(ann);
       const hasOriginalIds = beforeTokensPayload.length > 0;
-      let moveLen =
-        typeof payload.move_len === "number"
-          ? payload.move_len
-          : afterRaw.length
-            ? afterRaw.length
-            : beforeTokensPayload.length
-              ? beforeTokensPayload.length
-              : 1;
+      let moveLen = getServerMoveLen(ann, beforeTokensPayload, afterRaw);
       const matchedRange = findRangeForOriginalIds(working, beforeTokensPayload);
       let sourceStart = moveFrom + offsetAt(moveFrom);
       sourceStart = Math.max(0, Math.min(working.length, sourceStart));

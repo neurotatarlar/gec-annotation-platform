@@ -28,6 +28,12 @@ import {
   buildHotkeyMap,
   parseHotkey,
   guessCodeFromKey,
+  compareServerAnnotationsForHydration,
+  getServerHydrationOperation,
+  getServerMoveFrom,
+  getServerMoveLen,
+  getServerMoveTo,
+  getServerSnapshotTokens,
 } from "./TokenEditor";
 
 vi.mock("../context/I18nContext", () => ({
@@ -1178,6 +1184,63 @@ describe("buildAnnotationsPayloadStandalone", () => {
 
     expect(payloads).toHaveLength(2);
     expect(payloads.every((p) => p.payload.operation === "move")).toBe(true);
+  });
+});
+
+describe("server annotation hydration helpers", () => {
+  it("uses text_tokens from the first annotation that has a snapshot", () => {
+    const snapshot = getServerSnapshotTokens([
+      { id: 1, payload: { operation: "noop" } },
+      { id: 2, payload: { text_tokens: ["foo", "bar"] } },
+      { id: 3, payload: { text_tokens: ["baz"] } },
+    ]);
+
+    expect(snapshot).toEqual(["foo", "bar"]);
+  });
+
+  it("normalizes noop annotations with correction content as replace", () => {
+    expect(
+      getServerHydrationOperation({
+        replacement: null,
+        payload: { operation: "noop", before_tokens: [], after_tokens: [] },
+      })
+    ).toBe("noop");
+    expect(
+      getServerHydrationOperation({
+        replacement: null,
+        payload: { operation: "noop", before_tokens: ["base-0"], after_tokens: [] },
+      })
+    ).toBe("replace");
+    expect(
+      getServerHydrationOperation({
+        replacement: "hi",
+        payload: { operation: "noop", before_tokens: [], after_tokens: [] },
+      })
+    ).toBe("replace");
+  });
+
+  it("reads move aliases and falls back to annotation spans", () => {
+    expect(getServerMoveFrom({ start_token: 4, payload: {} })).toBe(4);
+    expect(getServerMoveTo({ start_token: 4, payload: {} })).toBe(4);
+    expect(getServerMoveFrom({ payload: { moveFrom: 2 } })).toBe(2);
+    expect(getServerMoveTo({ payload: { moveTo: 1 } })).toBe(1);
+    expect(getServerMoveFrom({ payload: { move_from: 3, moveFrom: 2 } })).toBe(3);
+    expect(getServerMoveTo({ payload: { move_to: 0, moveTo: 1 } })).toBe(0);
+    expect(getServerMoveLen({ payload: { move_len: 4 } })).toBe(4);
+    expect(getServerMoveLen({ payload: { after_tokens: [{ id: "a", text: "x", origin: "base" }] } })).toBe(1);
+  });
+
+  it("orders move annotations before other operations with stable move ordering", () => {
+    const annotations = [
+      { id: 4, start_token: 0, end_token: 0, payload: { operation: "replace" } },
+      { id: 3, start_token: 1, end_token: 1, payload: { operation: "move", move_from: 2, move_to: 0 } },
+      { id: 2, start_token: 2, end_token: 2, payload: { operation: "move", move_from: 3, move_to: 0 } },
+      { id: 1, start_token: 0, end_token: 0, payload: { operation: "delete" } },
+    ];
+
+    const ordered = [...annotations].sort(compareServerAnnotationsForHydration);
+
+    expect(ordered.map((ann) => ann.id)).toEqual([3, 2, 1, 4]);
   });
 });
 
