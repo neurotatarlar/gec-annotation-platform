@@ -46,6 +46,14 @@ from ..schemas.common import (
     TextRead,
 )
 from ..services.auth import get_current_user, get_db
+from ..services.annotation_payloads import (
+    AnnotationPayloadError,
+    derive_replacement,
+    ensure_payload_dict,
+    payload_signature,
+    summarize_annotations,
+    validate_annotation_payload,
+)
 
 router = APIRouter(prefix="/api/texts", tags=["texts"])
 LOCK_DURATION = timedelta(minutes=30)
@@ -339,35 +347,6 @@ def save_annotations(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    def _summarize_annotations(items: list[AnnotationPayload]):
-        summary = []
-        for ann in items[:5]:
-            payload = ann.payload
-            op = None
-            before = None
-            after = None
-            text_hash = None
-            if isinstance(payload, BaseModel):
-                payload = payload.model_dump()
-            if isinstance(payload, dict):
-                op = payload.get("operation")
-                before = len(payload.get("before_tokens") or [])
-                after_tokens = payload.get("after_tokens") or []
-                after = len(after_tokens)
-                text_hash = payload.get("text_sha256") or payload.get("text_hash")
-            summary.append(
-                {
-                    "start": ann.start_token,
-                    "end": ann.end_token,
-                    "op": op,
-                    "before_len": before,
-                    "after_len": after,
-                    "hash": text_hash,
-                    "has_id": getattr(ann, "id", None) is not None,
-                }
-            )
-        return summary
-
     text = db.get(TextSample, text_id)
     if not text:
         raise HTTPException(status_code=404, detail="Text not found")
@@ -386,73 +365,6 @@ def save_annotations(
                 detail="Client version is stale. Reload annotations before saving.",
             )
         text_hash = _sha256_text(text.content)
-
-        def _ensure_payload_dict(raw: BaseModel | dict | None) -> dict:
-            if isinstance(raw, BaseModel):
-                return raw.model_dump()
-            return dict(raw or {})
-
-        def _validate_payload(payload: dict):
-            op = payload.get("operation")
-            if op not in {"replace", "delete", "insert", "move", "noop"}:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid operation")
-            after_tokens = payload.get("after_tokens", [])
-            if not isinstance(after_tokens, list):
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="after_tokens must be a list")
-            for token in after_tokens:
-                if not isinstance(token, dict):
-                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="after_tokens must contain objects")
-                if "id" not in token or "text" not in token:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail="after_tokens entries must include id and text",
-                    )
-                origin = token.get("origin")
-                if origin not in {"base", "inserted"}:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail="after_tokens origin must be 'base' or 'inserted'",
-                    )
-            before_tokens = payload.get("before_tokens", [])
-            if not isinstance(before_tokens, list):
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="before_tokens must be a list")
-
-        def _normalize_token_fragment(token: object) -> tuple:
-            if isinstance(token, dict):
-                return (
-                    str(token.get("id")) if token.get("id") is not None else None,
-                    str(token.get("text") or ""),
-                    token.get("origin"),
-                    token.get("space_before", token.get("spaceBefore")),
-                    token.get("source_id", token.get("sourceId")),
-                )
-            return (
-                str(getattr(token, "id", None)) if getattr(token, "id", None) is not None else None,
-                str(getattr(token, "text", "") or ""),
-                getattr(token, "origin", None),
-                getattr(token, "space_before", getattr(token, "spaceBefore", None)),
-                getattr(token, "source_id", getattr(token, "sourceId", None)),
-            )
-
-        def _payload_signature(payload: dict, replacement: str | None) -> tuple:
-            op = payload.get("operation") or ("replace" if replacement else "noop")
-            before_tokens = payload.get("before_tokens")
-            if not isinstance(before_tokens, list):
-                before_tokens = []
-            after_tokens = payload.get("after_tokens")
-            if not isinstance(after_tokens, list):
-                after_tokens = []
-            move_from = payload.get("move_from", payload.get("moveFrom"))
-            move_to = payload.get("move_to", payload.get("moveTo"))
-            move_len = payload.get("move_len", payload.get("moveLen"))
-            return (
-                op,
-                tuple(str(tok) for tok in before_tokens),
-                tuple(_normalize_token_fragment(tok) for tok in after_tokens),
-                move_from,
-                move_to,
-                move_len,
-            )
 
         saved: list[Annotation] = []
         deleted_ids = set(request.deleted_ids or [])
@@ -492,8 +404,11 @@ def save_annotations(
         for item in request.annotations:
             if item.id and item.id in deleted_ids:
                 continue
-            payload = _ensure_payload_dict(item.payload)
-            _validate_payload(payload)
+            payload = ensure_payload_dict(item.payload)
+            try:
+                validate_annotation_payload(payload)
+            except AnnotationPayloadError as exc:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
             payload_hash = payload.get("text_sha256")
             if payload_hash and payload_hash != text_hash:
@@ -513,21 +428,7 @@ def save_annotations(
             elif not payload.get("text_tokens_sha256"):
                 payload["text_tokens_sha256"] = _sha256_tokens([str(t) for t in payload["text_tokens"]])
 
-            replacement = item.replacement
-            if replacement is None:
-                after_tokens = payload.get("after_tokens")
-                if isinstance(after_tokens, list):
-                    texts: list[str] = []
-                    for token in after_tokens:
-                        if isinstance(token, dict):
-                            texts.append(str(token.get("text", "") or ""))
-                        else:
-                            text_attr = getattr(token, "text", "")
-                            texts.append(str(text_attr or ""))
-                    candidate = " ".join(texts).strip()
-                    replacement = candidate or None
-            if payload.get("operation") == "noop":
-                replacement = replacement or None
+            replacement = derive_replacement(item.replacement, payload)
 
             def _annotation_matches(
                 candidate: Annotation,
@@ -539,8 +440,8 @@ def save_annotations(
                     return False
                 if candidate.error_type_id != expected_error_type:
                     return False
-                candidate_payload = _ensure_payload_dict(candidate.payload)
-                candidate_sig = _payload_signature(candidate_payload, candidate.replacement)
+                candidate_payload = ensure_payload_dict(candidate.payload)
+                candidate_sig = payload_signature(candidate_payload, candidate.replacement)
                 return candidate_sig == expected_sig
 
             annotation = None
@@ -558,7 +459,7 @@ def save_annotations(
                 annotation.version += 1
                 saved.append(annotation)
             else:
-                payload_sig = _payload_signature(payload, replacement)
+                payload_sig = payload_signature(payload, replacement)
                 other_annotation = other_by_id.get(item.id) if item.id else None
                 if not other_annotation:
                     candidates = other_by_span.get((item.start_token, item.end_token), [])
@@ -629,7 +530,7 @@ def save_annotations(
                 "user_id": str(getattr(current_user, "id", "")),
                 "client_version": request.client_version,
                 "count": len(request.annotations),
-                "summary": _summarize_annotations(request.annotations),
+                "summary": summarize_annotations(request.annotations),
             },
         )
         raise HTTPException(
@@ -647,7 +548,7 @@ def save_annotations(
                     "detail": exc.detail,
                     "client_version": request.client_version,
                     "count": len(request.annotations),
-                    "summary": _summarize_annotations(request.annotations),
+                    "summary": summarize_annotations(request.annotations),
                 },
             )
         raise
