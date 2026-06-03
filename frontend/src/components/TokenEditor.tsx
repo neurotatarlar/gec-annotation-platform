@@ -14,6 +14,7 @@ import { useCorrectionSelection } from "../hooks/useCorrectionSelection";
 import { useCorrectionTypes } from "../hooks/useCorrectionTypes";
 import { useEditorUIState } from "../hooks/useEditorUIState";
 import { useAnnotationsLoader } from "../hooks/useAnnotationsLoader";
+import { useRenderController } from "../hooks/useRenderController";
 import { useSaveController } from "../hooks/useSaveController";
 import { useErrorTypes } from "../hooks/useErrorTypes";
 import { useTokenDragDrop } from "../hooks/useTokenDragDrop";
@@ -255,13 +256,6 @@ export const TokenEditor: React.FC<{
     () => computeLineBreaksFromText(initialText),
     [initialText]
   );
-  const [renderEpoch, setRenderEpoch] = useState(0);
-  const [canonicalEpoch, setCanonicalEpoch] = useState(0);
-  const [canonicalCorrectedText, setCanonicalCorrectedText] = useState<string | null>(null);
-  const [isRenderPending, setIsRenderPending] = useState(false);
-  const [hasCanonicalRender, setHasCanonicalRender] = useState(false);
-  const renderRequestIdRef = useRef(0);
-  const renderAbortRef = useRef<AbortController | null>(null);
   const { lineBreakSet, lineBreakCountMap } = useMemo(() => {
     const set = new Set(lineBreaks);
     const map = new Map<number, number>();
@@ -336,11 +330,6 @@ export const TokenEditor: React.FC<{
     setServerAnnotationVersion(0);
     hydratedFromServerRef.current = false;
     resetUI();
-    setCanonicalCorrectedText(null);
-    setCanonicalEpoch(0);
-    setRenderEpoch(0);
-    setIsRenderPending(false);
-    setHasCanonicalRender(false);
     setHasLoadedAnnotations(false);
   }, [resetUI, textId]);
 
@@ -1577,85 +1566,22 @@ export const TokenEditor: React.FC<{
     [tokens, lineBreaks]
   );
 
-  useEffect(() => {
-    if (process.env.NODE_ENV === "test") return;
-    if (!tokens.length) return;
-    renderRequestIdRef.current += 1;
-    const requestId = renderRequestIdRef.current;
-    setRenderEpoch(requestId);
-    const hasCorrections = correctionCards.length > 0;
-    if (!hasCorrections) {
-      setCanonicalCorrectedText(localCorrectedText);
-      setCanonicalEpoch(requestId);
-      setIsRenderPending(false);
-      if (hasLoadedAnnotations) {
-        setHasCanonicalRender(true);
-      }
-      return;
-    }
-    setIsRenderPending(true);
-    let timer: number | null = window.setTimeout(async () => {
-      if (renderAbortRef.current) {
-        renderAbortRef.current.abort();
-      }
-      const controller = new AbortController();
-      renderAbortRef.current = controller;
-      try {
-        const annotations = await buildRenderPayload();
-        const response = await post(
-          `/api/texts/${textId}/render`,
-          { annotations },
-          { signal: controller.signal }
-        );
-        if (renderRequestIdRef.current !== requestId) return;
-        const correctedText = response?.data?.corrected_text ?? localCorrectedText;
-        setCanonicalCorrectedText(correctedText);
-        setCanonicalEpoch(requestId);
-        setHasCanonicalRender(true);
-      } catch (error: any) {
-        if (!controller.signal.aborted && renderRequestIdRef.current === requestId) {
-          setCanonicalCorrectedText(localCorrectedText);
-          setCanonicalEpoch(requestId);
-          setHasCanonicalRender(true);
-        }
-      } finally {
-        if (renderRequestIdRef.current === requestId) {
-          setIsRenderPending(false);
-          timer = null;
-        }
-      }
-    }, 450);
-    return () => {
-      if (timer) {
-        window.clearTimeout(timer);
-      }
-    };
-  }, [
-    buildRenderPayload,
-    correctionCards.length,
+  const {
+    correctedText,
+    isRenderPending,
+    hasCanonicalRender,
+  } = useRenderController({
+    textId,
+    resetKey: textId,
+    tokensLength: tokens.length,
+    correctionCount: correctionCards.length,
     hasLoadedAnnotations,
     localCorrectedText,
+    buildRenderPayload,
     post,
-    textId,
-    tokens.length,
-  ]);
-
-  const correctedText = useMemo(() => {
-    if (canonicalEpoch === renderEpoch && canonicalCorrectedText != null) {
-      return canonicalCorrectedText;
-    }
-    return localCorrectedText;
-  }, [canonicalCorrectedText, canonicalEpoch, localCorrectedText, renderEpoch]);
+  });
   const showCorrectedSpinner =
     viewTab === "corrected" && (!hasLoadedAnnotations || (isRenderPending && !hasCanonicalRender));
-
-  useEffect(() => {
-    return () => {
-      if (renderAbortRef.current) {
-        renderAbortRef.current.abort();
-      }
-    };
-  }, []);
 
   useEffect(() => {
     persistPrefs({
