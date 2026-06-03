@@ -10,6 +10,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { useAuthedApi } from "../api/client";
 import { useI18n } from "../context/I18nContext";
 import { ErrorType, SaveStatus } from "../types";
+import { useAnnotationDecisionActions } from "../hooks/useAnnotationDecisionActions";
 import { useCorrectionSelection } from "../hooks/useCorrectionSelection";
 import { useCorrectionTypes } from "../hooks/useCorrectionTypes";
 import { useEditorUIState } from "../hooks/useEditorUIState";
@@ -192,10 +193,6 @@ export const TokenEditor: React.FC<{
   const [hoveredMoveId, setHoveredMoveId] = useState<string | null>(null);
   const [moveLine, setMoveLine] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isSkipping, setIsSkipping] = useState(false);
-  const [isTrashing, setIsTrashing] = useState(false);
-  const [actionMessage, setActionMessage] = useState<string | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
   const [flashTypeId, setFlashTypeId] = useState<number | null>(null);
   const flashTimerRef = useRef<number | null>(null);
 
@@ -796,79 +793,33 @@ export const TokenEditor: React.FC<{
     onLoaded: () => setHasLoadedAnnotations(true),
   });
 
-  const requestNextText = useCallback(async () => {
-    try {
-      const response = await post("/api/texts/assignments/next", null, {
-        params: { category_id: categoryId },
-      });
-      const nextId = response.data?.text?.id;
-      if (nextId && nextId !== textId) {
-        if (response.data?.text) {
-          queryClient.setQueryData(["text", String(nextId)], response.data.text);
-        }
-        navigate(`/annotate/${nextId}`);
-        return true;
-      }
-      return false;
-    } catch (error: any) {
-      const status = error?.response?.status;
-      if (status === 404) {
-        try {
-          const categories = await get("/api/categories/");
-          const current = (categories.data as Array<{ id: number; remaining_texts: number }>).find(
-            (c) => c.id === categoryId,
-          );
-          if (current && current.remaining_texts > 0) {
-            setActionMessage(t("categories.noTextsAvailableNow") ?? "No texts available right now. Please try again.");
-            return false;
-          } else {
-            navigate("/");
-            return true;
-          }
-        } catch {
-          setActionMessage(t("categories.noTextsAvailableNow") ?? "No texts available right now. Please try again.");
-          return false;
-        }
-      } else {
-        setActionError(formatError(error));
-      }
-    }
-    return false;
-  }, [get, post, categoryId, navigate, t, textId, queryClient]);
-
-  const handleFlag = useCallback((flagType: "skip" | "trash") => {
-    setActionError(null);
-    setActionMessage(null);
-    openFlagConfirm(flagType);
-  }, [openFlagConfirm]);
-
-  const confirmFlag = useCallback(async () => {
-    if (!pendingAction) return;
-    const flagType = pendingAction;
-    setActionError(null);
-    setActionMessage(null);
-    updateFlagError(null);
-    flagType === "skip" ? setIsSkipping(true) : setIsTrashing(true);
-    let succeeded = false;
-    try {
-      const reason = flagReason.trim();
-      await post(`/api/texts/${textId}/${flagType}`, { reason: reason || undefined });
-      setLastDecision(flagType);
-      await requestNextText();
-      succeeded = true;
-    } catch (error: any) {
-      updateFlagError(formatError(error));
-    } finally {
-      flagType === "skip" ? setIsSkipping(false) : setIsTrashing(false);
-      if (succeeded) {
-        closeFlagConfirm();
-      }
-    }
-  }, [post, flagReason, pendingAction, requestNextText, textId, updateFlagError, closeFlagConfirm]);
-
-  const cancelFlag = useCallback(() => {
-    closeFlagConfirm();
-  }, [closeFlagConfirm]);
+  const {
+    requestNextText,
+    handleFlag,
+    confirmFlag,
+    cancelFlag,
+    isSkipping,
+    isTrashing,
+    actionMessage,
+    setActionMessage,
+    actionError,
+    setActionError,
+  } = useAnnotationDecisionActions({
+    textId,
+    categoryId,
+    get,
+    post,
+    navigate,
+    queryClient,
+    t,
+    formatError,
+    pendingAction,
+    flagReason,
+    openFlagConfirm,
+    closeFlagConfirm,
+    updateFlagError,
+    setLastDecision,
+  });
 
   // Enter edit mode from selection.
   const beginEdit = (range?: { start: number; end: number }, caretIndex?: number) => {
