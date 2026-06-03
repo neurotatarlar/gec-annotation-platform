@@ -112,6 +112,29 @@ From `backend/` (venv activated) or remotely with `--database-url`:
 - Export annotations:  
   `python -m app.cli export-annotations output/annotations.json`
 
+## Payout reports API
+- Endpoint: `GET /api/reports/review-totals` (admin/manager token required).
+- Primary metric: `submitted_total` (count of `annotation_tasks` with `status='submitted'`).
+- Delta metric: `submitted_since` (submitted tasks with `updated_at >= since`).
+- Filters:
+  - `project_name` **or** `category_id` (exactly one is required)
+  - `roles` (comma-separated, default `annotator`)
+  - `since` / `until` (ISO datetime, optional)
+  - `include_inactive` (default `false`)
+  - `only_with_activity` (default `true`)
+
+Example: totals and delta since your last payout snapshot:
+```bash
+curl -sS -H "Authorization: Bearer $TOKEN" \
+  "http://localhost:8000/api/reports/review-totals?project_name=%D0%A2%D0%B0%D0%BC%D0%B3%D0%B0%D0%BB%D0%B0%D1%83%20%D1%82%D3%A9%D0%BF%20%D0%BF%D1%80%D0%BE%D0%B5%D0%BA%D1%82%D1%8B&roles=annotator&since=2026-03-16T16:11:10Z"
+```
+
+Example: include admins in the same report:
+```bash
+curl -sS -H "Authorization: Bearer $TOKEN" \
+  "http://localhost:8000/api/reports/review-totals?project_name=%D0%A2%D0%B0%D0%BC%D0%B3%D0%B0%D0%BB%D0%B0%D1%83%20%D1%82%D3%A9%D0%BF%20%D0%BF%D1%80%D0%BE%D0%B5%D0%BA%D1%82%D1%8B&roles=annotator,admin"
+```
+
 ## Testing
 - Frontend: `cd frontend && npm test`
 - Backend: `cd backend && pytest` (after `pip install -r requirements-dev.txt`)

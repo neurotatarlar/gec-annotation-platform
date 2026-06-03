@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .database import engine
 from .models import Base
-from .routers import auth, categories, error_types, texts, dashboard
+from .routers import auth, categories, dashboard, error_types, reports, texts
 from .config import get_settings
 
 # Allow skipping table creation in test environments (e.g., sqlite without JSONB).
@@ -39,6 +39,7 @@ app.include_router(categories.router)
 app.include_router(error_types.router)
 app.include_router(texts.router)
 app.include_router(dashboard.router)
+app.include_router(reports.router)
 
 
 @app.get("/health")

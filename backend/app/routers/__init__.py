@@ -2,6 +2,6 @@
 Router aggregation for the FastAPI application.
 """
 
-from . import auth, categories, error_types, texts, dashboard
+from . import auth, categories, dashboard, error_types, reports, texts
 
-__all__ = ["auth", "categories", "error_types", "texts", "dashboard"]
+__all__ = ["auth", "categories", "dashboard", "error_types", "reports", "texts"]
