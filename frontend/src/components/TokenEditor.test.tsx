@@ -29,11 +29,13 @@ import {
   parseHotkey,
   guessCodeFromKey,
   compareServerAnnotationsForHydration,
+  getDraftCorrectionSubmitReadiness,
   getServerHydrationOperation,
   getServerMoveFrom,
   getServerMoveLen,
   getServerMoveTo,
   getServerSnapshotTokens,
+  hasUnassignedSubmitCorrections,
 } from "./TokenEditor";
 
 vi.mock("../context/I18nContext", () => ({
@@ -1271,6 +1273,31 @@ describe("save skipping helpers", () => {
   it("does not skip when payload changes", () => {
     const result = shouldSkipSave("old", [{ start_token: 0, end_token: 0, replacement: "x", error_type_id: 1, payload: {} as any } as any]);
     expect(result.skip).toBe(false);
+  });
+});
+
+describe("submit readiness helpers", () => {
+  it("blocks submit for unlabeled real corrections", () => {
+    const readiness = getDraftCorrectionSubmitReadiness([
+      { clientId: "c1", operation: "replace", errorTypeId: null },
+      { clientId: "c2", operation: "delete", errorTypeId: 7 },
+    ] as any);
+
+    expect(readiness.canSubmit).toBe(false);
+    expect(readiness.missingTypeIds).toEqual(["c1"]);
+  });
+
+  it("allows noop corrections without labels", () => {
+    const readiness = getDraftCorrectionSubmitReadiness([
+      { clientId: "noop", operation: "noop", errorTypeId: null },
+    ] as any);
+
+    expect(readiness).toEqual({ canSubmit: true, missingTypeIds: [] });
+  });
+
+  it("checks synchronous UI submit state by correction id", () => {
+    expect(hasUnassignedSubmitCorrections(["c1", "c2"], { c1: 3, c2: null })).toBe(true);
+    expect(hasUnassignedSubmitCorrections(["c1"], { c1: 3 })).toBe(false);
   });
 });
 

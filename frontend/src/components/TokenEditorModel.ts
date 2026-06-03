@@ -2077,6 +2077,35 @@ export const draftCorrectionToAnnotation = (correction: DraftCorrection): Annota
   return draft;
 };
 
+export type SubmitReadiness = {
+  canSubmit: boolean;
+  missingTypeIds: string[];
+};
+
+export const getDraftCorrectionSubmitReadiness = (
+  corrections: Pick<DraftCorrection, "clientId" | "operation" | "errorTypeId">[]
+): SubmitReadiness => {
+  const missingTypeIds = corrections
+    .filter((correction) => correction.operation !== "noop" && correction.errorTypeId == null)
+    .map((correction) => correction.clientId);
+  return {
+    canSubmit: missingTypeIds.length === 0,
+    missingTypeIds,
+  };
+};
+
+export const hasUnassignedSubmitCorrections = (
+  correctionIds: string[],
+  correctionTypeMap: Record<string, number | null>
+) =>
+  !getDraftCorrectionSubmitReadiness(
+    correctionIds.map((clientId) => ({
+      clientId,
+      operation: "replace",
+      errorTypeId: correctionTypeMap[clientId] ?? null,
+    }))
+  ).canSubmit;
+
 export const buildDraftCorrectionsStandalone = async ({
   initialText,
   tokens,

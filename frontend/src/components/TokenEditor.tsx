@@ -41,12 +41,15 @@ import {
   computeLineBreaksFromText,
   hydrateFromServerAnnotations as hydrateFromServerAnnotationsModel,
   buildAnnotationsPayloadStandalone,
+  buildDraftCorrectionsStandalone,
   buildEditableTextFromTokens,
   buildHotkeyMap,
   buildTextFromTokensWithBreaks,
   deriveCorrectionByIndex,
   deriveCorrectionCards,
   deriveMoveMarkers,
+  getDraftCorrectionSubmitReadiness,
+  hasUnassignedSubmitCorrections,
   isInsertPlaceholder,
   normalizeHotkeySpec,
   rangeToArray,
@@ -1665,8 +1668,18 @@ export const TokenEditor: React.FC<{
   }, [tokenGap, tokenFontSize, spaceMarker, lastDecision, textId, viewTab, isTextPanelOpen]);
 
   const handleSubmit = async () => {
-    const unassigned = correctionCards.filter((card) => !correctionTypeMap[card.id]);
-    if (unassigned.length) {
+    const draftCorrections = await buildDraftCorrectionsStandalone({
+      initialText,
+      tokens,
+      originalTokens,
+      correctionCards,
+      correctionTypeMap,
+      moveMarkers,
+      annotationIdMap: annotationIdMap.current,
+      allowUnassigned: true,
+    });
+    const submitReadiness = getDraftCorrectionSubmitReadiness(draftCorrections);
+    if (!submitReadiness.canSubmit) {
       setActionError("Please assign an error type to all corrections.");
       return;
     }
@@ -1770,7 +1783,7 @@ export const TokenEditor: React.FC<{
   }, [hotkeyMap, eventToHotkeyStrings, handleTypePick]);
 
   const hasUnassignedCorrections = useMemo(
-    () => correctionCards.some((card) => !correctionTypeMap[card.id]),
+    () => hasUnassignedSubmitCorrections(correctionCards.map((card) => card.id), correctionTypeMap),
     [correctionCards, correctionTypeMap]
   );
 
