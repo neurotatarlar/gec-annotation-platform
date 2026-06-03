@@ -2023,7 +2023,32 @@ type BuildPayloadInput = {
   includeClientCorrectionId?: boolean;
 };
 
-export const buildAnnotationsPayloadStandalone = async ({
+export type DraftCorrection = {
+  clientId: string;
+  serverId?: number;
+  operation: OperationType;
+  startToken: number;
+  endToken: number;
+  replacement: string | null;
+  errorTypeId: number | null;
+  payload: AnnotationDetailPayload;
+};
+
+export const draftCorrectionToAnnotation = (correction: DraftCorrection): AnnotationDraft => {
+  const draft: AnnotationDraft = {
+    start_token: correction.startToken,
+    end_token: correction.endToken,
+    replacement: correction.replacement,
+    error_type_id: correction.errorTypeId,
+    payload: correction.payload,
+  };
+  if (correction.serverId !== undefined) {
+    draft.id = correction.serverId;
+  }
+  return draft;
+};
+
+export const buildDraftCorrectionsStandalone = async ({
   initialText,
   tokens,
   originalTokens,
@@ -2031,12 +2056,10 @@ export const buildAnnotationsPayloadStandalone = async ({
   correctionTypeMap,
   moveMarkers,
   annotationIdMap,
-  annotationDeleteMap,
-  includeDeletedIds = false,
   allowUnassigned = false,
   defaultErrorTypeId = null,
   includeClientCorrectionId = false,
-}: BuildPayloadInput): Promise<AnnotationDraft[]> => {
+}: BuildPayloadInput): Promise<DraftCorrection[]> => {
   const textHash = await computeSha256(initialText);
   const textTokensSnapshot = originalTokens.filter((t) => t.kind !== "empty").map((t) => t.text);
   const textTokensHash = await computeTokensSha256(textTokensSnapshot);
@@ -2049,7 +2072,7 @@ export const buildAnnotationsPayloadStandalone = async ({
   });
 
   const seenKeys = new Set<string>();
-  const payloads: AnnotationDraft[] = [];
+  const draftCorrections: DraftCorrection[] = [];
   const normalizeBeforeIds = (items: Token[]) => {
     const seen = new Set<string>();
     const ids: string[] = [];
@@ -2173,19 +2196,21 @@ export const buildAnnotationsPayloadStandalone = async ({
       }
       const spanStart = moveTo;
       const spanEnd = moveTo + moveLength - 1;
-      const draft: AnnotationDraft = {
-        start_token: spanStart,
-        end_token: spanEnd,
+      const draft: DraftCorrection = {
+        clientId: card.id,
+        operation: "move",
+        startToken: spanStart,
+        endToken: spanEnd,
         replacement,
-        error_type_id: typeId,
+        errorTypeId: typeId,
         payload,
       };
       const spanKey = buildSpanKey(spanStart, spanEnd);
       const existingId = annotationIdMap?.get(spanKey);
       if (existingId !== undefined) {
-        draft.id = existingId;
+        draft.serverId = existingId;
       }
-      payloads.push(draft);
+      draftCorrections.push(draft);
       return;
     }
 
@@ -2278,34 +2303,44 @@ export const buildAnnotationsPayloadStandalone = async ({
     if (includeClientCorrectionId) {
       payload.client_correction_id = card.id;
     }
-    const draft: AnnotationDraft = {
-      start_token: spanStart,
-      end_token: spanEnd,
+    const draft: DraftCorrection = {
+      clientId: card.id,
+      operation,
+      startToken: spanStart,
+      endToken: spanEnd,
       replacement,
-      error_type_id: typeId,
+      errorTypeId: typeId,
       payload,
     };
     const spanKey = buildSpanKey(spanStart, spanEnd);
     const existingId = annotationIdMap?.get(spanKey);
     if (existingId !== undefined) {
-      draft.id = existingId;
+      draft.serverId = existingId;
     }
-    payloads.push(draft);
+    draftCorrections.push(draft);
   });
 
-  if (includeDeletedIds && (annotationDeleteMap || annotationIdMap)) {
+  return draftCorrections;
+};
+
+export const buildAnnotationsPayloadStandalone = async (
+  input: BuildPayloadInput
+): Promise<AnnotationDraft[]> => {
+  const draftCorrections = await buildDraftCorrectionsStandalone(input);
+  const payloads = draftCorrections.map(draftCorrectionToAnnotation);
+
+  if (input.includeDeletedIds && (input.annotationDeleteMap || input.annotationIdMap)) {
     const spanKeys = new Set(payloads.map((p) => buildSpanKey(p.start_token, p.end_token)));
-    const sourceMap = annotationDeleteMap ?? new Map<string, number[]>();
     const deletedIds: number[] = [];
-    if (annotationDeleteMap) {
-      annotationDeleteMap.forEach((ids, span) => {
+    if (input.annotationDeleteMap) {
+      input.annotationDeleteMap.forEach((ids, span) => {
         if (!spanKeys.has(span)) {
           deletedIds.push(...ids);
         }
       });
     }
-    if (!annotationDeleteMap && annotationIdMap) {
-      annotationIdMap.forEach((id, span) => {
+    if (!input.annotationDeleteMap && input.annotationIdMap) {
+      input.annotationIdMap.forEach((id, span) => {
         if (!spanKeys.has(span)) {
           deletedIds.push(id);
         }

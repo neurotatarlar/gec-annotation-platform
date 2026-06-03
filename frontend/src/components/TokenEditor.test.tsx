@@ -13,6 +13,8 @@ import {
   computeLineBreaksFromText,
   computeTokensSha256,
   buildAnnotationsPayloadStandalone,
+  buildDraftCorrectionsStandalone,
+  draftCorrectionToAnnotation,
   shouldSkipSave,
   annotationsSignature,
   buildAnnotationsPayloadStandalone as buildStandalone,
@@ -1027,6 +1029,46 @@ describe("buildAnnotationsPayloadStandalone", () => {
 
     expect(payloads).toHaveLength(1);
     expect(payloads[0].error_type_id).toBeNull();
+  });
+
+  it("normalizes corrections before adapting them to API annotations", async () => {
+    const base = initState("hello world");
+    const edited = editTokenByText(base, "hello", "hi");
+    const moveMarkers = deriveMoveMarkers(edited.present.tokens);
+    const correctionCards = deriveCorrectionCards(edited.present.tokens, moveMarkers);
+    const annotationIdMap = new Map<string, number>([["0-0", 42]]);
+
+    const corrections = await buildDraftCorrectionsStandalone({
+      initialText: "hello world",
+      tokens: edited.present.tokens,
+      originalTokens: edited.present.originalTokens,
+      correctionCards,
+      correctionTypeMap: {},
+      moveMarkers,
+      annotationIdMap,
+      allowUnassigned: true,
+    });
+
+    expect(corrections).toHaveLength(1);
+    expect(corrections[0]).toMatchObject({
+      clientId: correctionCards[0].id,
+      serverId: 42,
+      operation: "replace",
+      startToken: 0,
+      endToken: 0,
+      replacement: "hi",
+      errorTypeId: null,
+    });
+
+    const annotation = draftCorrectionToAnnotation(corrections[0]);
+    expect(annotation).toMatchObject({
+      id: 42,
+      start_token: 0,
+      end_token: 0,
+      replacement: "hi",
+      error_type_id: null,
+    });
+    expect(annotation.payload.operation).toBe("replace");
   });
 
   it("adds deleted_ids when includeDeletedIds is true", async () => {
