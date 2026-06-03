@@ -44,15 +44,9 @@ from ..schemas.common import (
     TextRead,
 )
 from ..services.auth import get_current_user, get_db
-from ..services.annotation_payloads import (
-    AnnotationPayloadError,
-    derive_replacement,
-    ensure_payload_dict,
-    payload_signature,
-    summarize_annotations,
-    validate_annotation_payload,
-)
+from ..services.annotation_payloads import summarize_annotations
 from ..services.annotation_rendering import build_export_record, render_corrected_text
+from ..services.annotation_saves import AnnotationSaveError, save_annotation_drafts
 
 router = APIRouter(prefix="/api/texts", tags=["texts"])
 LOCK_DURATION = timedelta(minutes=30)
@@ -351,175 +345,7 @@ def save_annotations(
         raise HTTPException(status_code=404, detail="Text not found")
 
     try:
-        existing = (
-            db.query(Annotation)
-            .filter(Annotation.text_id == text_id, Annotation.author_id == current_user.id)
-            .all()
-        )
-        server_version = max((ann.version for ann in existing), default=0)
-        client_version = request.client_version or 0
-        if client_version and client_version < server_version:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Client version is stale. Reload annotations before saving.",
-            )
-        text_hash = _sha256_text(text.content)
-
-        saved: list[Annotation] = []
-        deleted_ids = set(request.deleted_ids or [])
-        # Process deletions first
-        if deleted_ids:
-            (
-                db.query(Annotation)
-                .filter(
-                    Annotation.text_id == text_id,
-                    Annotation.id.in_(deleted_ids),
-                )
-                .delete(synchronize_session=False)
-            )
-            existing = [ann for ann in existing if ann.id not in deleted_ids]
-
-        # Refresh mappings after deletions so we don't upsert against removed rows.
-        if deleted_ids:
-            existing = (
-                db.query(Annotation)
-                .filter(Annotation.text_id == text_id, Annotation.author_id == current_user.id)
-                .all()
-            )
-        existing_by_id = {annotation.id: annotation for annotation in existing}
-        existing_by_span = {(annotation.start_token, annotation.end_token): annotation for annotation in existing}
-        other_existing = (
-            db.query(Annotation)
-            .filter(Annotation.text_id == text_id, Annotation.author_id != current_user.id)
-            .all()
-        )
-        other_by_id = {annotation.id: annotation for annotation in other_existing}
-        other_by_span: dict[tuple[int, int], list[Annotation]] = {}
-        for annotation in other_existing:
-            other_by_span.setdefault((annotation.start_token, annotation.end_token), []).append(annotation)
-        for group in other_by_span.values():
-            group.sort(key=lambda ann: ann.id)
-
-        for item in request.annotations:
-            if item.id and item.id in deleted_ids:
-                continue
-            payload = ensure_payload_dict(item.payload)
-            try:
-                validate_annotation_payload(payload)
-            except AnnotationPayloadError as exc:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-
-            payload_hash = payload.get("text_sha256")
-            if payload_hash and payload_hash != text_hash:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail="Client text hash does not match server text. Reload the text before saving.",
-                )
-            payload["text_sha256"] = payload_hash or text_hash
-            if (
-                "text_tokens" not in payload
-                or not isinstance(payload.get("text_tokens"), list)
-                or len(payload.get("text_tokens") or []) == 0
-            ):
-                tokens_snapshot = text.content.split()
-                payload["text_tokens"] = tokens_snapshot
-                payload["text_tokens_sha256"] = _sha256_tokens(tokens_snapshot)
-            elif not payload.get("text_tokens_sha256"):
-                payload["text_tokens_sha256"] = _sha256_tokens([str(t) for t in payload["text_tokens"]])
-
-            replacement = derive_replacement(item.replacement, payload)
-
-            def _annotation_matches(
-                candidate: Annotation,
-                expected_sig: tuple,
-                expected_replacement: str | None,
-                expected_error_type: int | None,
-            ) -> bool:
-                if (candidate.replacement or None) != (expected_replacement or None):
-                    return False
-                if candidate.error_type_id != expected_error_type:
-                    return False
-                candidate_payload = ensure_payload_dict(candidate.payload)
-                candidate_sig = payload_signature(candidate_payload, candidate.replacement)
-                return candidate_sig == expected_sig
-
-            annotation = None
-            if item.id:
-                annotation = existing_by_id.get(item.id)
-            if not annotation:
-                annotation = existing_by_span.get((item.start_token, item.end_token))
-
-            if annotation:
-                annotation.start_token = item.start_token
-                annotation.end_token = item.end_token
-                annotation.replacement = replacement
-                annotation.payload = payload
-                annotation.error_type_id = item.error_type_id
-                annotation.version += 1
-                saved.append(annotation)
-            else:
-                payload_sig = payload_signature(payload, replacement)
-                other_annotation = other_by_id.get(item.id) if item.id else None
-                if not other_annotation:
-                    candidates = other_by_span.get((item.start_token, item.end_token), [])
-                    if candidates:
-                        match = next(
-                            (
-                                candidate
-                                for candidate in candidates
-                                if _annotation_matches(candidate, payload_sig, replacement, item.error_type_id)
-                            ),
-                            None,
-                        )
-                        if match:
-                            continue
-                        other_annotation = candidates[0]
-                if other_annotation:
-                    if _annotation_matches(other_annotation, payload_sig, replacement, item.error_type_id):
-                        continue
-                    other_annotation.author_id = current_user.id
-                    other_annotation.start_token = item.start_token
-                    other_annotation.end_token = item.end_token
-                    other_annotation.replacement = replacement
-                    other_annotation.payload = payload
-                    other_annotation.error_type_id = item.error_type_id
-                    other_annotation.version += 1
-                    annotation = other_annotation
-                    existing_by_id[annotation.id] = annotation
-                    existing_by_span[(annotation.start_token, annotation.end_token)] = annotation
-                else:
-                    annotation = Annotation(
-                        text_id=text_id,
-                        author_id=current_user.id,
-                        start_token=item.start_token,
-                        end_token=item.end_token,
-                        replacement=replacement,
-                        payload=payload,
-                        error_type_id=item.error_type_id,
-                    )
-                    db.add(annotation)
-                saved.append(annotation)
-
-        db.flush()
-        # Persist snapshots for rollback/history
-        for ann in saved:
-            snapshot = {
-                "start_token": ann.start_token,
-                "end_token": ann.end_token,
-                "replacement": ann.replacement,
-                "payload": ann.payload,
-                "error_type_id": ann.error_type_id,
-            }
-            db.add(
-                AnnotationVersion(
-                    annotation_id=ann.id,
-                    version=ann.version,
-                    snapshot=snapshot,
-                )
-            )
-
-        db.commit()
-        return saved
+        return save_annotation_drafts(db, text, current_user.id, request)
     except StaleDataError:
         db.rollback()
         logger.warning(
@@ -536,6 +362,22 @@ def save_annotations(
             status_code=status.HTTP_409_CONFLICT,
             detail="Annotations changed on the server. Reload and try again.",
         )
+    except AnnotationSaveError as exc:
+        db.rollback()
+        if exc.status_code in {400, 409, 422}:
+            logger.warning(
+                "Annotation save failed",
+                extra={
+                    "text_id": text_id,
+                    "user_id": str(getattr(current_user, "id", "")),
+                    "status": exc.status_code,
+                    "detail": exc.detail,
+                    "client_version": request.client_version,
+                    "count": len(request.annotations),
+                    "summary": summarize_annotations(request.annotations),
+                },
+            )
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     except HTTPException as exc:
         if exc.status_code in {400, 409, 422}:
             logger.warning(
