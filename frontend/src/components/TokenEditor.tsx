@@ -11,6 +11,7 @@ import { useAuthedApi } from "../api/client";
 import { useI18n } from "../context/I18nContext";
 import { ErrorType, SaveStatus } from "../types";
 import { useAnnotationDecisionActions } from "../hooks/useAnnotationDecisionActions";
+import { useAnnotationSubmitAction } from "../hooks/useAnnotationSubmitAction";
 import { useCorrectionSelection } from "../hooks/useCorrectionSelection";
 import { useCorrectionTypes } from "../hooks/useCorrectionTypes";
 import { useEditorUIState } from "../hooks/useEditorUIState";
@@ -50,7 +51,6 @@ import {
   deriveCorrectionByIndex,
   deriveCorrectionCards,
   deriveMoveMarkers,
-  getDraftCorrectionSubmitReadiness,
   hasUnassignedSubmitCorrections,
   isInsertPlaceholder,
   normalizeHotkeySpec,
@@ -192,7 +192,6 @@ export const TokenEditor: React.FC<{
   const tokenRowRef = useRef<HTMLDivElement | null>(null);
   const [hoveredMoveId, setHoveredMoveId] = useState<string | null>(null);
   const [moveLine, setMoveLine] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
-  const [isSubmitting, setIsSubmitting] = useState(false);
   const [flashTypeId, setFlashTypeId] = useState<number | null>(null);
   const flashTimerRef = useRef<number | null>(null);
 
@@ -1512,6 +1511,33 @@ export const TokenEditor: React.FC<{
     statusTrigger: lastDecision,
   });
 
+  const buildSubmitCorrections = useCallback(
+    () =>
+      buildDraftCorrectionsStandalone({
+        initialText,
+        tokens,
+        originalTokens,
+        correctionCards,
+        correctionTypeMap,
+        moveMarkers,
+        annotationIdMap: annotationIdMap.current,
+        allowUnassigned: true,
+      }),
+    [annotationIdMap, correctionCards, correctionTypeMap, initialText, moveMarkers, originalTokens, tokens]
+  );
+
+  const { handleSubmit, isSubmitting } = useAnnotationSubmitAction({
+    textId,
+    buildSubmitCorrections,
+    saveAnnotations,
+    post,
+    requestNextText,
+    setLastDecision,
+    setActionError,
+    setActionMessage,
+    formatError,
+  });
+
   const localCorrectedText = useMemo(
     () => buildTextFromTokensWithBreaks(tokens, lineBreaks),
     [tokens, lineBreaks]
@@ -1546,36 +1572,6 @@ export const TokenEditor: React.FC<{
     });
   }, [tokenGap, tokenFontSize, spaceMarker, lastDecision, textId, viewTab, isTextPanelOpen]);
 
-  const handleSubmit = async () => {
-    const draftCorrections = await buildDraftCorrectionsStandalone({
-      initialText,
-      tokens,
-      originalTokens,
-      correctionCards,
-      correctionTypeMap,
-      moveMarkers,
-      annotationIdMap: annotationIdMap.current,
-      allowUnassigned: true,
-    });
-    const submitReadiness = getDraftCorrectionSubmitReadiness(draftCorrections);
-    if (!submitReadiness.canSubmit) {
-      setActionError("Please assign an error type to all corrections.");
-      return;
-    }
-    setActionError(null);
-    setActionMessage(null);
-    setIsSubmitting(true);
-    try {
-      await saveAnnotations();
-      await post(`/api/texts/${textId}/submit`);
-      setLastDecision("submit");
-      await requestNextText();
-    } catch (error: any) {
-      setActionError(formatError(error));
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
   const hasCorrections = correctionCards.length > 0;
 
   const hasSelectionTokens = hasSelection;
