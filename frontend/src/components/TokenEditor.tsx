@@ -12,6 +12,7 @@ import { useI18n } from "../context/I18nContext";
 import { ErrorType, SaveStatus } from "../types";
 import { useAnnotationDecisionActions } from "../hooks/useAnnotationDecisionActions";
 import { useAnnotationInitialization } from "../hooks/useAnnotationInitialization";
+import { useAnnotationPayloadBuilders } from "../hooks/useAnnotationPayloadBuilders";
 import { useAnnotationSubmitAction } from "../hooks/useAnnotationSubmitAction";
 import { useCorrectionAutopick } from "../hooks/useCorrectionAutopick";
 import { useCorrectionSelection } from "../hooks/useCorrectionSelection";
@@ -50,8 +51,6 @@ import {
   buildLineBreakMetadata,
   computeLineBreaksFromText,
   deriveLineStartIndices,
-  buildAnnotationsPayloadStandalone,
-  buildDraftCorrectionsStandalone,
   buildTextFromTokensWithBreaks,
   deriveCorrectionByIndex,
   deriveCorrectionCards,
@@ -686,38 +685,20 @@ export const TokenEditor: React.FC<{
     </button>
   );
 
-  const buildAnnotationsPayload = useCallback(
-    () =>
-      buildAnnotationsPayloadStandalone({
-        initialText,
-        tokens,
-        originalTokens,
-        correctionCards,
-        correctionTypeMap,
-        moveMarkers,
-        annotationIdMap: annotationIdMap.current,
-        annotationDeleteMap: annotationDeleteMap.current,
-        includeDeletedIds: true,
-        allowUnassigned: true,
-      }),
-    [annotationIdMap, correctionCards, correctionTypeMap, initialText, moveMarkers, originalTokens, tokens]
-  );
-
-  const buildRenderPayload = useCallback(
-    () =>
-      buildAnnotationsPayloadStandalone({
-        initialText,
-        tokens,
-        originalTokens,
-        correctionCards,
-        correctionTypeMap,
-        moveMarkers,
-        annotationIdMap: annotationIdMap.current,
-        allowUnassigned: true,
-        includeClientCorrectionId: true,
-      }),
-    [annotationIdMap, correctionCards, correctionTypeMap, initialText, moveMarkers, originalTokens, tokens]
-  );
+  const {
+    buildAnnotationsPayload,
+    buildRenderPayload,
+    buildSubmitCorrections,
+  } = useAnnotationPayloadBuilders({
+    initialText,
+    tokens,
+    originalTokens,
+    correctionCards,
+    correctionTypeMap,
+    moveMarkers,
+    annotationIdMap,
+    annotationDeleteMap,
+  });
 
   const { saveAnnotations } = useSaveController({
     tokens: history.present.tokens,
@@ -733,21 +714,6 @@ export const TokenEditor: React.FC<{
     onSaveStatusChange,
     statusTrigger: lastDecision,
   });
-
-  const buildSubmitCorrections = useCallback(
-    () =>
-      buildDraftCorrectionsStandalone({
-        initialText,
-        tokens,
-        originalTokens,
-        correctionCards,
-        correctionTypeMap,
-        moveMarkers,
-        annotationIdMap: annotationIdMap.current,
-        allowUnassigned: true,
-      }),
-    [annotationIdMap, correctionCards, correctionTypeMap, initialText, moveMarkers, originalTokens, tokens]
-  );
 
   const { handleSubmit, isSubmitting } = useAnnotationSubmitAction({
     textId,
