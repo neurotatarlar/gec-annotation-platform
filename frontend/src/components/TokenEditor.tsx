@@ -23,6 +23,7 @@ import { useSaveController } from "../hooks/useSaveController";
 import { useErrorTypes } from "../hooks/useErrorTypes";
 import { useErrorTypeHotkeys } from "../hooks/useErrorTypeHotkeys";
 import { useTokenEditorKeyboardShortcuts } from "../hooks/useTokenEditorKeyboardShortcuts";
+import { useTokenInlineEdit } from "../hooks/useTokenInlineEdit";
 import {
   DEFAULT_TOKEN_FONT_SIZE,
   DEFAULT_TOKEN_GAP,
@@ -50,13 +51,11 @@ import {
   deriveLineStartIndices,
   buildAnnotationsPayloadStandalone,
   buildDraftCorrectionsStandalone,
-  buildEditableTextFromTokens,
   buildTextFromTokensWithBreaks,
   deriveCorrectionByIndex,
   deriveCorrectionCards,
   deriveMoveMarkers,
   hasUnassignedSubmitCorrections,
-  isInsertPlaceholder,
   rangeToArray,
   tokenEditorReducer,
 } from "./TokenEditorModel";
@@ -461,56 +460,22 @@ export const TokenEditor: React.FC<{
     setLastDecision,
   });
 
-  // Enter edit mode from selection.
-  const beginEdit = (range?: { start: number; end: number }, caretIndex?: number) => {
-    const activeRange = range ?? (hasSelection ? { start: Math.min(selection.start!, selection.end!), end: Math.max(selection.start!, selection.end!) } : null);
-    if (!activeRange) return;
-    const slice = tokens.slice(activeRange.start, activeRange.end + 1);
-    // Do not allow editing if any ⬚ token is in the selection.
-    if (slice.some((tok) => tok.kind === "empty" || tok.kind === "special")) {
-      return;
-    }
-    const editValue = buildEditableTextFromTokens(slice);
-    suppressBlurCommitRef.current = false;
-    startEdit(activeRange, editValue);
-    const desiredCaret = typeof caretIndex === "number" ? caretIndex : editValue.length;
-    setTimeout(() => {
-      if (editInputRef.current) {
-        const target = editInputRef.current;
-        const pos = Math.max(0, Math.min(desiredCaret, target.value.length));
-        target.focus();
-        if (typeof target.setSelectionRange === "function") {
-          target.setSelectionRange(pos, pos);
-        }
-      }
-    }, 10);
-  };
-
-  // Commit edit.
-  const commitEdit = () => {
-    if (!editingRange) return;
-    const { start, end } = editingRange;
-    setPendingSelectIndex(start!);
-    dispatch({ type: "EDIT_SELECTED_RANGE_AS_TEXT", range: [start!, end!], newText: editText });
-    suppressBlurCommitRef.current = false;
-    endEdit();
-    setSelection({ start, end });
-  };
-
-  // Cancel edit.
-  const cancelEdit = () => {
-    suppressBlurCommitRef.current = true;
-    if (editingRange) {
-      const s = Math.min(editingRange.start!, editingRange.end!);
-      const e = Math.max(editingRange.start!, editingRange.end!);
-      const slice = tokens.slice(s, e + 1);
-      if (isInsertPlaceholder(slice)) {
-        // Cancel the insertion entirely without leaving a redo entry.
-        dispatch({ type: "CANCEL_INSERT_PLACEHOLDER", range: [s, e] });
-      }
-    }
-    endEdit();
-  };
+  const { beginEdit, commitEdit, cancelEdit } = useTokenInlineEdit({
+    tokens,
+    hasSelection,
+    selection,
+    editingRange,
+    editText,
+    editInputRef,
+    suppressBlurCommitRef,
+    startEdit,
+    endEdit,
+    setSelection,
+    setPendingSelectIndex,
+    editSelectedRangeAsText: (range, newText) =>
+      dispatch({ type: "EDIT_SELECTED_RANGE_AS_TEXT", range, newText }),
+    cancelInsertPlaceholder: (range) => dispatch({ type: "CANCEL_INSERT_PLACEHOLDER", range }),
+  });
 
   const expandRangeToGroups = useCallback(
     (start: number, end: number) => {
