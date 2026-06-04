@@ -33,6 +33,7 @@ import {
 import { TokenGap } from "./TokenEditorGap";
 import { TokenEditorGroup } from "./TokenEditorGroup";
 import { buildTokenGroups } from "./TokenEditorGrouping";
+import { buildMoveLine, MoveLine } from "./TokenEditorMoveLine";
 import {
   HotkeySpec,
   MoveMarker,
@@ -187,7 +188,7 @@ export const TokenEditor: React.FC<{
   );
   const tokenRowRef = useRef<HTMLDivElement | null>(null);
   const [hoveredMoveId, setHoveredMoveId] = useState<string | null>(null);
-  const [moveLine, setMoveLine] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
+  const [moveLine, setMoveLine] = useState<MoveLine | null>(null);
   const [flashTypeId, setFlashTypeId] = useState<number | null>(null);
   const flashTimerRef = useRef<number | null>(null);
 
@@ -385,48 +386,7 @@ export const TokenEditor: React.FC<{
     const containerRect = tokenRowRef.current.getBoundingClientRect();
     const srcRect = sourceEl.getBoundingClientRect();
     const dstRect = destEl.getBoundingClientRect();
-    const srcCenter = { x: srcRect.left + srcRect.width / 2, y: srcRect.top + srcRect.height / 2 };
-    const dstCenter = { x: dstRect.left + dstRect.width / 2, y: dstRect.top + dstRect.height / 2 };
-    const findEdgePoint = (from: { x: number; y: number }, to: { x: number; y: number }, rect: DOMRect) => {
-      const dx = to.x - from.x;
-      const dy = to.y - from.y;
-      if (dx === 0 && dy === 0) return from;
-      const candidates: Array<{ t: number; x: number; y: number }> = [];
-      if (dx !== 0) {
-        const tLeft = (rect.left - from.x) / dx;
-        const yLeft = from.y + tLeft * dy;
-        if (tLeft > 0 && tLeft < 1 && yLeft >= rect.top && yLeft <= rect.bottom) {
-          candidates.push({ t: tLeft, x: rect.left, y: yLeft });
-        }
-        const tRight = (rect.right - from.x) / dx;
-        const yRight = from.y + tRight * dy;
-        if (tRight > 0 && tRight < 1 && yRight >= rect.top && yRight <= rect.bottom) {
-          candidates.push({ t: tRight, x: rect.right, y: yRight });
-        }
-      }
-      if (dy !== 0) {
-        const tTop = (rect.top - from.y) / dy;
-        const xTop = from.x + tTop * dx;
-        if (tTop > 0 && tTop < 1 && xTop >= rect.left && xTop <= rect.right) {
-          candidates.push({ t: tTop, x: xTop, y: rect.top });
-        }
-        const tBottom = (rect.bottom - from.y) / dy;
-        const xBottom = from.x + tBottom * dx;
-        if (tBottom > 0 && tBottom < 1 && xBottom >= rect.left && xBottom <= rect.right) {
-          candidates.push({ t: tBottom, x: xBottom, y: rect.bottom });
-        }
-      }
-      if (!candidates.length) return from;
-      const closest = candidates.reduce((a, b) => (a.t < b.t ? a : b));
-      return { x: closest.x, y: closest.y };
-    };
-    const srcEdge = findEdgePoint(srcCenter, dstCenter, srcRect);
-    const dstEdge = findEdgePoint(dstCenter, srcCenter, dstRect);
-    const x1 = srcEdge.x - containerRect.left;
-    const y1 = srcEdge.y - containerRect.top;
-    const x2 = dstEdge.x - containerRect.left;
-    const y2 = dstEdge.y - containerRect.top;
-    setMoveLine({ x1, y1, x2, y2 });
+    setMoveLine(buildMoveLine(containerRect, srcRect, dstRect));
   }, [hoveredMoveId, moveMarkerById]);
   const correctionCards = useMemo(
     () => deriveCorrectionCards(tokens, moveMarkers),
@@ -1787,7 +1747,7 @@ type TokenRowProps = {
   tokens: Token[];
   renderTokenGroups: (tokens: Token[]) => React.ReactNode[];
   rowRef: React.RefObject<HTMLDivElement>;
-  moveLine: { x1: number; y1: number; x2: number; y2: number } | null;
+  moveLine: MoveLine | null;
   showSpinner?: boolean;
   onDragOver?: (event: React.DragEvent<HTMLDivElement>) => void;
   onDrop?: (event: React.DragEvent<HTMLDivElement>) => void;
