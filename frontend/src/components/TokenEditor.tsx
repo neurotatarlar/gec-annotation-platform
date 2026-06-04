@@ -1223,6 +1223,60 @@ export const TokenEditor: React.FC<{
 
   const hasSelectionTokens = hasSelection;
 
+  const handleDeleteSelection = useCallback(() => {
+    if (!hasSelectionTokens) return;
+    const ctx = getDeleteRange();
+    if (!ctx) return;
+    dispatch({ type: "DELETE_SELECTED_TOKENS", range: ctx.range, anchorIndex: ctx.anchorIndex });
+    setSelection({ start: null, end: null });
+  }, [dispatch, getDeleteRange, hasSelectionTokens, setSelection]);
+
+  const focusInsertedToken = useCallback(() => {
+    setTimeout(() => {
+      if (editInputRef.current) {
+        editInputRef.current.focus();
+        if (typeof editInputRef.current.setSelectionRange === "function") {
+          editInputRef.current.setSelectionRange(0, 0);
+        }
+      }
+    }, 10);
+  }, []);
+
+  const handleInsertBeforeSelection = useCallback(() => {
+    if (!hasSelectionTokens) return;
+    const currentSelection = selectionRef.current;
+    if (currentSelection.start === null || currentSelection.end === null) return;
+    const [s, e] = [currentSelection.start, currentSelection.end];
+    const start = Math.min(s, e);
+    dispatch({ type: "INSERT_TOKEN_BEFORE_SELECTED", range: [start, Math.max(s, e)] });
+    setSelection({ start, end: start });
+    suppressBlurCommitRef.current = false;
+    startEdit({ start, end: start }, "");
+    focusInsertedToken();
+  }, [dispatch, focusInsertedToken, hasSelectionTokens, setSelection, startEdit]);
+
+  const handleInsertAfterSelection = useCallback(() => {
+    if (!hasSelectionTokens) return;
+    const currentSelection = selectionRef.current;
+    if (currentSelection.start === null || currentSelection.end === null) return;
+    const [s, e] = [currentSelection.start, currentSelection.end];
+    const start = Math.min(s, e);
+    const end = Math.max(s, e);
+    dispatch({ type: "INSERT_TOKEN_AFTER_SELECTED", range: [start, end] });
+    const newIndex = end + 1;
+    setSelection({ start: newIndex, end: newIndex });
+    suppressBlurCommitRef.current = false;
+    startEdit({ start: newIndex, end: newIndex }, "");
+    focusInsertedToken();
+  }, [dispatch, focusInsertedToken, hasSelectionTokens, setSelection, startEdit]);
+
+  const handleMergeSelection = useCallback(() => {
+    if (!hasSelectionTokens || selectedIndices.length < 2) return;
+    const [s, e] = [Math.min(selection.start!, selection.end!), Math.max(selection.start!, selection.end!)];
+    dispatch({ type: "MERGE_RANGE", range: [s, e] });
+    setSelection({ start: null, end: null });
+  }, [dispatch, hasSelectionTokens, selectedIndices.length, selection, setSelection]);
+
   const handleOpenSettings = () => {
     try {
       // no local persistence; rely on server hydration on reload
@@ -1280,60 +1334,10 @@ export const TokenEditor: React.FC<{
               <div style={toolbarRowStyle}>
                 {toolbarButton(t("tokenEditor.undo"), performUndo, history.past.length === 0, "Ctrl+Z", "↺")}
                 {toolbarButton(t("tokenEditor.redo"), performRedo, history.future.length === 0, "Ctrl+Y", "↻")}
-                {toolbarButton(t("tokenEditor.delete"), () => {
-                  if (!hasSelectionTokens) return;
-                  const ctx = getDeleteRange();
-                  if (!ctx) return;
-                  dispatch({ type: "DELETE_SELECTED_TOKENS", range: ctx.range, anchorIndex: ctx.anchorIndex });
-                  setSelection({ start: null, end: null });
-                }, !hasSelectionTokens, "Del", "🗑️")}
-                {toolbarButton(t("tokenEditor.insertBefore"), () => {
-                  if (!hasSelectionTokens) return;
-                  const currentSelection = selectionRef.current;
-                  if (currentSelection.start === null || currentSelection.end === null) return;
-                  const [s, e] = [currentSelection.start, currentSelection.end];
-                  const start = Math.min(s, e);
-                dispatch({ type: "INSERT_TOKEN_BEFORE_SELECTED", range: [start, Math.max(s, e)] });
-                // Immediately enter edit mode on the newly inserted token.
-                setSelection({ start, end: start });
-                suppressBlurCommitRef.current = false;
-                startEdit({ start, end: start }, "");
-                setTimeout(() => {
-                  if (editInputRef.current) {
-                      editInputRef.current.focus();
-                      if (typeof editInputRef.current.setSelectionRange === "function") {
-                        editInputRef.current.setSelectionRange(0, 0);
-                      }
-                    }
-                  }, 10);
-                }, !hasSelectionTokens, undefined, "➕")}
-                {toolbarButton(t("tokenEditor.insertAfter"), () => {
-                  if (!hasSelectionTokens) return;
-                  const currentSelection = selectionRef.current;
-                  if (currentSelection.start === null || currentSelection.end === null) return;
-                  const [s, e] = [currentSelection.start, currentSelection.end];
-                  const start = Math.min(s, e);
-                  const end = Math.max(s, e);
-                  dispatch({ type: "INSERT_TOKEN_AFTER_SELECTED", range: [start, end] });
-                  const newIndex = end + 1;
-                  setSelection({ start: newIndex, end: newIndex });
-                  suppressBlurCommitRef.current = false;
-                  startEdit({ start: newIndex, end: newIndex }, "");
-                  setTimeout(() => {
-                    if (editInputRef.current) {
-                      editInputRef.current.focus();
-                      if (typeof editInputRef.current.setSelectionRange === "function") {
-                        editInputRef.current.setSelectionRange(0, 0);
-                      }
-                    }
-                  }, 10);
-                }, !hasSelectionTokens, "Insert", "➕")}
-                {toolbarButton(t("tokenEditor.merge"), () => {
-                  if (!hasSelectionTokens || selectedIndices.length < 2) return;
-                  const [s, e] = [Math.min(selection.start!, selection.end!), Math.max(selection.start!, selection.end!)];
-                  dispatch({ type: "MERGE_RANGE", range: [s, e] });
-                  setSelection({ start: null, end: null });
-                }, !hasSelectionTokens || selectedIndices.length < 2, undefined, "🔗")}
+                {toolbarButton(t("tokenEditor.delete"), handleDeleteSelection, !hasSelectionTokens, "Del", "🗑️")}
+                {toolbarButton(t("tokenEditor.insertBefore"), handleInsertBeforeSelection, !hasSelectionTokens, undefined, "➕")}
+                {toolbarButton(t("tokenEditor.insertAfter"), handleInsertAfterSelection, !hasSelectionTokens, "Insert", "➕")}
+                {toolbarButton(t("tokenEditor.merge"), handleMergeSelection, !hasSelectionTokens || selectedIndices.length < 2, undefined, "🔗")}
                 <div style={actionGroupStyle}>
                   <button
                     style={{
