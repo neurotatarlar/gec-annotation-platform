@@ -11,6 +11,7 @@ import { useAuthedApi } from "../api/client";
 import { useI18n } from "../context/I18nContext";
 import { ErrorType, SaveStatus } from "../types";
 import { useAnnotationDecisionActions } from "../hooks/useAnnotationDecisionActions";
+import { useAnnotationInitialization } from "../hooks/useAnnotationInitialization";
 import { useAnnotationSubmitAction } from "../hooks/useAnnotationSubmitAction";
 import { useCorrectionSelection } from "../hooks/useCorrectionSelection";
 import { useCorrectionTypes } from "../hooks/useCorrectionTypes";
@@ -37,12 +38,10 @@ import { TokenGap } from "./TokenEditorGap";
 import { TokenEditorGroup } from "./TokenEditorGroup";
 import { buildTokenGroups } from "./TokenEditorGrouping";
 import {
-  EditorPresentState,
   HotkeySpec,
   MoveMarker,
   Token,
   computeLineBreaksFromText,
-  hydrateFromServerAnnotations as hydrateFromServerAnnotationsModel,
   buildAnnotationsPayloadStandalone,
   buildDraftCorrectionsStandalone,
   buildEditableTextFromTokens,
@@ -60,7 +59,6 @@ import {
 import { createGapCalculator, SpaceMarker } from "./TokenEditorSpacing";
 import {
   isEditorStateStorageEnabled,
-  loadEditorState,
   loadPrefs,
   normalizeSpaceMarker,
   persistPrefs,
@@ -260,15 +258,26 @@ export const TokenEditor: React.FC<{
     });
     return { lineBreakSet: set, lineBreakCountMap: map };
   }, [lineBreaks]);
-  const lastSavedSignatureRef = useRef<string | null>(null);
   const [lastDecision, setLastDecision] = useState<"skip" | "trash" | "submit" | null>(
     prefs.lastTextId === textId ? prefs.lastDecision ?? null : null
   );
   const [serverAnnotationVersion, setServerAnnotationVersion] = useState(0);
   const annotationIdMap = useRef<Map<string, number>>(new Map());
   const annotationDeleteMap = useRef<Map<string, number[]>>(new Map());
-  const pendingLocalStateRef = useRef<EditorPresentState | null>(null);
-  const hydratedFromServerRef = useRef(false);
+  const {
+    lastSavedSignatureRef,
+    pendingLocalStateRef,
+    hydratedFromServerRef,
+    hydrateFromServerAnnotations,
+  } = useAnnotationInitialization({
+    textId,
+    initialText,
+    currentUserId,
+    dispatch,
+    resetUI,
+    setServerAnnotationVersion,
+    setHasLoadedAnnotations,
+  });
 
   const handleRevert = (rangeStart: number, rangeEnd: number) => {
     markSkipAutoSelect();
@@ -320,36 +329,6 @@ export const TokenEditor: React.FC<{
     const end = Math.max(s, e);
     return rangeToArray([start, end]);
   }, [hasSelection, selection]);
-
-  // Init from text on mount.
-  useEffect(() => {
-    setServerAnnotationVersion(0);
-    hydratedFromServerRef.current = false;
-    resetUI();
-    setHasLoadedAnnotations(false);
-  }, [resetUI, textId]);
-
-  useEffect(() => {
-    const saved = loadEditorState(textId);
-    if (saved) {
-      pendingLocalStateRef.current = saved;
-      dispatch({ type: "INIT_FROM_STATE", state: saved });
-    } else {
-      pendingLocalStateRef.current = null;
-      dispatch({ type: "INIT_FROM_TEXT", text: initialText });
-    }
-    lastSavedSignatureRef.current = null;
-  }, [initialText, textId]);
-
-  const hydrateFromServerAnnotations = useCallback(
-    (items: any[]) =>
-      hydrateFromServerAnnotationsModel({
-        items,
-        initialText,
-        currentUserId,
-      }),
-    [initialText, currentUserId]
-  );
 
   useEffect(() => {
     try {
