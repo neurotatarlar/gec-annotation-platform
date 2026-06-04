@@ -2,7 +2,11 @@ import { renderHook } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { Token } from "../components/TokenEditorModel";
-import { useTokenSelectionHandlers } from "./useTokenSelectionHandlers";
+import {
+  estimateCaretIndexFromClick,
+  expandEditRangeToTokenGroup,
+  useTokenSelectionHandlers,
+} from "./useTokenSelectionHandlers";
 
 const token = (text: string, kind: Token["kind"] = "word"): Token => ({
   id: text,
@@ -91,5 +95,35 @@ describe("useTokenSelectionHandlers", () => {
     result.current.handleTokenClick(0, true);
     expect(selectionRef.current).toEqual({ start: 0, end: 2 });
     expect(setSelection).toHaveBeenCalledWith({ start: 0, end: 2 });
+  });
+});
+
+describe("expandEditRangeToTokenGroup", () => {
+  it("expands to contiguous tokens sharing the same group id", () => {
+    const tokens = [
+      token("a"),
+      { ...token("b"), groupId: "g1" },
+      { ...token("c"), groupId: "g1" },
+      { ...token("d"), groupId: "g1" },
+      token("e"),
+    ];
+
+    expect(expandEditRangeToTokenGroup(tokens, 2)).toEqual({ start: 1, end: 3 });
+  });
+
+  it("keeps a single-token range when the token has no group id", () => {
+    expect(expandEditRangeToTokenGroup([token("a"), token("b")], 1)).toEqual({ start: 1, end: 1 });
+  });
+});
+
+describe("estimateCaretIndexFromClick", () => {
+  it("maps click position to a clamped caret index", () => {
+    expect(estimateCaretIndexFromClick(50, { left: 0, width: 100 }, "hello")).toBe(3);
+    expect(estimateCaretIndexFromClick(-10, { left: 0, width: 100 }, "hello")).toBe(0);
+    expect(estimateCaretIndexFromClick(120, { left: 0, width: 100 }, "hello")).toBe(5);
+  });
+
+  it("handles zero-width rectangles without dividing by zero", () => {
+    expect(estimateCaretIndexFromClick(10, { left: 10, width: 0 }, "abc")).toBe(0);
   });
 });

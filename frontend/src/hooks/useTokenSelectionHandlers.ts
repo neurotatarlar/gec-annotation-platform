@@ -7,6 +7,32 @@ import { Token } from "../components/TokenEditorModel";
 
 type SelectionRange = { start: number | null; end: number | null };
 
+type RectLike = {
+  left: number;
+  width: number;
+};
+
+export const expandEditRangeToTokenGroup = (tokens: Token[], index: number): SelectionRange => {
+  const token = tokens[index];
+  const groupId = token?.groupId;
+  let start = index;
+  let end = index;
+  if (groupId) {
+    while (start - 1 >= 0 && tokens[start - 1]?.groupId === groupId) start -= 1;
+    while (end + 1 < tokens.length && tokens[end + 1]?.groupId === groupId) end += 1;
+  }
+  return { start, end };
+};
+
+export const estimateCaretIndexFromClick = (
+  clientX: number,
+  rect: RectLike,
+  tokenText: string
+) => {
+  const relative = Math.max(0, Math.min(1, (clientX - rect.left) / Math.max(rect.width, 1)));
+  return Math.round(relative * tokenText.length);
+};
+
 type UseTokenSelectionHandlersArgs = {
   tokens: Token[];
   selectionRef: React.MutableRefObject<SelectionRange>;

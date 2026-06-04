@@ -31,7 +31,11 @@ import {
 } from "../hooks/useTokenEditorPrefs";
 import { useTokenDragDrop } from "../hooks/useTokenDragDrop";
 import { useTokenDeleteRange } from "../hooks/useTokenDeleteRange";
-import { useTokenSelectionHandlers } from "../hooks/useTokenSelectionHandlers";
+import {
+  estimateCaretIndexFromClick,
+  expandEditRangeToTokenGroup,
+  useTokenSelectionHandlers,
+} from "../hooks/useTokenSelectionHandlers";
 import {
   groupErrorTypes,
   getErrorTypeLabel,
@@ -885,20 +889,10 @@ export const TokenEditor: React.FC<{
         }}
         onDoubleClick={(e) => {
           if (isSpecial || isEmpty) return;
-          // Expand to the whole group (same groupId) when starting an edit.
-          const gid = token.groupId;
-          let l = index;
-          let r = index;
-          if (gid) {
-            while (l - 1 >= 0 && tokens[l - 1]?.groupId === gid) l -= 1;
-            while (r + 1 < tokens.length && tokens[r + 1]?.groupId === gid) r += 1;
-          }
-          const range = { start: l, end: r };
+          const range = expandEditRangeToTokenGroup(tokens, index);
           setSelection(range);
-          // Approximate caret based on click position within the token box.
           const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-          const relative = Math.max(0, Math.min(1, (e.clientX - rect.left) / Math.max(rect.width, 1)));
-          const caret = Math.round(relative * token.text.length);
+          const caret = estimateCaretIndexFromClick(e.clientX, rect, token.text);
           beginEdit(range, caret);
         }}
         title={token.kind === "empty" ? "Empty placeholder" : token.text}
