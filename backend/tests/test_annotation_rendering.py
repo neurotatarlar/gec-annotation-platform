@@ -64,6 +64,48 @@ def test_render_corrected_text_preserves_punctuation_without_extra_space():
     assert rendered == "Hello, there!"
 
 
+def test_render_corrected_text_honors_explicit_space_before_punctuation():
+    rendered = render_corrected_text(
+        "foo, bar",
+        [
+            SimpleNamespace(
+                id=1,
+                start_token=1,
+                end_token=1,
+                replacement=None,
+                payload={
+                    "operation": "replace",
+                    "text_tokens": ["foo", ",", "bar"],
+                    "after_tokens": [{"id": "comma", "text": ",", "origin": "base", "space_before": True}],
+                },
+            )
+        ],
+    )
+
+    assert rendered == "foo , bar"
+
+
+def test_render_corrected_text_honors_explicit_no_space_before_word():
+    rendered = render_corrected_text(
+        "foo , bar",
+        [
+            SimpleNamespace(
+                id=1,
+                start_token=2,
+                end_token=2,
+                replacement=None,
+                payload={
+                    "operation": "replace",
+                    "text_tokens": ["foo", ",", "bar"],
+                    "after_tokens": [{"id": "bar", "text": "bar", "origin": "base", "space_before": False}],
+                },
+            )
+        ],
+    )
+
+    assert rendered == "foo ,bar"
+
+
 def test_render_corrected_text_keeps_source_line_breaks():
     rendered = render_corrected_text(
         "alpha beta\ngamma",
