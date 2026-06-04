@@ -21,6 +21,7 @@ import { useAnnotationsLoader } from "../hooks/useAnnotationsLoader";
 import { useRenderController } from "../hooks/useRenderController";
 import { useSaveController } from "../hooks/useSaveController";
 import { useErrorTypes } from "../hooks/useErrorTypes";
+import { useErrorTypeHotkeys } from "../hooks/useErrorTypeHotkeys";
 import { useTokenDragDrop } from "../hooks/useTokenDragDrop";
 import { useTokenDeleteRange } from "../hooks/useTokenDeleteRange";
 import { useTokenSelectionHandlers } from "../hooks/useTokenSelectionHandlers";
@@ -35,7 +36,6 @@ import { TokenEditorGroup } from "./TokenEditorGroup";
 import { buildTokenGroups } from "./TokenEditorGrouping";
 import { buildMoveLine, MoveLine } from "./TokenEditorMoveLine";
 import {
-  HotkeySpec,
   MoveMarker,
   Token,
   buildLineBreakMetadata,
@@ -44,14 +44,12 @@ import {
   buildAnnotationsPayloadStandalone,
   buildDraftCorrectionsStandalone,
   buildEditableTextFromTokens,
-  buildHotkeyMap,
   buildTextFromTokensWithBreaks,
   deriveCorrectionByIndex,
   deriveCorrectionCards,
   deriveMoveMarkers,
   hasUnassignedSubmitCorrections,
   isInsertPlaceholder,
-  normalizeHotkeySpec,
   rangeToArray,
   tokenEditorReducer,
 } from "./TokenEditorModel";
@@ -1265,46 +1263,7 @@ export const TokenEditor: React.FC<{
     [applyTypeToSelection, triggerTypeFlash]
   );
 
-  const hotkeyMap = useMemo(() => buildHotkeyMap(errorTypes), [errorTypes]);
-
-  const eventToHotkeyStrings = useCallback((event: KeyboardEvent): { keySpec: string | null; codeSpec: string | null } => {
-    const key = event.key?.toLowerCase();
-    if (!key) return { keySpec: null, codeSpec: null };
-    // ignore pure modifier presses
-    if (["shift", "control", "ctrl", "alt", "meta"].includes(key)) return { keySpec: null, codeSpec: null };
-    const baseSpec: HotkeySpec = {
-      key,
-      ctrl: event.ctrlKey,
-      alt: event.altKey,
-      shift: event.shiftKey,
-      meta: event.metaKey,
-    };
-    const keySpec = normalizeHotkeySpec(baseSpec);
-    const code = event.code;
-    const codeSpec = code ? normalizeHotkeySpec({ ...baseSpec, code }, true) : null;
-    return { keySpec, codeSpec };
-  }, []);
-
-  useEffect(() => {
-    if (!hotkeyMap || Object.keys(hotkeyMap).length === 0) return;
-    const handler = (event: KeyboardEvent) => {
-      const target = event.target as HTMLElement | null;
-      if (
-        target &&
-        (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || (target as HTMLElement).isContentEditable)
-      ) {
-        return;
-      }
-      const { keySpec, codeSpec } = eventToHotkeyStrings(event);
-      if (!keySpec && !codeSpec) return;
-      const typeId = (keySpec && hotkeyMap[keySpec]) || (codeSpec && hotkeyMap[codeSpec]);
-      if (!typeId) return;
-      event.preventDefault();
-      handleTypePick(typeId);
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [hotkeyMap, eventToHotkeyStrings, handleTypePick]);
+  useErrorTypeHotkeys(errorTypes, handleTypePick);
 
   const hasUnassignedCorrections = useMemo(
     () => hasUnassignedSubmitCorrections(correctionCards.map((card) => card.id), correctionTypeMap),
