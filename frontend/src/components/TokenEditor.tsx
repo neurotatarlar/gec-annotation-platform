@@ -31,11 +31,7 @@ import {
 } from "../hooks/useTokenEditorPrefs";
 import { useTokenDragDrop } from "../hooks/useTokenDragDrop";
 import { useTokenDeleteRange } from "../hooks/useTokenDeleteRange";
-import {
-  estimateCaretIndexFromClick,
-  expandEditRangeToTokenGroup,
-  useTokenSelectionHandlers,
-} from "../hooks/useTokenSelectionHandlers";
+import { useTokenSelectionHandlers } from "../hooks/useTokenSelectionHandlers";
 import {
   groupErrorTypes,
   getErrorTypeLabel,
@@ -46,6 +42,7 @@ import { TokenGap } from "./TokenEditorGap";
 import { TokenEditorGroup } from "./TokenEditorGroup";
 import { buildTokenGroups } from "./TokenEditorGrouping";
 import { buildMoveLine, MoveLine } from "./TokenEditorMoveLine";
+import { TokenEditorToken } from "./TokenEditorToken";
 import {
   MoveMarker,
   Token,
@@ -76,7 +73,6 @@ import {
   categoryChipStyle,
   categoryColors,
   categoryPanelStyle,
-  chipBase,
   chipStyles,
   dangerActionStyle,
   mainColumnStyle,
@@ -701,213 +697,36 @@ export const TokenEditor: React.FC<{
     getDeleteRange,
   ]);
 
-  const renderToken = (token: Token, index: number, forceChanged = false) => {
-    const isSelected = selectedSet.has(index);
-    const isMovePlaceholder = Boolean(token.moveId && token.kind === "empty");
-    const isDeletionPlaceholder = Boolean(token.kind === "empty" && !token.moveId && token.previousTokens?.length);
-    const hasHistory = forceChanged || (Boolean(token.previousTokens?.length) && !isMovePlaceholder);
-    const isSpecial = token.kind === "special";
-    const isEmpty = token.kind === "empty";
-    const displayText =
-      isDeletionPlaceholder
-        ? "⬚"
-        : isEmpty
-          ? "⬚"
-        : isSpecial && token.text.length > 32
-          ? `${token.text.slice(0, 18)}…${token.text.slice(-10)}`
-          : token.text;
-    // const specialMaxWidth = isSpecial
-    //   ? Math.max(72, Math.min(140, displayText.length * tokenFontSize * 0.35))
-    //   : undefined;
-    // const specialPadY = Math.max(0, tokenFontSize * 0.03);
-    // const specialPadX = Math.max(0.5, tokenFontSize * 0.12);
-
-    const style: React.CSSProperties = {
-      ...(chipStyles[token.kind] || chipBase),
-      ...(hasHistory ? chipStyles.changed : {}),
-      cursor: isSpecial ? "default" : "pointer",
-      userSelect: "none",
-      position: "relative",
-      fontSize: tokenFontSize,
-      padding: 0,
-      lineHeight: 1.05,
-      marginRight: 0,
-    };
-    if (isEmpty) {
-      Object.assign(style, {
-        color: "#94a3b8",
-        border: "1px dashed rgba(148,163,184,0.5)",
-        borderRadius: 8,
-        background: "rgba(15,23,42,0.15)",
-        padding: "2px 6px",
-        cursor: "pointer",
-      });
-      if (isMovePlaceholder) {
-        const markerWidth = Math.max(2, Math.round(tokenFontSize * 0.12));
-        const markerHeight = Math.max(14, Math.round(tokenFontSize * 1.1));
-        Object.assign(style, {
-          border: "none",
-          background: "rgba(148,163,184,0.5)",
-          padding: 0,
-          width: markerWidth,
-          minWidth: markerWidth,
-          height: markerHeight,
-          borderRadius: 2,
-          color: "transparent",
-          fontSize: 0,
-        });
-      } else if (isDeletionPlaceholder) {
-        const ghostSize = Math.max(8, Math.round(tokenFontSize * 0.75));
-        const ghostHeight = Math.max(14, Math.round(tokenFontSize * 1.05));
-        Object.assign(style, {
-          border: "none",
-          background: "transparent",
-          padding: "0 2px",
-          borderRadius: 4,
-          color: "#64748b",
-          fontSize: ghostSize,
-          lineHeight: `${ghostHeight}px`,
-          height: ghostHeight,
-          minHeight: ghostHeight,
-        });
-      }
-    }
-    if (isSelected) {
-      Object.assign(
-        style,
-        chipStyles.selected,
-        isEmpty
-          ? {
-              background: "rgba(14,165,233,0.25)",
-              borderStyle: "solid",
-              color: "#e2e8f0",
-            }
-          : {}
-      );
-    }
-    const isEditingChip =
-      editingRange &&
-      index >= Math.min(editingRange.start!, editingRange.end!) &&
-      index <= Math.max(editingRange.start!, editingRange.end!);
-    if (isEditingChip) {
-      // Render one pill covering the whole selected span only on the first token of the span.
-      if (index !== Math.min(editingRange!.start!, editingRange!.end!)) return null;
-      const editStart = Math.min(editingRange!.start!, editingRange!.end!);
-      const editEnd = Math.max(editingRange!.start!, editingRange!.end!);
-      const originalSelection = buildEditableTextFromTokens(tokens.slice(editStart, editEnd + 1));
-      const textForWidth = editText.length ? editText : originalSelection;
-      const measuredPx = measureTextWidth(textForWidth);
-      // Match the editing pill to the text length with only minimal breathing room.
-      const editPxWidth = Math.max(8, measuredPx + tokenFontSize * 0.6);
-      const selectedHighlight = chipStyles.selected;
-      const editHeight = Math.max(24, tokenFontSize * 1.2);
-      return (
-        <div
-          key={`edit-${index}`}
-          style={{
-            ...style,
-            ...selectedHighlight,
-            display: "inline-flex",
-            alignItems: "center",
-            justifyContent: "center",
-            background: "rgba(59,130,246,0.12)",
-            width: `${editPxWidth}px`,
-            minWidth: `${editPxWidth}px`,
-            maxWidth: `${editPxWidth}px`,
-            height: editHeight,
-            padding: "2px 6px",
-            borderRadius: 10,
-            border: "1px solid rgba(148,163,184,0.25)",
-            flex: "0 0 auto",
-            boxSizing: "border-box",
-          }}
-        >
-          <input
-            ref={editInputRef as React.RefObject<HTMLInputElement>}
-            style={{
-              width: "100%",
-              background: "transparent",
-              border: "none",
-              outline: "none",
-              color: "#e4f4ec",
-              fontSize: tokenFontSize,
-              lineHeight: 1.05,
-              padding: 0,
-              margin: 0,
-            }}
-            value={editText}
-            onChange={(e) => updateEditText(e.target.value)}
-            onBlur={() => {
-              if (suppressBlurCommitRef.current) {
-                suppressBlurCommitRef.current = false;
-                return;
-              }
-              commitEdit();
-            }}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                commitEdit();
-              }
-              if (e.key === "Escape") {
-                e.preventDefault();
-                cancelEdit();
-                setSelection({ start: null, end: null });
-              }
-            }}
-            autoFocus
-            placeholder={t("tokenEditor.editPlaceholder")}
-          />
-        </div>
-      );
-    }
-    return (
-      <div
-        key={token.id}
-        style={style}
-        data-token-index={index}
-        draggable={!isSpecial && !isEmpty}
-        onDragStart={(e) => {
-          if (isSpecial || isEmpty) {
-            e.preventDefault();
-            return;
-          }
-          handleDragStart(index, e);
-        }}
-        onDragOver={(e) => handleDragOverToken(index, e)}
-        onDrop={(e) => {
-          e.preventDefault();
-          const rect = e.currentTarget.getBoundingClientRect();
-          const isAfter = (e.clientX - rect.left) / Math.max(1, rect.width) > 0.5;
-          const targetIndex = isAfter ? index + 1 : index;
-          handleDropAt(targetIndex);
-        }}
-        onDragEnd={handleDragEnd}
-        onClick={(e) => {
-          if (isSpecial) return;
-          handleTokenClick(index, e.ctrlKey || e.metaKey);
-        }}
-        onDoubleClick={(e) => {
-          if (isSpecial || isEmpty) return;
-          const range = expandEditRangeToTokenGroup(tokens, index);
-          setSelection(range);
-          const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-          const caret = estimateCaretIndexFromClick(e.clientX, rect, token.text);
-          beginEdit(range, caret);
-        }}
-        title={token.kind === "empty" ? "Empty placeholder" : token.text}
-        role="button"
-        aria-label={isEmpty ? "⬚" : undefined}
-        tabIndex={isSpecial ? -1 : 0}
-        ref={(el) => {
-          tokenRefs.current[token.id] = el;
-        }}
-        aria-pressed={isSelected}
-      >
-        <span>{displayText}</span>
-      </div>
-    );
-  };
+  const renderToken = (token: Token, index: number, forceChanged = false) => (
+    <TokenEditorToken
+      key={forceChanged ? `${token.id}-forced` : token.id}
+      token={token}
+      index={index}
+      forceChanged={forceChanged}
+      isSelected={selectedSet.has(index)}
+      editingRange={editingRange}
+      tokens={tokens}
+      tokenFontSize={tokenFontSize}
+      editText={editText}
+      editInputRef={editInputRef}
+      suppressBlurCommitRef={suppressBlurCommitRef}
+      t={t}
+      measureTextWidth={measureTextWidth}
+      updateEditText={updateEditText}
+      commitEdit={commitEdit}
+      cancelEdit={cancelEdit}
+      setSelection={setSelection}
+      beginEdit={beginEdit}
+      handleDragStart={handleDragStart}
+      handleDragOverToken={handleDragOverToken}
+      handleDropAt={handleDropAt}
+      handleDragEnd={handleDragEnd}
+      handleTokenClick={handleTokenClick}
+      setTokenRef={(tokenId, el) => {
+        tokenRefs.current[tokenId] = el;
+      }}
+    />
+  );
 
   // Render tokens grouped by groupId so corrected clusters share one border and centered history.
   const renderTokenGroups = (tokenList: Token[]) => {
