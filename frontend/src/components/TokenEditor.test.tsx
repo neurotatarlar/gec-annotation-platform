@@ -1520,7 +1520,7 @@ describe("empty placeholder selection", () => {
 });
 
 describe("revert clears selection", () => {
-  const seedEditedStateWithType = () => {
+  const seedEditedState = () => {
     const base = tokenEditorReducer(createInitialHistoryState(), { type: "INIT_FROM_TEXT", text: "hello world" });
     const edited = tokenEditorReducer(base, {
       type: "EDIT_SELECTED_RANGE_AS_TEXT",
@@ -1528,13 +1528,6 @@ describe("revert clears selection", () => {
       newText: "hi",
     });
     localStorage.setItem("tokenEditorPrefs:state:1", JSON.stringify(edited.present));
-    const moveMarkers = deriveMoveMarkers(edited.present.tokens);
-    const correctionCards = deriveCorrectionCards(edited.present.tokens, moveMarkers);
-    const cardId = correctionCards[0]?.id;
-    localStorage.setItem(
-      "tokenEditorPrefs:types:1",
-      JSON.stringify({ assignments: cardId ? { [cardId]: 1 } : {} })
-    );
   };
 
   it("removes selection highlight when undoing a correction", async () => {
@@ -1565,7 +1558,7 @@ describe("revert clears selection", () => {
     mockGet.mockReset();
     mockPost.mockReset();
     localStorage.clear();
-    seedEditedStateWithType();
+    seedEditedState();
     await renderEditor("hello world", {
       getImpl: (url) => {
         if (url.includes("/api/error-types")) {
@@ -1606,7 +1599,7 @@ describe("revert clears selection", () => {
     mockGet.mockReset();
     mockPost.mockReset();
     localStorage.clear();
-    seedEditedStateWithType();
+    seedEditedState();
     await renderEditor("hello world", {
       getImpl: (url) => {
         if (url.includes("/api/error-types")) {
@@ -1636,7 +1629,7 @@ describe("revert clears selection", () => {
     mockGet.mockReset();
     mockPost.mockReset();
     localStorage.clear();
-    seedEditedStateWithType();
+    seedEditedState();
     await renderEditor("hello world", {
       getImpl: (url) => {
         if (url.includes("/api/error-types")) {
@@ -1667,7 +1660,7 @@ describe("revert clears selection", () => {
     mockGet.mockReset();
     mockPost.mockReset();
     localStorage.clear();
-    seedEditedStateWithType();
+    seedEditedState();
     await renderEditor("hello world", {
       getImpl: (url) => {
         if (url.includes("/api/error-types")) {
@@ -1675,15 +1668,36 @@ describe("revert clears selection", () => {
             data: [{ id: 1, en_name: "Type A", tt_name: "Type A", default_color: "#94a3b8", is_active: true }],
           });
         }
+        if (url.includes("/annotations")) {
+          return Promise.resolve({
+            data: [
+              {
+                id: 10,
+                author_id: "user-1",
+                start_token: 0,
+                end_token: 0,
+                replacement: "hi",
+                error_type_id: 1,
+                payload: {
+                  operation: "replace",
+                  text_tokens: ["hello", "world"],
+                  before_tokens: [{ id: "base-0", text: "hello", origin: "base", space_before: false }],
+                  after_tokens: [{ id: "base-0", text: "hi", origin: "base", space_before: false }],
+                },
+              },
+            ],
+          });
+        }
         return Promise.resolve({ data: {} });
       },
     });
 
-    const corrected = await screen.findByRole("button", { name: "hi" });
-    const historySpan = screen
+    const correctedPanel = await screen.findByTestId("corrected-panel");
+    const corrected = within(correctedPanel).getByRole("button", { name: "hi" });
+    const historySpan = within(correctedPanel)
       .getAllByText("hello")
       .find((el) => el.getAttribute("role") !== "button") as HTMLElement;
-    const badgeCandidates = await screen.findAllByText("Type A");
+    const badgeCandidates = within(correctedPanel).getAllByText("Type A");
     const badge = badgeCandidates.find((el) => el.getAttribute("title") === "Type A") as HTMLElement;
     expect(corrected).toBeTruthy();
     expect(historySpan).toBeTruthy();

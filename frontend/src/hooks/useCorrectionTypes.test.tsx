@@ -1,5 +1,5 @@
 import { useLayoutEffect } from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { describe, it, expect, beforeEach } from "vitest";
 
 import { useCorrectionTypes } from "./useCorrectionTypes";
@@ -27,6 +27,27 @@ const TestComponent = ({
     }
   }, [seedAssignments, seedCorrectionTypes]);
   return <div data-testid="map">{JSON.stringify(correctionTypeMap)}</div>;
+};
+
+const InteractiveTestComponent = ({
+  textId,
+  correctionCards,
+}: {
+  textId: number;
+  correctionCards: CorrectionCardLite[];
+}) => {
+  const { correctionTypeMap, updateCorrectionType } = useCorrectionTypes({
+    textId,
+    correctionCards,
+  });
+  return (
+    <>
+      <div data-testid="map">{JSON.stringify(correctionTypeMap)}</div>
+      <button type="button" onClick={() => updateCorrectionType(correctionCards[0].id, 8)}>
+        assign
+      </button>
+    </>
+  );
 };
 
 describe("useCorrectionTypes defaults", () => {
@@ -63,7 +84,7 @@ describe("useCorrectionTypes defaults", () => {
     });
   });
 
-  it("does not override seeded types with stale local storage", async () => {
+  it("ignores stale local storage when seeded types are available", async () => {
     localStorage.setItem(
       "tokenEditorPrefs:types:1",
       JSON.stringify({ assignments: { stale: 99 } })
@@ -79,6 +100,19 @@ describe("useCorrectionTypes defaults", () => {
 
     await waitFor(() => {
       expect(screen.getByTestId("map").textContent).toContain("\"c1\":1");
+    });
+  });
+
+  it("does not restore correction labels from local storage", async () => {
+    localStorage.setItem(
+      "tokenEditorPrefs:types:1",
+      JSON.stringify({ assignments: { c1: 99 } })
+    );
+    const cards = [{ id: "c1", rangeStart: 0, rangeEnd: 1 }];
+    render(<TestComponent textId={1} correctionCards={cards} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("map").textContent).toBe("{\"c1\":null}");
     });
   });
 
@@ -102,6 +136,36 @@ describe("useCorrectionTypes defaults", () => {
 
     await waitFor(() => {
       expect(screen.getByTestId("map").textContent).toContain("\"c1\":1");
+    });
+  });
+
+  it("resets current-session labels when the text changes", async () => {
+    const { rerender } = render(
+      <InteractiveTestComponent
+        textId={1}
+        correctionCards={[{ id: "c1", rangeStart: 0, rangeEnd: 0 }]}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("map").textContent).toBe("{\"c1\":null}");
+    });
+    act(() => {
+      screen.getByRole("button", { name: "assign" }).click();
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("map").textContent).toBe("{\"c1\":8}");
+    });
+
+    rerender(
+      <InteractiveTestComponent
+        textId={2}
+        correctionCards={[{ id: "c2", rangeStart: 0, rangeEnd: 0 }]}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("map").textContent).toBe("{\"c2\":null}");
     });
   });
 });

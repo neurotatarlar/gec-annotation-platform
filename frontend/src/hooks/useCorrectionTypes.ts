@@ -1,32 +1,9 @@
 /**
- * Hook mapping correction cards to error types with persistence and defaults.
+ * Hook mapping correction cards to error types with server-seeded defaults.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { CorrectionCardLite } from "../components/TokenEditorModel";
-
-const typeKey = (textId: number) => `tokenEditorPrefs:types:${textId}`;
-
-const loadCorrectionTypes = (textId: number): { assignments: Record<string, number | null> } => {
-  try {
-    const raw = localStorage.getItem(typeKey(textId));
-    if (!raw) return { assignments: {} };
-    const parsed = JSON.parse(raw);
-    return {
-      assignments: typeof parsed?.assignments === "object" && parsed.assignments ? parsed.assignments : {},
-    };
-  } catch {
-    return { assignments: {} };
-  }
-};
-
-const persistCorrectionTypes = (textId: number, payload: { assignments: Record<string, number | null> }) => {
-  try {
-    localStorage.setItem(typeKey(textId), JSON.stringify(payload));
-  } catch {
-    // ignore
-  }
-};
 
 type UseCorrectionTypesArgs = {
   textId: number;
@@ -36,16 +13,13 @@ type UseCorrectionTypesArgs = {
 
 export const useCorrectionTypes = ({ textId, correctionCards, defaultTypeForCard }: UseCorrectionTypesArgs) => {
   const [correctionTypeMap, setCorrectionTypeMap] = useState<Record<string, number | null>>({});
-  const [hasLoadedTypeState, setHasLoadedTypeState] = useState(false);
   const hasSeenCorrectionsRef = useRef(false);
+  const textIdRef = useRef(textId);
 
   useEffect(() => {
-    setHasLoadedTypeState(false);
-    const typeState = loadCorrectionTypes(textId);
-    setCorrectionTypeMap((prev) =>
-      Object.keys(prev).length > 0 ? prev : typeState.assignments
-    );
-    setHasLoadedTypeState(true);
+    if (textIdRef.current === textId) return;
+    textIdRef.current = textId;
+    setCorrectionTypeMap({});
     hasSeenCorrectionsRef.current = false;
   }, [textId]);
 
@@ -56,7 +30,6 @@ export const useCorrectionTypes = ({ textId, correctionCards, defaultTypeForCard
   }, [correctionCards.length]);
 
   useEffect(() => {
-    if (!hasLoadedTypeState) return;
     setCorrectionTypeMap((prev) => {
       if (correctionCards.length === 0 && !hasSeenCorrectionsRef.current) {
         return prev;
@@ -81,12 +54,7 @@ export const useCorrectionTypes = ({ textId, correctionCards, defaultTypeForCard
         correctionCards.every((c) => prev[c.id] === next[c.id]);
       return unchanged ? prev : next;
     });
-  }, [correctionCards, hasLoadedTypeState, defaultTypeForCard]);
-
-  useEffect(() => {
-    if (!hasLoadedTypeState) return;
-    persistCorrectionTypes(textId, { assignments: correctionTypeMap });
-  }, [textId, correctionTypeMap, hasLoadedTypeState]);
+  }, [correctionCards, defaultTypeForCard]);
 
   const updateCorrectionType = useCallback((cardId: string, typeId: number | null) => {
     setCorrectionTypeMap((prev) => ({ ...prev, [cardId]: typeId }));
