@@ -22,6 +22,7 @@ import { useRenderController } from "../hooks/useRenderController";
 import { useSaveController } from "../hooks/useSaveController";
 import { useErrorTypes } from "../hooks/useErrorTypes";
 import { useErrorTypeHotkeys } from "../hooks/useErrorTypeHotkeys";
+import { useTokenEditorCommands } from "../hooks/useTokenEditorCommands";
 import { useTokenEditorKeyboardShortcuts } from "../hooks/useTokenEditorKeyboardShortcuts";
 import { useTokenInlineEdit } from "../hooks/useTokenInlineEdit";
 import {
@@ -540,23 +541,34 @@ export const TokenEditor: React.FC<{
     lastClickedIndexRef,
   });
 
-  const performUndo = () => {
-    if (editingRange) {
-      cancelEdit();
-    }
-    markSkipAutoSelect();
-    setSelection({ start: null, end: null });
-    dispatch({ type: "UNDO" });
-  };
-
-  const performRedo = () => {
-    if (editingRange) {
-      cancelEdit();
-    }
-    markSkipAutoSelect();
-    setSelection({ start: null, end: null });
-    dispatch({ type: "REDO" });
-  };
+  const {
+    performUndo,
+    performRedo,
+    handleDeleteSelection,
+    handleInsertBeforeSelection,
+    handleInsertAfterSelection,
+    handleMergeSelection,
+  } = useTokenEditorCommands({
+    editingRange,
+    selection,
+    selectedCount: selectedIndices.length,
+    hasSelectionTokens: hasSelection,
+    selectionRef,
+    editInputRef,
+    suppressBlurCommitRef,
+    cancelEdit,
+    markSkipAutoSelect,
+    getDeleteRange,
+    setSelection,
+    startEdit,
+    undo: () => dispatch({ type: "UNDO" }),
+    redo: () => dispatch({ type: "REDO" }),
+    deleteSelectedTokens: (ctx) =>
+      dispatch({ type: "DELETE_SELECTED_TOKENS", range: ctx.range, anchorIndex: ctx.anchorIndex }),
+    insertBeforeSelectedTokens: (range) => dispatch({ type: "INSERT_TOKEN_BEFORE_SELECTED", range }),
+    insertAfterSelectedTokens: (range) => dispatch({ type: "INSERT_TOKEN_AFTER_SELECTED", range }),
+    mergeRange: (range) => dispatch({ type: "MERGE_RANGE", range }),
+  });
 
   useTokenEditorKeyboardShortcuts({
     editingRange,
@@ -774,60 +786,6 @@ export const TokenEditor: React.FC<{
   const hasCorrections = correctionCards.length > 0;
 
   const hasSelectionTokens = hasSelection;
-
-  const handleDeleteSelection = useCallback(() => {
-    if (!hasSelectionTokens) return;
-    const ctx = getDeleteRange();
-    if (!ctx) return;
-    dispatch({ type: "DELETE_SELECTED_TOKENS", range: ctx.range, anchorIndex: ctx.anchorIndex });
-    setSelection({ start: null, end: null });
-  }, [dispatch, getDeleteRange, hasSelectionTokens, setSelection]);
-
-  const focusInsertedToken = useCallback(() => {
-    setTimeout(() => {
-      if (editInputRef.current) {
-        editInputRef.current.focus();
-        if (typeof editInputRef.current.setSelectionRange === "function") {
-          editInputRef.current.setSelectionRange(0, 0);
-        }
-      }
-    }, 10);
-  }, []);
-
-  const handleInsertBeforeSelection = useCallback(() => {
-    if (!hasSelectionTokens) return;
-    const currentSelection = selectionRef.current;
-    if (currentSelection.start === null || currentSelection.end === null) return;
-    const [s, e] = [currentSelection.start, currentSelection.end];
-    const start = Math.min(s, e);
-    dispatch({ type: "INSERT_TOKEN_BEFORE_SELECTED", range: [start, Math.max(s, e)] });
-    setSelection({ start, end: start });
-    suppressBlurCommitRef.current = false;
-    startEdit({ start, end: start }, "");
-    focusInsertedToken();
-  }, [dispatch, focusInsertedToken, hasSelectionTokens, setSelection, startEdit]);
-
-  const handleInsertAfterSelection = useCallback(() => {
-    if (!hasSelectionTokens) return;
-    const currentSelection = selectionRef.current;
-    if (currentSelection.start === null || currentSelection.end === null) return;
-    const [s, e] = [currentSelection.start, currentSelection.end];
-    const start = Math.min(s, e);
-    const end = Math.max(s, e);
-    dispatch({ type: "INSERT_TOKEN_AFTER_SELECTED", range: [start, end] });
-    const newIndex = end + 1;
-    setSelection({ start: newIndex, end: newIndex });
-    suppressBlurCommitRef.current = false;
-    startEdit({ start: newIndex, end: newIndex }, "");
-    focusInsertedToken();
-  }, [dispatch, focusInsertedToken, hasSelectionTokens, setSelection, startEdit]);
-
-  const handleMergeSelection = useCallback(() => {
-    if (!hasSelectionTokens || selectedIndices.length < 2) return;
-    const [s, e] = [Math.min(selection.start!, selection.end!), Math.max(selection.start!, selection.end!)];
-    dispatch({ type: "MERGE_RANGE", range: [s, e] });
-    setSelection({ start: null, end: null });
-  }, [dispatch, hasSelectionTokens, selectedIndices.length, selection, setSelection]);
 
   const handleOpenSettings = () => {
     try {
