@@ -22,6 +22,13 @@ import { useRenderController } from "../hooks/useRenderController";
 import { useSaveController } from "../hooks/useSaveController";
 import { useErrorTypes } from "../hooks/useErrorTypes";
 import { useErrorTypeHotkeys } from "../hooks/useErrorTypeHotkeys";
+import {
+  DEFAULT_TOKEN_FONT_SIZE,
+  DEFAULT_TOKEN_GAP,
+  MAX_TOKEN_GAP,
+  MIN_TOKEN_GAP,
+  useTokenEditorPrefs,
+} from "../hooks/useTokenEditorPrefs";
 import { useTokenDragDrop } from "../hooks/useTokenDragDrop";
 import { useTokenDeleteRange } from "../hooks/useTokenDeleteRange";
 import { useTokenSelectionHandlers } from "../hooks/useTokenSelectionHandlers";
@@ -56,9 +63,6 @@ import {
 import { createGapCalculator, SpaceMarker } from "./TokenEditorSpacing";
 import {
   isEditorStateStorageEnabled,
-  loadPrefs,
-  normalizeSpaceMarker,
-  persistPrefs,
 } from "./TokenEditorStorage";
 import {
   actionBarStyle,
@@ -92,11 +96,6 @@ export * from "./TokenEditorModel";
 // ---------------------------
 // Component
 // ---------------------------
-
-const MIN_TOKEN_GAP = 0;
-const MAX_TOKEN_GAP = 40;
-const DEFAULT_TOKEN_GAP = Math.round((MIN_TOKEN_GAP + MAX_TOKEN_GAP) / 2);
-const DEFAULT_TOKEN_FONT_SIZE = 24;
 
 export const TokenEditor: React.FC<{
   initialText: string;
@@ -147,12 +146,20 @@ export const TokenEditor: React.FC<{
   const flagReason = ui.flagReason;
   const flagError = ui.flagError;
   const showClearConfirm = ui.overlay === "clear";
-  const prefs = useMemo(() => loadPrefs(), []);
-  const [tokenGap, setTokenGap] = useState(
-    Math.max(MIN_TOKEN_GAP, prefs.tokenGap ?? DEFAULT_TOKEN_GAP)
-  );
-  const [tokenFontSize, setTokenFontSize] = useState(prefs.tokenFontSize ?? DEFAULT_TOKEN_FONT_SIZE);
-  const [spaceMarker, setSpaceMarker] = useState<SpaceMarker>(normalizeSpaceMarker(prefs.spaceMarker));
+  const {
+    tokenGap,
+    setTokenGap,
+    tokenFontSize,
+    setTokenFontSize,
+    spaceMarker,
+    setSpaceMarker,
+    viewTab,
+    setViewTab,
+    isTextPanelOpen,
+    setIsTextPanelOpen,
+    lastDecision,
+    setLastDecision,
+  } = useTokenEditorPrefs(textId);
   const editInputRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
   const suppressBlurCommitRef = useRef(false);
   const tokenRefs = useRef<Record<string, HTMLDivElement | null>>({});
@@ -234,14 +241,6 @@ export const TokenEditor: React.FC<{
   useEffect(() => {
     selectionRef.current = selection;
   }, [selection]);
-  const initialViewTab = useMemo<"original" | "corrected">(() => {
-    if (prefs.viewTab === "original" || prefs.viewTab === "corrected") {
-      return prefs.viewTab;
-    }
-    return "corrected";
-  }, [prefs.viewTab]);
-  const [viewTab, setViewTab] = useState<"original" | "corrected">(initialViewTab);
-  const [isTextPanelOpen, setIsTextPanelOpen] = useState<boolean>(prefs.textPanelOpen ?? true);
   const [hasLoadedAnnotations, setHasLoadedAnnotations] = useState(false);
   const lineBreaks = useMemo(
     () => computeLineBreaksFromText(initialText),
@@ -250,9 +249,6 @@ export const TokenEditor: React.FC<{
   const { lineBreakCountMap } = useMemo(
     () => buildLineBreakMetadata(lineBreaks),
     [lineBreaks]
-  );
-  const [lastDecision, setLastDecision] = useState<"skip" | "trash" | "submit" | null>(
-    prefs.lastTextId === textId ? prefs.lastDecision ?? null : null
   );
   const [serverAnnotationVersion, setServerAnnotationVersion] = useState(0);
   const annotationIdMap = useRef<Map<string, number>>(new Map());
@@ -1206,18 +1202,6 @@ export const TokenEditor: React.FC<{
   });
   const showCorrectedSpinner =
     viewTab === "corrected" && (!hasLoadedAnnotations || (isRenderPending && !hasCanonicalRender));
-
-  useEffect(() => {
-    persistPrefs({
-      tokenGap,
-      tokenFontSize,
-      spaceMarker,
-      lastDecision,
-      lastTextId: textId,
-      viewTab,
-      textPanelOpen: isTextPanelOpen,
-    });
-  }, [tokenGap, tokenFontSize, spaceMarker, lastDecision, textId, viewTab, isTextPanelOpen]);
 
   const hasCorrections = correctionCards.length > 0;
 
