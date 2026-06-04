@@ -4,6 +4,47 @@
 import { Locale } from "../context/I18nContext";
 import { ErrorType } from "../types";
 
+export type ErrorTypeGroup = { label: string; items: ErrorType[] };
+
+export const sortActiveErrorTypes = (errorTypes: ErrorType[]) =>
+  errorTypes
+    .filter((type) => type.is_active)
+    .slice()
+    .sort((a, b) => {
+      const aCategory = (a.category_en ?? "").toLowerCase();
+      const bCategory = (b.category_en ?? "").toLowerCase();
+      if (aCategory !== bCategory) {
+        return aCategory.localeCompare(bCategory);
+      }
+      const aOrder = a.sort_order ?? 0;
+      const bOrder = b.sort_order ?? 0;
+      if (aOrder !== bOrder) {
+        return aOrder - bOrder;
+      }
+      const aName = (a.en_name ?? "").toLowerCase();
+      const bName = (b.en_name ?? "").toLowerCase();
+      if (aName !== bName) {
+        return aName.localeCompare(bName);
+      }
+      return a.id - b.id;
+    });
+
+export const groupErrorTypes = (
+  errorTypes: ErrorType[],
+  locale: Locale,
+  fallbackLabel: string
+): ErrorTypeGroup[] => {
+  const groups = new Map<string, ErrorTypeGroup>();
+  errorTypes.forEach((type) => {
+    const label = getErrorTypeSuperLabel(type, locale) || type.category_en || fallbackLabel;
+    const key = label || type.id.toString();
+    const bucket = groups.get(key) ?? { label, items: [] };
+    bucket.items.push(type);
+    groups.set(key, bucket);
+  });
+  return Array.from(groups.values());
+};
+
 export const getErrorTypeLabel = (type: ErrorType, locale: Locale) => {
   const localized = locale === "tt" ? type.tt_name : type.en_name;
   const fallback = locale === "tt" ? type.en_name : type.tt_name;

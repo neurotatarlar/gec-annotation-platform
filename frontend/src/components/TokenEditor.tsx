@@ -25,9 +25,10 @@ import { useTokenDragDrop } from "../hooks/useTokenDragDrop";
 import { useTokenDeleteRange } from "../hooks/useTokenDeleteRange";
 import { useTokenSelectionHandlers } from "../hooks/useTokenSelectionHandlers";
 import {
+  groupErrorTypes,
   getErrorTypeLabel,
-  getErrorTypeSuperLabel,
   resolveErrorTypeColor,
+  sortActiveErrorTypes,
 } from "../utils/errorTypes";
 import { TokenGap } from "./TokenEditorGap";
 import { TokenEditorGroup } from "./TokenEditorGroup";
@@ -346,43 +347,14 @@ export const TokenEditor: React.FC<{
   // Update selection highlight by toggling selected flag (not stored in history).
   const selectedSet = useMemo(() => new Set(selectedIndices), [selectedIndices]);
   const activeErrorTypes = useMemo(
-    () =>
-      errorTypes
-        .filter((type) => type.is_active)
-        .slice()
-        .sort((a, b) => {
-          const aCategory = (a.category_en ?? "").toLowerCase();
-          const bCategory = (b.category_en ?? "").toLowerCase();
-          if (aCategory !== bCategory) {
-            return aCategory.localeCompare(bCategory);
-          }
-          const aOrder = a.sort_order ?? 0;
-          const bOrder = b.sort_order ?? 0;
-          if (aOrder !== bOrder) {
-            return aOrder - bOrder;
-          }
-          const aName = (a.en_name ?? "").toLowerCase();
-          const bName = (b.en_name ?? "").toLowerCase();
-          if (aName !== bName) {
-            return aName.localeCompare(bName);
-          }
-          return a.id - b.id;
-        }),
+    () => sortActiveErrorTypes(errorTypes),
     [errorTypes]
   );
 
-  const groupedErrorTypes = useMemo(() => {
-    const groups = new Map<string, { label: string; items: ErrorType[] }>();
-    activeErrorTypes.forEach((type) => {
-      const label =
-        getErrorTypeSuperLabel(type, locale) || type.category_en || t("tokenEditor.categories");
-      const key = label || type.id.toString();
-      const bucket = groups.get(key) ?? { label, items: [] };
-      bucket.items.push(type);
-      groups.set(key, bucket);
-    });
-    return Array.from(groups.values());
-  }, [activeErrorTypes, locale, t]);
+  const groupedErrorTypes = useMemo(
+    () => groupErrorTypes(activeErrorTypes, locale, t("tokenEditor.categories")),
+    [activeErrorTypes, locale, t]
+  );
 
   const moveMarkers = useMemo(() => deriveMoveMarkers(tokens), [tokens]);
   const moveMarkerById = useMemo(() => {
