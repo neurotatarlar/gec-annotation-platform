@@ -6,6 +6,11 @@ import { MemoryRouter } from "react-router-dom";
 import { expect, describe, it, vi, beforeEach } from "vitest";
 
 import {
+  buildLineBreakMetadata,
+  deriveLineStartIndices,
+} from "./TokenEditorModel";
+
+import {
   createInitialHistoryState,
   EditorHistoryState,
   buildTextFromTokens,
@@ -329,6 +334,27 @@ describe("tokenEditorReducer core flows", () => {
     const url = "https://example.com";
     const breaks = computeLineBreaksFromText(`foo ${url}\nbar`);
     expect(breaks).toEqual([2]);
+  });
+
+  it("builds line break metadata with counts for consecutive breaks", () => {
+    const metadata = buildLineBreakMetadata([2, 2, 4]);
+    expect(metadata.lineBreakSet.has(2)).toBe(true);
+    expect(metadata.lineBreakSet.has(4)).toBe(true);
+    expect(metadata.lineBreakCountMap.get(2)).toBe(2);
+    expect(metadata.lineBreakCountMap.get(4)).toBe(1);
+  });
+
+  it("derives line start token indices while ignoring empty placeholders", () => {
+    const base = tokenEditorReducer(createInitialHistoryState(), {
+      type: "INIT_FROM_TEXT",
+      text: "alpha beta gamma",
+    });
+    const deleted = tokenEditorReducer(base, {
+      type: "DELETE_SELECTED_TOKENS",
+      range: [1, 1],
+    });
+
+    expect(Array.from(deriveLineStartIndices(deleted.present.tokens, [1]))).toEqual([2]);
   });
 
   it("hydrates server annotations via the model helper", () => {

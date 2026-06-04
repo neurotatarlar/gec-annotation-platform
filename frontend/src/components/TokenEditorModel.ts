@@ -267,6 +267,30 @@ export const computeLineBreaksFromText = (text: string): number[] => {
   return breaks;
 };
 
+export const buildLineBreakMetadata = (lineBreaks: number[]) => {
+  const lineBreakSet = new Set(lineBreaks);
+  const lineBreakCountMap = new Map<number, number>();
+  lineBreaks.forEach((idx) => {
+    lineBreakCountMap.set(idx, (lineBreakCountMap.get(idx) ?? 0) + 1);
+  });
+  return { lineBreakSet, lineBreakCountMap };
+};
+
+export const deriveLineStartIndices = (tokens: Token[], lineBreaks: number[]) => {
+  if (!lineBreaks.length) return new Set<number>();
+  const { lineBreakSet } = buildLineBreakMetadata(lineBreaks);
+  const starts = new Set<number>();
+  let visibleIndex = 0;
+  tokens.forEach((tok, idx) => {
+    if (tok.kind === "empty") return;
+    if (lineBreakSet.has(visibleIndex)) {
+      starts.add(idx);
+    }
+    visibleIndex += 1;
+  });
+  return starts;
+};
+
 export const buildTokensFromSnapshot = (snapshot: string[], sourceText: string): Token[] => {
   const tokens: Token[] = [];
   let cursor = 0;

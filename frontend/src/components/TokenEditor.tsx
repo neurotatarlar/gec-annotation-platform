@@ -37,7 +37,9 @@ import {
   HotkeySpec,
   MoveMarker,
   Token,
+  buildLineBreakMetadata,
   computeLineBreaksFromText,
+  deriveLineStartIndices,
   buildAnnotationsPayloadStandalone,
   buildDraftCorrectionsStandalone,
   buildEditableTextFromTokens,
@@ -246,14 +248,10 @@ export const TokenEditor: React.FC<{
     () => computeLineBreaksFromText(initialText),
     [initialText]
   );
-  const { lineBreakSet, lineBreakCountMap } = useMemo(() => {
-    const set = new Set(lineBreaks);
-    const map = new Map<number, number>();
-    lineBreaks.forEach((idx) => {
-      map.set(idx, (map.get(idx) ?? 0) + 1);
-    });
-    return { lineBreakSet: set, lineBreakCountMap: map };
-  }, [lineBreaks]);
+  const { lineBreakCountMap } = useMemo(
+    () => buildLineBreakMetadata(lineBreaks),
+    [lineBreaks]
+  );
   const [lastDecision, setLastDecision] = useState<"skip" | "trash" | "submit" | null>(
     prefs.lastTextId === textId ? prefs.lastDecision ?? null : null
   );
@@ -285,19 +283,10 @@ export const TokenEditor: React.FC<{
 
   const tokens = history.present.tokens;
   const originalTokens = history.present.originalTokens;
-  const lineStartIndices = useMemo(() => {
-    if (!lineBreaks.length) return new Set<number>();
-    const starts = new Set<number>();
-    let visibleIndex = 0;
-    tokens.forEach((tok, idx) => {
-      if (tok.kind === "empty") return;
-      if (lineBreakSet.has(visibleIndex)) {
-        starts.add(idx);
-      }
-      visibleIndex += 1;
-    });
-    return starts;
-  }, [tokens, lineBreaks, lineBreakSet]);
+  const lineStartIndices = useMemo(
+    () => deriveLineStartIndices(tokens, lineBreaks),
+    [tokens, lineBreaks]
+  );
   useEffect(() => {
     updateGapPositions();
   }, [tokens, tokenGap, tokenFontSize, lineBreaks, updateGapPositions]);
