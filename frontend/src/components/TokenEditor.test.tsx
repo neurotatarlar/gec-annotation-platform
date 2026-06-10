@@ -283,6 +283,18 @@ describe("tokenEditorReducer core flows", () => {
     expect(undone.present.tokens.map((t) => t.text)).toEqual(["hello", "world"]);
   });
 
+  it("undoing a re-edit of an inserted token restores the previous inserted text", () => {
+    const state1 = initState();
+    const inserted = insertAfterToken(state1, "hello", "new");
+    const reedited = editTokenByText(inserted, "new", "newer");
+
+    const undoneReedit = tokenEditorReducer(reedited, { type: "UNDO" });
+    expect(tokensToDisplay(undoneReedit.present.tokens)).toEqual(["hello", "new", "world"]);
+
+    const undoneInsert = tokenEditorReducer(undoneReedit, { type: "UNDO" });
+    expect(tokensToDisplay(undoneInsert.present.tokens)).toEqual(["hello", "world"]);
+  });
+
   it("tokenizes punctuation separately from words", () => {
     const tokens = tokenizeToTokens("Hi, world! 2+2=4 & *");
     expect(tokens.map((t) => t.text)).toEqual(["Hi", ",", "world", "!", "2", "+", "2", "=", "4", "&", "*"]);
@@ -3898,6 +3910,13 @@ describe("UI hydration matrix", () => {
     return buttons[targetIdx];
   };
 
+  const readPanelTokenLabels = async () => {
+    const panel = await screen.findByTestId("corrected-panel");
+    return readTokenButtons(panel)
+      .map((el) => el.textContent?.trim())
+      .filter(Boolean) as string[];
+  };
+
   const operations = {
     delete: async (user: ReturnType<typeof userEvent.setup>) => {
       const zeta = await screen.findByRole("button", { name: "zeta" });
@@ -3953,6 +3972,98 @@ describe("UI hydration matrix", () => {
   };
 
   const sequences = permute(["delete", "insert", "edit", "move"]).map((sequence) => [sequence]);
+
+  it("checks a deep UI edit chain after every backend echo", async () => {
+    const originalEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = "development";
+    localStorage.clear();
+    mockGet.mockReset();
+    mockPost.mockReset();
+
+    let serverAnnotations: any[] = [];
+    try {
+      mockPost.mockImplementation((url: string, payload: any) => {
+        if (url.includes("/render")) {
+          return Promise.resolve({ data: { corrected_text: "rendered" } });
+        }
+        if (url.includes("/annotations")) {
+          serverAnnotations = (payload.annotations ?? []).map((ann: any, idx: number) => ({
+            ...ann,
+            id: 700 + idx,
+            author_id: "user-1",
+            version: 1,
+          }));
+          return Promise.resolve({ data: serverAnnotations });
+        }
+        return Promise.resolve({ data: {} });
+      });
+
+      const getImpl = (url: string) => {
+        if (url.includes("/api/error-types")) return Promise.resolve({ data: errorTypes });
+        if (url.includes("/annotations")) return Promise.resolve({ data: serverAnnotations });
+        return Promise.resolve({ data: {} });
+      };
+
+      await renderEditor("alpha beta gamma delta epsilon", { getImpl });
+      const user = userEvent.setup();
+
+      await user.click(await screen.findByRole("button", { name: "beta" }));
+      await user.click(await screen.findByTitle("tokenEditor.insertAfter (Insert)"));
+      await user.type(await screen.findByPlaceholderText("tokenEditor.editPlaceholder"), "NEW");
+      fireEvent.blur(await screen.findByDisplayValue("NEW"));
+
+      await waitFor(() => expect(serverAnnotations).toHaveLength(1), { timeout: 4000 });
+      await waitFor(async () => {
+        expect(await readPanelTokenLabels()).toEqual(["alpha", "beta", "NEW", "gamma", "delta", "epsilon"]);
+      });
+      expect(serverAnnotations[0].error_type_id).toBeNull();
+
+      await user.dblClick(await screen.findByRole("button", { name: "NEW" }));
+      const insertedInput = await screen.findByDisplayValue("NEW");
+      await user.clear(insertedInput);
+      await user.type(insertedInput, "NEWER");
+      fireEvent.blur(insertedInput);
+
+      await waitFor(() => expect(serverAnnotations).toHaveLength(1), { timeout: 4000 });
+      await waitFor(async () => {
+        expect(await readPanelTokenLabels()).toEqual(["alpha", "beta", "NEWER", "gamma", "delta", "epsilon"]);
+      });
+
+      await user.click(await screen.findByTitle("tokenEditor.undo (Ctrl+Z)"));
+      await waitFor(async () => {
+        expect(await readPanelTokenLabels()).toEqual(["alpha", "beta", "NEW", "gamma", "delta", "epsilon"]);
+      });
+      await waitFor(() => {
+        expect(serverAnnotations).toHaveLength(1);
+        expect(serverAnnotations[0].payload?.after_tokens?.map((token: any) => token.text)).toEqual(["NEW"]);
+      }, { timeout: 4000 });
+
+      await user.click(await screen.findByRole("button", { name: "gamma" }));
+      await user.click(await screen.findByTitle("tokenEditor.delete (Del)"));
+      await waitFor(() => expect(serverAnnotations).toHaveLength(2), { timeout: 4000 });
+      await waitFor(async () => {
+        expect(await readPanelTokenLabels()).toEqual(["alpha", "beta", "NEW", "⬚", "delta", "epsilon"]);
+      });
+
+      await user.dblClick(await screen.findByRole("button", { name: "delta" }));
+      const deltaInput = await screen.findByDisplayValue("delta");
+      await user.clear(deltaInput);
+      await user.type(deltaInput, "DELTA split");
+      fireEvent.blur(deltaInput);
+
+      await waitFor(() => expect(serverAnnotations).toHaveLength(3), { timeout: 4000 });
+      const beforeReloadLabels = await readPanelTokenLabels();
+      expect(beforeReloadLabels).toEqual(["alpha", "beta", "NEW", "⬚", "DELTA", "split", "epsilon"]);
+
+      cleanup();
+      await renderEditor("alpha beta gamma delta epsilon", { getImpl });
+      await waitFor(async () => {
+        expect(await readPanelTokenLabels()).toEqual(beforeReloadLabels);
+      });
+    } finally {
+      process.env.NODE_ENV = originalEnv;
+    }
+  }, 20000);
 
   it.each(sequences)("round-trips UI sequence %s", async (sequence) => {
     const originalEnv = process.env.NODE_ENV;

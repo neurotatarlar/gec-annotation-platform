@@ -1837,7 +1837,7 @@ const tokenReducer = (state: EditorHistoryState, action: Action): EditorHistoryS
       }
       tokens.splice(start, oldSlice.length, ...replacement);
       const next: EditorPresentState = { ...state.present, tokens };
-      if (oldSliceAllInserted) {
+      if (oldSliceAllInserted && isInsertPlaceholder(oldSlice)) {
         // Do not record the transient empty insertion; push the pre-insert snapshot instead.
         const preInsertTokens = cloneTokens(state.present.tokens);
         preInsertTokens.splice(start, oldSlice.length); // remove the placeholder slice
