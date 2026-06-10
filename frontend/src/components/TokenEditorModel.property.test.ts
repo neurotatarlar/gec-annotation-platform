@@ -99,8 +99,67 @@ type ChainContext = {
   selection: SelectionRange;
   details: string[];
 };
+type ChainProfile = {
+  name: string;
+  selectionOffset: number;
+  selectionModulo: number;
+  addStride: number;
+  moveStride: number;
+  editStride: number;
+  changedStride: number;
+  addOffset: number;
+  moveOffset: number;
+  editOffset: number;
+  changedOffset: number;
+  moveSizeOffset: number;
+  editSizeOffset: number;
+  changedSizeOffset: number;
+  dropMultiplier: number;
+  dropStride: number;
+  splitOffset: number;
+};
 
 const chainActions: ChainAction[] = ["move", "edit", "delete", "select", "add"];
+const chainProfiles: ChainProfile[] = [
+  {
+    name: "forward",
+    selectionOffset: 0,
+    selectionModulo: 3,
+    addStride: 5,
+    moveStride: 7,
+    editStride: 7,
+    changedStride: 7,
+    addOffset: 0,
+    moveOffset: 0,
+    editOffset: 0,
+    changedOffset: 0,
+    moveSizeOffset: 0,
+    editSizeOffset: 0,
+    changedSizeOffset: 0,
+    dropMultiplier: 5,
+    dropStride: 11,
+    splitOffset: 0,
+  },
+  {
+    name: "shifted",
+    selectionOffset: 1,
+    selectionModulo: 4,
+    addStride: 7,
+    moveStride: 11,
+    editStride: 13,
+    changedStride: 5,
+    addOffset: 3,
+    moveOffset: 5,
+    editOffset: 2,
+    changedOffset: 4,
+    moveSizeOffset: 1,
+    editSizeOffset: 1,
+    changedSizeOffset: 2,
+    dropMultiplier: 9,
+    dropStride: 7,
+    splitOffset: 1,
+  },
+];
 const chainText =
   "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma";
 
@@ -214,7 +273,8 @@ const selectRangeForStep = (
   chainIndex: number,
   step: number,
   action: ChainAction,
-  currentSelection: SelectionRange
+  currentSelection: SelectionRange,
+  profile: ChainProfile
 ): [number, number] | null => {
   const currentStart = currentSelection.start;
   if (
@@ -224,7 +284,7 @@ const selectRangeForStep = (
     action !== "select" &&
     action !== "add" &&
     action !== "move" &&
-    (step + chainIndex) % 3 !== 0
+    (step + chainIndex + profile.selectionOffset) % profile.selectionModulo !== 0
   ) {
     const size = Math.min(3, Math.abs(currentSelection.end - currentStart) + 1);
     const range = clampRange(state, Math.min(currentStart, currentSelection.end), size);
@@ -233,23 +293,23 @@ const selectRangeForStep = (
 
   const plain = action === "add" ? plainTokenIndices(state) : [];
   if (plain.length) {
-    const anchor = plain[(chainIndex + step * 5) % plain.length];
+    const anchor = plain[(chainIndex + step * profile.addStride + profile.addOffset) % plain.length];
     return clampRange(state, anchor, 1);
   }
   if (action === "add") return null;
 
   const movable = action === "move" ? plainTokenIndices(state) : [];
   if (movable.length) {
-    const anchor = movable[(chainIndex + step * 7) % movable.length];
-    const size = 1 + ((chainIndex + step) % 3);
+    const anchor = movable[(chainIndex + step * profile.moveStride + profile.moveOffset) % movable.length];
+    const size = 1 + ((chainIndex + step + profile.moveSizeOffset) % 3);
     return clampPlainRange(state, anchor, size);
   }
   if (action === "move") return null;
 
   const editCandidates = action === "edit" ? safeEditTokenIndices(state) : [];
   if (editCandidates.length) {
-    const anchor = editCandidates[(chainIndex + step * 7) % editCandidates.length];
-    const size = 1 + ((chainIndex + step) % 2);
+    const anchor = editCandidates[(chainIndex + step * profile.editStride + profile.editOffset) % editCandidates.length];
+    const size = 1 + ((chainIndex + step + profile.editSizeOffset) % 2);
     return clampRange(state, anchor, size);
   }
   if (action === "edit") return null;
@@ -258,8 +318,8 @@ const selectRangeForStep = (
   const visible = visibleTokenIndices(state);
   const candidates = changed.length ? changed : visible;
   if (!candidates.length) return null;
-  const anchor = candidates[(chainIndex + step * 7) % candidates.length];
-  const size = 1 + ((chainIndex + step) % 3);
+  const anchor = candidates[(chainIndex + step * profile.changedStride + profile.changedOffset) % candidates.length];
+  const size = 1 + ((chainIndex + step + profile.changedSizeOffset) % 3);
   return clampRange(state, anchor, size);
 };
 
@@ -330,9 +390,10 @@ const applyChainAction = (
   context: ChainContext,
   action: ChainAction,
   chainIndex: number,
-  step: number
+  step: number,
+  profile: ChainProfile
 ): ChainContext => {
-  const range = selectRangeForStep(context.state, chainIndex, step, action, context.selection);
+  const range = selectRangeForStep(context.state, chainIndex, step, action, context.selection, profile);
   if (!range) {
     return { ...context, details: [...context.details, `${step}:${action}:skip`] };
   }
@@ -366,7 +427,7 @@ const applyChainAction = (
   }
 
   if (action === "edit") {
-    const split = (chainIndex + step) % 2 === 0;
+    const split = (chainIndex + step + profile.splitOffset) % 2 === 0;
     const newText = split ? `E${chainIndex}_${step} split` : `E${chainIndex}_${step}`;
     return {
       state: tokenEditorReducer(context.state, {
@@ -382,7 +443,8 @@ const applyChainAction = (
   if (action === "add") {
     const inserted = tokenEditorReducer(context.state, { type: "INSERT_TOKEN_AFTER_SELECTED", range: normalizedRange });
     const insertIndex = Math.min(end + 1, inserted.present.tokens.length - 1);
-    const newText = (chainIndex + step) % 2 === 0 ? `A${chainIndex}_${step}` : `A${chainIndex}_${step} plus`;
+    const newText =
+      (chainIndex + step + profile.splitOffset) % 2 === 0 ? `A${chainIndex}_${step}` : `A${chainIndex}_${step} plus`;
     return {
       state: tokenEditorReducer(inserted, {
         type: "EDIT_SELECTED_RANGE_AS_TEXT",
@@ -397,7 +459,7 @@ const applyChainAction = (
   const tokenCount = context.state.present.tokens.length;
   let toIndex = chooseSafeMoveDropIndex(
     context.state,
-    (chainIndex * 5 + step * 11) % (tokenCount + 1),
+    (chainIndex * profile.dropMultiplier + step * profile.dropStride) % (tokenCount + 1),
     start,
     end
   );
@@ -676,38 +738,44 @@ describe("model property round-trips", () => {
   it("exhaustively validates N=5 operation chains with every undo depth", async () => {
     const chains = enumerateActionChains(5);
 
-    for (let chainIndex = 0; chainIndex < chains.length; chainIndex += 1) {
-      const chain = chains[chainIndex];
-      let context: ChainContext = {
-        state: tokenEditorReducer(createInitialHistoryState(), { type: "INIT_FROM_TEXT", text: chainText }),
-        selection: { start: null, end: null },
-        details: [],
-      };
-      const undoableSnapshots: EditorHistoryState[] = [context.state];
+    for (const profile of chainProfiles) {
+      for (let chainIndex = 0; chainIndex < chains.length; chainIndex += 1) {
+        const chain = chains[chainIndex];
+        let context: ChainContext = {
+          state: tokenEditorReducer(createInitialHistoryState(), { type: "INIT_FROM_TEXT", text: chainText }),
+          selection: { start: null, end: null },
+          details: [],
+        };
+        const undoableSnapshots: EditorHistoryState[] = [context.state];
 
-      for (let step = 0; step < chain.length; step += 1) {
-        const previousPastLength = context.state.past.length;
-        context = applyChainAction(context, chain[step], chainIndex, step);
-        if (context.state.past.length > previousPastLength) {
-          undoableSnapshots.push(context.state);
-        }
-        await assertPayloadHydrates(context.state, context.details, `chain=${chain.join(">")} step=${step}`);
-      }
-
-      const maxUndoDepth = Math.min(chain.length, undoableSnapshots.length - 1);
-      for (let undoDepth = 1; undoDepth <= maxUndoDepth; undoDepth += 1) {
-        let undone = context.state;
-        for (let count = 0; count < undoDepth; count += 1) {
-          undone = tokenEditorReducer(undone, { type: "UNDO" });
-        }
-        const expected = undoableSnapshots[undoableSnapshots.length - 1 - undoDepth];
-        if (!sameDisplayState(undone, expected)) {
-          throw new Error(
-            `Undo mismatch chain=${chain.join(">")} M=${undoDepth}\n` +
-              `ops=${context.details.join(",")}\n` +
-              `expected=${debugTokenList(expected.present.tokens)}\n` +
-              `actual=${debugTokenList(undone.present.tokens)}`
+        for (let step = 0; step < chain.length; step += 1) {
+          const previousPastLength = context.state.past.length;
+          context = applyChainAction(context, chain[step], chainIndex, step, profile);
+          if (context.state.past.length > previousPastLength) {
+            undoableSnapshots.push(context.state);
+          }
+          await assertPayloadHydrates(
+            context.state,
+            context.details,
+            `profile=${profile.name} chain=${chain.join(">")} step=${step}`
           );
+        }
+
+        const maxUndoDepth = Math.min(chain.length, undoableSnapshots.length - 1);
+        for (let undoDepth = 1; undoDepth <= maxUndoDepth; undoDepth += 1) {
+          let undone = context.state;
+          for (let count = 0; count < undoDepth; count += 1) {
+            undone = tokenEditorReducer(undone, { type: "UNDO" });
+          }
+          const expected = undoableSnapshots[undoableSnapshots.length - 1 - undoDepth];
+          if (!sameDisplayState(undone, expected)) {
+            throw new Error(
+              `Undo mismatch profile=${profile.name} chain=${chain.join(">")} M=${undoDepth}\n` +
+                `ops=${context.details.join(",")}\n` +
+                `expected=${debugTokenList(expected.present.tokens)}\n` +
+                `actual=${debugTokenList(undone.present.tokens)}`
+            );
+          }
         }
       }
     }

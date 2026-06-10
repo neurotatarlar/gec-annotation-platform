@@ -3973,6 +3973,161 @@ describe("UI hydration matrix", () => {
 
   const sequences = permute(["delete", "insert", "edit", "move"]).map((sequence) => [sequence]);
 
+  it("checks repeated UI edits on the same token after backend echo", async () => {
+    const originalEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = "development";
+    localStorage.clear();
+    mockGet.mockReset();
+    mockPost.mockReset();
+
+    let serverAnnotations: any[] = [];
+    try {
+      mockPost.mockImplementation((url: string, payload: any) => {
+        if (url.includes("/render")) {
+          return Promise.resolve({ data: { corrected_text: "rendered" } });
+        }
+        if (url.includes("/annotations")) {
+          serverAnnotations = (payload.annotations ?? []).map((ann: any, idx: number) => ({
+            ...ann,
+            id: 800 + idx,
+            author_id: "user-1",
+            version: 1,
+          }));
+          return Promise.resolve({ data: serverAnnotations });
+        }
+        return Promise.resolve({ data: {} });
+      });
+
+      const getImpl = (url: string) => {
+        if (url.includes("/api/error-types")) return Promise.resolve({ data: errorTypes });
+        if (url.includes("/annotations")) return Promise.resolve({ data: serverAnnotations });
+        return Promise.resolve({ data: {} });
+      };
+
+      await renderEditor("alpha beta gamma delta", { getImpl });
+      const user = userEvent.setup();
+
+      await user.dblClick(await screen.findByRole("button", { name: "beta" }));
+      const betaInput = await screen.findByDisplayValue("beta");
+      await user.clear(betaInput);
+      await user.type(betaInput, "BETA");
+      fireEvent.blur(betaInput);
+
+      await waitFor(() => expect(serverAnnotations).toHaveLength(1), { timeout: 4000 });
+      await waitFor(async () => {
+        expect(await readPanelTokenLabels()).toEqual(["alpha", "BETA", "gamma", "delta"]);
+      });
+      expect(serverAnnotations[0].payload?.after_tokens?.map((token: any) => token.text)).toEqual(["BETA"]);
+
+      await user.dblClick(await screen.findByRole("button", { name: "BETA" }));
+      const reeditInput = await screen.findByDisplayValue("BETA");
+      await user.clear(reeditInput);
+      await user.type(reeditInput, "BETTER");
+      fireEvent.blur(reeditInput);
+
+      await waitFor(() => {
+        expect(serverAnnotations).toHaveLength(1);
+        expect(serverAnnotations[0].payload?.after_tokens?.map((token: any) => token.text)).toEqual(["BETTER"]);
+      }, { timeout: 4000 });
+      await waitFor(async () => {
+        expect(await readPanelTokenLabels()).toEqual(["alpha", "BETTER", "gamma", "delta"]);
+      });
+
+      await user.click(await screen.findByTitle("tokenEditor.undo (Ctrl+Z)"));
+      await waitFor(() => {
+        expect(serverAnnotations).toHaveLength(1);
+        expect(serverAnnotations[0].payload?.after_tokens?.map((token: any) => token.text)).toEqual(["BETA"]);
+      }, { timeout: 4000 });
+      await waitFor(async () => {
+        expect(await readPanelTokenLabels()).toEqual(["alpha", "BETA", "gamma", "delta"]);
+      });
+
+      cleanup();
+      await renderEditor("alpha beta gamma delta", { getImpl });
+      await waitFor(async () => {
+        expect(await readPanelTokenLabels()).toEqual(["alpha", "BETA", "gamma", "delta"]);
+      });
+    } finally {
+      process.env.NODE_ENV = originalEnv;
+    }
+  }, 20000);
+
+  it("checks insertion next to a deletion placeholder with undo and reload", async () => {
+    const originalEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = "development";
+    localStorage.clear();
+    mockGet.mockReset();
+    mockPost.mockReset();
+
+    let serverAnnotations: any[] = [];
+    try {
+      mockPost.mockImplementation((url: string, payload: any) => {
+        if (url.includes("/render")) {
+          return Promise.resolve({ data: { corrected_text: "rendered" } });
+        }
+        if (url.includes("/annotations")) {
+          serverAnnotations = (payload.annotations ?? []).map((ann: any, idx: number) => ({
+            ...ann,
+            id: 900 + idx,
+            author_id: "user-1",
+            version: 1,
+          }));
+          return Promise.resolve({ data: serverAnnotations });
+        }
+        return Promise.resolve({ data: {} });
+      });
+
+      const getImpl = (url: string) => {
+        if (url.includes("/api/error-types")) return Promise.resolve({ data: errorTypes });
+        if (url.includes("/annotations")) return Promise.resolve({ data: serverAnnotations });
+        return Promise.resolve({ data: {} });
+      };
+
+      await renderEditor("alpha beta gamma delta epsilon", { getImpl });
+      const user = userEvent.setup();
+
+      await user.click(await screen.findByRole("button", { name: "gamma" }));
+      await user.click(await screen.findByTitle("tokenEditor.delete (Del)"));
+      await waitFor(() => expect(serverAnnotations).toHaveLength(1), { timeout: 4000 });
+      await waitFor(async () => {
+        expect(await readPanelTokenLabels()).toEqual(["alpha", "beta", "⬚", "delta", "epsilon"]);
+      });
+
+      await user.click(await screen.findByRole("button", { name: "beta" }));
+      await user.click(await screen.findByTitle("tokenEditor.insertAfter (Insert)"));
+      await user.type(await screen.findByPlaceholderText("tokenEditor.editPlaceholder"), "INS");
+      fireEvent.blur(await screen.findByDisplayValue("INS"));
+
+      await waitFor(() => expect(serverAnnotations).toHaveLength(2), { timeout: 4000 });
+      await waitFor(async () => {
+        expect(await readPanelTokenLabels()).toEqual(["alpha", "beta", "INS", "⬚", "delta", "epsilon"]);
+      });
+
+      await user.click(await screen.findByTitle("tokenEditor.undo (Ctrl+Z)"));
+      await waitFor(() => expect(serverAnnotations).toHaveLength(1), { timeout: 4000 });
+      await waitFor(async () => {
+        expect(await readPanelTokenLabels()).toEqual(["alpha", "beta", "⬚", "delta", "epsilon"]);
+      });
+
+      await user.click(await screen.findByRole("button", { name: "beta" }));
+      await user.click(await screen.findByTitle("tokenEditor.insertAfter (Insert)"));
+      await user.type(await screen.findByPlaceholderText("tokenEditor.editPlaceholder"), "INS2");
+      fireEvent.blur(await screen.findByDisplayValue("INS2"));
+
+      await waitFor(() => expect(serverAnnotations).toHaveLength(2), { timeout: 4000 });
+      const beforeReloadLabels = await readPanelTokenLabels();
+      expect(beforeReloadLabels).toEqual(["alpha", "beta", "INS2", "⬚", "delta", "epsilon"]);
+
+      cleanup();
+      await renderEditor("alpha beta gamma delta epsilon", { getImpl });
+      await waitFor(async () => {
+        expect(await readPanelTokenLabels()).toEqual(beforeReloadLabels);
+      });
+    } finally {
+      process.env.NODE_ENV = originalEnv;
+    }
+  }, 20000);
+
   it("checks a deep UI edit chain after every backend echo", async () => {
     const originalEnv = process.env.NODE_ENV;
     process.env.NODE_ENV = "development";
