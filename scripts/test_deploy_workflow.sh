@@ -64,14 +64,19 @@ export DEPLOY_APP_DIR=/srv/gec
 export DEPLOY_FRONTEND_DIST_DIR=/srv/www/gec
 export DEPLOY_SERVICE_NAME=gec-api
 export DEPLOY_GIT_SHA=0123456789abcdef
+export DEPLOY_SSH_KEY=/tmp/deploy-test-key
 
 "$ORCHESTRATOR" all
 
 [[ $(grep -c '^ssh ' "$COMMAND_LOG") -eq 3 ]] || fail "expected three SSH calls"
 assert_log_contains "<deploy@vps.example>"
+assert_log_contains "<-i> </tmp/deploy-test-key>"
 assert_log_contains "test -d '/srv/gec/app'"
+assert_log_contains "process.versions.node"
 assert_log_contains "pgbackrest --stanza=gec --type=incr backup"
+assert_log_contains "pg_dump --format=custom"
 assert_log_contains "deploy.py> <deploy> <--host> <deploy@vps.example>"
+assert_log_contains "<--ssh-key> </tmp/deploy-test-key>"
 assert_log_contains "<--app-dir> </srv/gec>"
 assert_log_contains "<--frontend-dist-dir> </srv/www/gec>"
 assert_log_contains "<--service-name> <gec-api>"

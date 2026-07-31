@@ -22,12 +22,18 @@ def run_local_command(cmd: list[str], **kwargs) -> None:
     subprocess.run(cmd, check=True, **kwargs)
 
 
-def run_remote_script(host: str, env: dict[str, str], script: str) -> None:
+def ssh_options(ssh_key: str | None) -> list[str]:
+    if not ssh_key:
+        return []
+    return ["-i", ssh_key]
+
+
+def run_remote_script(host: str, env: dict[str, str], script: str, ssh_key: str | None = None) -> None:
     env_prefix = " ".join(f"{key}={shlex.quote(value)}" for key, value in env.items() if value is not None)
     remote_cmd = f"{env_prefix} bash -s" if env_prefix else "bash -s"
     print(f"$ ssh {host} {remote_cmd}")
     subprocess.run(
-        ["ssh", host, remote_cmd],
+        ["ssh", *ssh_options(ssh_key), host, remote_cmd],
         check=True,
         input=script.encode("utf-8"),
     )
@@ -70,7 +76,14 @@ def init_command(args: argparse.Namespace) -> None:
         REMOTE_USER=$(whoami)
 
         sudo apt update
-        sudo apt install -y git rsync python3 python3-venv python3-pip nodejs npm nginx postgresql postgresql-contrib ufw pgbackrest
+        sudo apt install -y ca-certificates curl gnupg git rsync python3 python3-venv python3-pip nginx postgresql postgresql-contrib ufw pgbackrest
+
+        sudo install -d -m 0755 /etc/apt/keyrings
+        curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key -o /tmp/nodesource.gpg.key
+        sudo gpg --dearmor --yes -o /etc/apt/keyrings/nodesource.gpg /tmp/nodesource.gpg.key
+        echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" | sudo tee /etc/apt/sources.list.d/nodesource.list >/dev/null
+        sudo apt update
+        sudo apt install -y nodejs
 
         PG_CONF="/etc/postgresql/15/main/postgresql.conf"
         PG_HBA=$(sudo -u postgres -H sh -c "cd / && psql -qtAc 'SHOW hba_file;'" | tr -d '[:space:]')
@@ -235,12 +248,13 @@ NGINX
         """
     )
 
-    run_remote_script(args.host, env, script)
+    run_remote_script(args.host, env, script, args.ssh_key)
 
 
 def deploy_command(args: argparse.Namespace) -> None:
     rsync_excludes = [
         "--exclude=.git",
+        "--exclude=.codex",
         "--exclude=.DS_Store",
         "--exclude=__pycache__",
         "--exclude=frontend/node_modules",
@@ -249,7 +263,10 @@ def deploy_command(args: argparse.Namespace) -> None:
     ]
 
     target_path = f"{args.host}:{args.app_dir}/app/"
-    rsync_cmd = ["rsync", "-az", "--delete", *rsync_excludes, f"{REPO_ROOT}/", target_path]
+    rsync_cmd = ["rsync", "-az", "--delete"]
+    if args.ssh_key:
+        rsync_cmd.extend(["-e", f"ssh -i {shlex.quote(args.ssh_key)}"])
+    rsync_cmd.extend([*rsync_excludes, f"{REPO_ROOT}/", target_path])
     run_local_command(rsync_cmd)
 
     env = {
@@ -277,6 +294,8 @@ def deploy_command(args: argparse.Namespace) -> None:
           source "$APP_DIR/backend.env"
           set +a
         fi
+
+        cd /
 
         PY_BIN="$APP_DIR/venv/bin/python"
         if [[ ! -x "$PY_BIN" ]]; then
@@ -330,7 +349,7 @@ PY
 
         echo "Building frontend..."
         cd "$APP_DIR/app/frontend"
-        npm install --no-fund --no-audit
+        npm ci --no-fund --no-audit
         VITE_API_URL="$FRONTEND_API_URL" npm run build
 
         echo "Publishing frontend assets..."
@@ -344,7 +363,7 @@ PY
         """
     )
 
-    run_remote_script(args.host, env, script)
+    run_remote_script(args.host, env, script, args.ssh_key)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -359,6 +378,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     init_parser = subparsers.add_parser("init", help="Provision a fresh Debian server.")
     init_parser.add_argument("--host", required=True, help="SSH target (e.g. user@server)")
+    init_parser.add_argument("--ssh-key", help="Private key used for SSH and rsync")
     init_parser.add_argument("--app-dir", default=common_init["app_dir"][0], help=common_init["app_dir"][1])
     init_parser.add_argument(
         "--frontend-dist-dir",
@@ -383,6 +403,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     deploy_parser = subparsers.add_parser("deploy", help="Sync code and restart services.")
     deploy_parser.add_argument("--host", required=True, help="SSH target (e.g. user@server)")
+    deploy_parser.add_argument("--ssh-key", help="Private key used for SSH and rsync")
     deploy_parser.add_argument("--app-dir", default=common_init["app_dir"][0], help=common_init["app_dir"][1])
     deploy_parser.add_argument(
         "--frontend-dist-dir",

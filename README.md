@@ -163,6 +163,7 @@ curl -sS -H "Authorization: Bearer $TOKEN" \
 - Requirements:
   - Debian 12+ server reachable over SSH with a sudo-enabled user
   - local machine with Python 3, `rsync`, and `ssh`
+  - Node.js 20.19+ on the server (the bootstrap installs Node.js 20)
   - DNS/SSL can be layered on later; the helper configures HTTP on port 80
 - One-time server bootstrap:
   ```bash
@@ -188,6 +189,7 @@ curl -sS -H "Authorization: Bearer $TOKEN" \
   ```bash
   python scripts/deploy.py deploy \
     --host user@your-server \
+    --ssh-key ~/.ssh/deploy-key \
     --app-dir /opt/gec-app \
     --frontend-dist-dir /var/www/gec-frontend \
     --service-name gec-backend \
@@ -229,7 +231,8 @@ Create a GitHub environment named `server` and configure these environment value
 
 Run the workflow from **Actions → Deploy server → Run workflow** on `main`. It validates
 SSH and sudo access, checks the existing installation, creates an incremental pgBackRest
-backup when the configured stanza is available, runs the deploy helper, verifies the
+backup when the configured stanza is available or a local `pg_dump` otherwise, runs the
+deploy helper, verifies the
 backend service and local health endpoint, checks the public frontend, and records the
 deployed commit in `$DEPLOY_APP_DIR/deployed-commit`.
 
@@ -237,6 +240,8 @@ The remote orchestration is implemented in `scripts/deploy_workflow.sh` so the G
 workflow and local tests execute the same commands. Run `make deploy-test` before changing
 deployment configuration; its mock integration test verifies validation, SSH targets,
 backup/deploy arguments, health checks, and commit recording without reaching the VPS.
+For local runs with a non-default private key, set `DEPLOY_SSH_KEY`. Fallback database
+dumps are stored under `/var/backups/gec` on the server and retained for 30 days.
 
 ## Project layout
 - `backend/` – FastAPI app, SQLAlchemy models, Alembic migrations, Typer CLI.

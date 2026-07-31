@@ -24,6 +24,7 @@ jobs:
       DEPLOY_FRONTEND_DIST_DIR: ${{ vars.DEPLOY_FRONTEND_DIST_DIR || '/var/www/gec-frontend' }}
       DEPLOY_SERVICE_NAME: ${{ vars.DEPLOY_SERVICE_NAME || 'gec-backend' }}
       DEPLOY_GIT_SHA: ${{ github.sha }}
+      DEPLOY_SSH_KEY: ${{ runner.temp }}/deploy_key
 
     steps:
       - name: Require main branch
@@ -49,7 +50,7 @@ jobs:
             exit 1
           fi
           install -d -m 700 "$HOME/.ssh"
-          (umask 077; printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519")
+          (umask 077; printf '%s\n' "$SSH_PRIVATE_KEY" > "$DEPLOY_SSH_KEY")
           printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
           chmod 600 "$HOME/.ssh/known_hosts"
 

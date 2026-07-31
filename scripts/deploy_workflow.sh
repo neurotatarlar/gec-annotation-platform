@@ -53,17 +53,26 @@ deploy_target() {
   printf '%s@%s' "$DEPLOY_SSH_USER" "$DEPLOY_SSH_HOST"
 }
 
+ssh_args() {
+  if [[ -n "${DEPLOY_SSH_KEY:-}" ]]; then
+    printf '%s\n' -i "$DEPLOY_SSH_KEY"
+  fi
+}
+
 preflight_server() {
   validate_config
   local target
+  local -a options=()
   target=$(deploy_target)
-  ssh -o BatchMode=yes "$target" \
+  readarray -t options < <(ssh_args)
+  ssh "${options[@]}" -o BatchMode=yes "$target" \
     "set -eu
      sudo -n true
      test -d '$DEPLOY_APP_DIR/app'
      test -x '$DEPLOY_APP_DIR/venv/bin/python'
      test -f '$DEPLOY_APP_DIR/backend.env'
      test -d '$DEPLOY_FRONTEND_DIST_DIR'
+     node -e 'const [major, minor] = process.versions.node.split(\".\").map(Number); process.exit((major === 20 && minor >= 19) || (major === 22 && minor >= 12) || major >= 24 ? 0 : 1)'
      sudo systemctl is-enabled '$DEPLOY_SERVICE_NAME' >/dev/null
      df -h '$DEPLOY_APP_DIR' '$DEPLOY_FRONTEND_DIST_DIR'"
 }
@@ -71,23 +80,42 @@ preflight_server() {
 backup_database() {
   validate_config
   local target
+  local -a options=()
   target=$(deploy_target)
-  ssh -o BatchMode=yes "$target" \
+  readarray -t options < <(ssh_args)
+  ssh "${options[@]}" -o BatchMode=yes "$target" \
     "set -eu
      if command -v pgbackrest >/dev/null 2>&1 &&
-        sudo -u postgres pgbackrest --stanza=gec info >/dev/null 2>&1; then
-       sudo -u postgres pgbackrest --stanza=gec --type=incr backup
+        sudo -u postgres pgbackrest --stanza=gec --type=incr backup; then
+       echo 'pgBackRest incremental backup created.'
      else
-       echo 'pgBackRest stanza gec is unavailable; continuing without a new backup.' >&2
+       echo 'pgBackRest stanza gec is unavailable; creating a local pg_dump backup.' >&2
+       set -a
+       . '$DEPLOY_APP_DIR/backend.env'
+       set +a
+       DB_NAME=\$(python3 -c 'import os; from urllib.parse import urlparse; print(urlparse(os.environ[\"DATABASE__URL\"].replace(\"+psycopg\", \"\", 1)).path.lstrip(\"/\"))')
+       test -n \"\$DB_NAME\"
+       BACKUP_DIR=/var/backups/gec
+       BACKUP_FILE=\$BACKUP_DIR/pre-deploy-\$(date -u +%Y%m%dT%H%M%SZ).dump
+       cd /
+       sudo install -d -o postgres -g postgres -m 700 \"\$BACKUP_DIR\"
+       sudo -u postgres pg_dump --format=custom --file=\"\$BACKUP_FILE\" \"\$DB_NAME\"
+       sudo -u postgres find \"\$BACKUP_DIR\" -type f -name 'pre-deploy-*.dump' -mtime +30 -delete
+       echo \"Database backup created: \$BACKUP_FILE\"
      fi"
 }
 
 deploy_commit() {
   validate_config
   local target
+  local -a deploy_args=()
   target=$(deploy_target)
+  if [[ -n "${DEPLOY_SSH_KEY:-}" ]]; then
+    deploy_args+=(--ssh-key "$DEPLOY_SSH_KEY")
+  fi
   python3 "$SCRIPT_DIR/deploy.py" deploy \
     --host "$target" \
+    "${deploy_args[@]}" \
     --app-dir "$DEPLOY_APP_DIR" \
     --frontend-dist-dir "$DEPLOY_FRONTEND_DIST_DIR" \
     --service-name "$DEPLOY_SERVICE_NAME" \
@@ -98,8 +126,10 @@ verify_deployment() {
   validate_config
   require_value DEPLOY_GIT_SHA
   local target
+  local -a options=()
   target=$(deploy_target)
-  ssh -o BatchMode=yes "$target" \
+  readarray -t options < <(ssh_args)
+  ssh "${options[@]}" -o BatchMode=yes "$target" \
     "set -eu
      sudo systemctl is-active --quiet '$DEPLOY_SERVICE_NAME'
      curl --fail --silent --show-error --retry 10 --retry-delay 2 http://127.0.0.1:8000/health >/dev/null
