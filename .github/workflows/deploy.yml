@@ -1,0 +1,127 @@
+name: Deploy server
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-server
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy shared server
+    runs-on: ubuntu-latest
+    environment: server
+    timeout-minutes: 30
+    env:
+      DEPLOY_SSH_HOST: ${{ vars.DEPLOY_SSH_HOST }}
+      DEPLOY_SSH_USER: ${{ vars.DEPLOY_SSH_USER }}
+      DEPLOY_PUBLIC_ORIGIN: ${{ vars.DEPLOY_PUBLIC_ORIGIN }}
+      DEPLOY_APP_DIR: ${{ vars.DEPLOY_APP_DIR || '/opt/gec-app' }}
+      DEPLOY_FRONTEND_DIST_DIR: ${{ vars.DEPLOY_FRONTEND_DIST_DIR || '/var/www/gec-frontend' }}
+      DEPLOY_SERVICE_NAME: ${{ vars.DEPLOY_SERVICE_NAME || 'gec-backend' }}
+
+    steps:
+      - name: Require main branch
+        run: |
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "Deployments must be started from main; got $GITHUB_REF" >&2
+            exit 1
+          fi
+
+      - name: Checkout selected commit
+        uses: actions/checkout@v4
+
+      - name: Validate deployment configuration
+        run: |
+          missing=0
+          for name in DEPLOY_SSH_HOST DEPLOY_SSH_USER DEPLOY_PUBLIC_ORIGIN; do
+            if [[ -z "${!name}" ]]; then
+              echo "Missing GitHub environment variable: $name" >&2
+              missing=1
+            fi
+          done
+          if [[ "$DEPLOY_PUBLIC_ORIGIN" == */ ]]; then
+            echo "DEPLOY_PUBLIC_ORIGIN must not have a trailing slash" >&2
+            missing=1
+          fi
+          exit "$missing"
+
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
+        run: |
+          if [[ -z "$SSH_PRIVATE_KEY" || -z "$SSH_KNOWN_HOSTS" ]]; then
+            echo "DEPLOY_SSH_PRIVATE_KEY and DEPLOY_SSH_KNOWN_HOSTS are required" >&2
+            exit 1
+          fi
+          install -d -m 700 "$HOME/.ssh"
+          (umask 077; printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519")
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Check deployment tools
+        run: |
+          python3 --version
+          rsync --version | head -n 1
+          ssh -V
+
+      - name: Preflight server
+        run: |
+          target="$DEPLOY_SSH_USER@$DEPLOY_SSH_HOST"
+          ssh -o BatchMode=yes "$target" \
+            "set -eu
+             sudo -n true
+             test -d '$DEPLOY_APP_DIR/app'
+             test -x '$DEPLOY_APP_DIR/venv/bin/python'
+             test -f '$DEPLOY_APP_DIR/backend.env'
+             test -d '$DEPLOY_FRONTEND_DIST_DIR'
+             sudo systemctl is-enabled '$DEPLOY_SERVICE_NAME' >/dev/null
+             df -h '$DEPLOY_APP_DIR' '$DEPLOY_FRONTEND_DIST_DIR'"
+
+      - name: Back up database
+        run: |
+          target="$DEPLOY_SSH_USER@$DEPLOY_SSH_HOST"
+          ssh -o BatchMode=yes "$target" \
+            "set -eu
+             if command -v pgbackrest >/dev/null 2>&1 &&
+                sudo -u postgres pgbackrest --stanza=gec info >/dev/null 2>&1; then
+               sudo -u postgres pgbackrest --stanza=gec --type=incr backup
+             else
+               echo 'pgBackRest stanza gec is unavailable; continuing without a new backup.' >&2
+             fi"
+
+      - name: Deploy selected commit
+        run: |
+          target="$DEPLOY_SSH_USER@$DEPLOY_SSH_HOST"
+          python3 scripts/deploy.py deploy \
+            --host "$target" \
+            --app-dir "$DEPLOY_APP_DIR" \
+            --frontend-dist-dir "$DEPLOY_FRONTEND_DIST_DIR" \
+            --service-name "$DEPLOY_SERVICE_NAME" \
+            --frontend-api-url "$DEPLOY_PUBLIC_ORIGIN"
+
+      - name: Verify deployment
+        run: |
+          target="$DEPLOY_SSH_USER@$DEPLOY_SSH_HOST"
+          ssh -o BatchMode=yes "$target" \
+            "set -eu
+             sudo systemctl is-active --quiet '$DEPLOY_SERVICE_NAME'
+             curl --fail --silent --show-error --retry 10 --retry-delay 2 http://127.0.0.1:8000/health >/dev/null
+             printf '%s\n' '$GITHUB_SHA' > '$DEPLOY_APP_DIR/deployed-commit'"
+          curl --fail --silent --show-error --retry 10 --retry-delay 2 \
+            "$DEPLOY_PUBLIC_ORIGIN/" >/dev/null
+
+      - name: Write deployment summary
+        run: |
+          {
+            echo "## Deployment complete"
+            echo ""
+            echo "- Commit: \`$GITHUB_SHA\`"
+            echo "- Server: \`$DEPLOY_SSH_HOST\`"
+            echo "- URL: $DEPLOY_PUBLIC_ORIGIN"
+          } >> "$GITHUB_STEP_SUMMARY"

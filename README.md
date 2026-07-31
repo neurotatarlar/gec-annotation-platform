@@ -206,6 +206,32 @@ curl -sS -H "Authorization: Bearer $TOKEN" \
     `ssh user@your-server "/opt/gec-app/venv/bin/python -m app.cli create-user --username admin --password 'StrongPass123' --admin"`
   - if S3 backups are enabled, archives live under `/var/backups/gec` with 7-day retention and errors go to `/var/log/gec-db-backup.log`
 
+### GitHub Actions deployment
+
+The `Deploy server` workflow wraps the same `scripts/deploy.py deploy` command for the
+single shared server. It is manual-only and deploys from `main`; run it after the `CI`
+workflow has passed for the commit you want to release.
+
+Create a GitHub environment named `server` and configure these environment values:
+
+- Variables:
+  - `DEPLOY_SSH_HOST` – VPS hostname or IP address
+  - `DEPLOY_SSH_USER` – sudo-enabled SSH user
+  - `DEPLOY_PUBLIC_ORIGIN` – public base origin without a trailing slash or `/api`
+  - `DEPLOY_APP_DIR` – optional, defaults to `/opt/gec-app`
+  - `DEPLOY_FRONTEND_DIST_DIR` – optional, defaults to `/var/www/gec-frontend`
+  - `DEPLOY_SERVICE_NAME` – optional, defaults to `gec-backend`
+- Secrets:
+  - `DEPLOY_SSH_PRIVATE_KEY` – private key accepted by the VPS user
+  - `DEPLOY_SSH_KNOWN_HOSTS` – trusted `known_hosts` line for the VPS; obtain and verify
+    the server fingerprint before adding it
+
+Run the workflow from **Actions → Deploy server → Run workflow** on `main`. It validates
+SSH and sudo access, checks the existing installation, creates an incremental pgBackRest
+backup when the configured stanza is available, runs the deploy helper, verifies the
+backend service and local health endpoint, checks the public frontend, and records the
+deployed commit in `$DEPLOY_APP_DIR/deployed-commit`.
+
 ## Project layout
 - `backend/` – FastAPI app, SQLAlchemy models, Alembic migrations, Typer CLI.
 - `frontend/` – React/Vite SPA with RTL-friendly annotation workspace.
