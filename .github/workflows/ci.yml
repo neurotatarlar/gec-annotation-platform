@@ -8,7 +8,12 @@ on:
       - "backend/**"
       - "frontend/**"
       - ".github/workflows/ci.yml"
+      - ".github/workflows/deploy.yml"
       - "docker-compose.yml"
+      - "Makefile"
+      - "scripts/deploy.py"
+      - "scripts/deploy_workflow.sh"
+      - "scripts/test_deploy_workflow.sh"
   workflow_dispatch:
 
 permissions:
@@ -28,6 +33,7 @@ jobs:
       backend_tests: ${{ steps.filter.outputs.backend_tests }}
       frontend_runtime: ${{ steps.filter.outputs.frontend_runtime }}
       frontend_tests: ${{ steps.filter.outputs.frontend_tests }}
+      deployment: ${{ steps.filter.outputs.deployment }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -62,6 +68,13 @@ jobs:
               - 'frontend/src/setupTests.ts'
               - '.github/workflows/ci.yml'
               - 'docker-compose.yml'
+            deployment:
+              - '.github/workflows/ci.yml'
+              - '.github/workflows/deploy.yml'
+              - 'Makefile'
+              - 'scripts/deploy.py'
+              - 'scripts/deploy_workflow.sh'
+              - 'scripts/test_deploy_workflow.sh'
 
   backend-lint:
     name: Backend lint
@@ -202,3 +215,16 @@ jobs:
 
       - name: Frontend build
         run: npm run build
+
+  deployment-tests:
+    name: Deployment workflow tests
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.deployment == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Test deployment orchestration
+        run: make deploy-test

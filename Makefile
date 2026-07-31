@@ -12,7 +12,7 @@ FRONTEND_PID_FILE := $(RUN_DIR)/frontend.pid
 
 .PHONY: help env backend-env frontend-env install backend-install frontend-install \
 	backend-migrate backend-run frontend-run dev native-start native-stop up down \
-	backend-lint backend-test frontend-test frontend-build lint test check \
+	backend-lint backend-test frontend-test frontend-build deploy-test lint test check \
 	docker-db docker-migrate docker-up docker-down
 
 help:
@@ -31,6 +31,7 @@ help:
 	@echo "  make backend-test     Run backend pytest suite"
 	@echo "  make frontend-test    Run frontend Vitest suite"
 	@echo "  make frontend-build   Build frontend production bundle"
+	@echo "  make deploy-test      Test deployment orchestration with mocked external commands"
 	@echo "  make lint             Run all lint checks"
 	@echo "  make test             Run all test suites"
 	@echo "  make check            Run lint, tests, and frontend build"
@@ -109,9 +110,12 @@ frontend-test:
 frontend-build:
 	cd $(FRONTEND_DIR) && npm run build
 
+deploy-test:
+	bash scripts/test_deploy_workflow.sh
+
 lint: backend-lint
 
-test: backend-test frontend-test
+test: backend-test frontend-test deploy-test
 
 check: lint test frontend-build
 

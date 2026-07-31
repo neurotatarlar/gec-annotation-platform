@@ -138,6 +138,7 @@ curl -sS -H "Authorization: Bearer $TOKEN" \
 ## Testing
 - Frontend: `cd frontend && npm test`
 - Backend: `cd backend && pytest` (after `pip install -r requirements-dev.txt`)
+- Deployment workflow orchestration: `make deploy-test` (uses mocked SSH/curl commands and does not contact the server)
 
 ## Coding conventions
 - Python: 4-space indentation; Ruff enforces a 100-character line length in `backend/pyproject.toml`. Keep route handlers thin, keep Pydantic schemas typed, and move business logic into `backend/app/services/`.
@@ -231,6 +232,11 @@ SSH and sudo access, checks the existing installation, creates an incremental pg
 backup when the configured stanza is available, runs the deploy helper, verifies the
 backend service and local health endpoint, checks the public frontend, and records the
 deployed commit in `$DEPLOY_APP_DIR/deployed-commit`.
+
+The remote orchestration is implemented in `scripts/deploy_workflow.sh` so the GitHub
+workflow and local tests execute the same commands. Run `make deploy-test` before changing
+deployment configuration; its mock integration test verifies validation, SSH targets,
+backup/deploy arguments, health checks, and commit recording without reaching the VPS.
 
 ## Project layout
 - `backend/` – FastAPI app, SQLAlchemy models, Alembic migrations, Typer CLI.

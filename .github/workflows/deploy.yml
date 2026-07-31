@@ -23,6 +23,7 @@ jobs:
       DEPLOY_APP_DIR: ${{ vars.DEPLOY_APP_DIR || '/opt/gec-app' }}
       DEPLOY_FRONTEND_DIST_DIR: ${{ vars.DEPLOY_FRONTEND_DIST_DIR || '/var/www/gec-frontend' }}
       DEPLOY_SERVICE_NAME: ${{ vars.DEPLOY_SERVICE_NAME || 'gec-backend' }}
+      DEPLOY_GIT_SHA: ${{ github.sha }}
 
     steps:
       - name: Require main branch
@@ -36,19 +37,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Validate deployment configuration
-        run: |
-          missing=0
-          for name in DEPLOY_SSH_HOST DEPLOY_SSH_USER DEPLOY_PUBLIC_ORIGIN; do
-            if [[ -z "${!name}" ]]; then
-              echo "Missing GitHub environment variable: $name" >&2
-              missing=1
-            fi
-          done
-          if [[ "$DEPLOY_PUBLIC_ORIGIN" == */ ]]; then
-            echo "DEPLOY_PUBLIC_ORIGIN must not have a trailing slash" >&2
-            missing=1
-          fi
-          exit "$missing"
+        run: scripts/deploy_workflow.sh validate
 
       - name: Configure SSH
         env:
@@ -71,50 +60,16 @@ jobs:
           ssh -V
 
       - name: Preflight server
-        run: |
-          target="$DEPLOY_SSH_USER@$DEPLOY_SSH_HOST"
-          ssh -o BatchMode=yes "$target" \
-            "set -eu
-             sudo -n true
-             test -d '$DEPLOY_APP_DIR/app'
-             test -x '$DEPLOY_APP_DIR/venv/bin/python'
-             test -f '$DEPLOY_APP_DIR/backend.env'
-             test -d '$DEPLOY_FRONTEND_DIST_DIR'
-             sudo systemctl is-enabled '$DEPLOY_SERVICE_NAME' >/dev/null
-             df -h '$DEPLOY_APP_DIR' '$DEPLOY_FRONTEND_DIST_DIR'"
+        run: scripts/deploy_workflow.sh preflight
 
       - name: Back up database
-        run: |
-          target="$DEPLOY_SSH_USER@$DEPLOY_SSH_HOST"
-          ssh -o BatchMode=yes "$target" \
-            "set -eu
-             if command -v pgbackrest >/dev/null 2>&1 &&
-                sudo -u postgres pgbackrest --stanza=gec info >/dev/null 2>&1; then
-               sudo -u postgres pgbackrest --stanza=gec --type=incr backup
-             else
-               echo 'pgBackRest stanza gec is unavailable; continuing without a new backup.' >&2
-             fi"
+        run: scripts/deploy_workflow.sh backup
 
       - name: Deploy selected commit
-        run: |
-          target="$DEPLOY_SSH_USER@$DEPLOY_SSH_HOST"
-          python3 scripts/deploy.py deploy \
-            --host "$target" \
-            --app-dir "$DEPLOY_APP_DIR" \
-            --frontend-dist-dir "$DEPLOY_FRONTEND_DIST_DIR" \
-            --service-name "$DEPLOY_SERVICE_NAME" \
-            --frontend-api-url "$DEPLOY_PUBLIC_ORIGIN"
+        run: scripts/deploy_workflow.sh deploy
 
       - name: Verify deployment
-        run: |
-          target="$DEPLOY_SSH_USER@$DEPLOY_SSH_HOST"
-          ssh -o BatchMode=yes "$target" \
-            "set -eu
-             sudo systemctl is-active --quiet '$DEPLOY_SERVICE_NAME'
-             curl --fail --silent --show-error --retry 10 --retry-delay 2 http://127.0.0.1:8000/health >/dev/null
-             printf '%s\n' '$GITHUB_SHA' > '$DEPLOY_APP_DIR/deployed-commit'"
-          curl --fail --silent --show-error --retry 10 --retry-delay 2 \
-            "$DEPLOY_PUBLIC_ORIGIN/" >/dev/null
+        run: scripts/deploy_workflow.sh verify
 
       - name: Write deployment summary
         run: |
