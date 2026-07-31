@@ -70,6 +70,7 @@ export DEPLOY_SSH_KEY=/tmp/deploy-test-key
 
 [[ $(grep -c '^ssh ' "$COMMAND_LOG") -eq 3 ]] || fail "expected three SSH calls"
 assert_log_contains "<deploy@vps.example>"
+assert_log_contains "<-o> <IdentitiesOnly=yes>"
 assert_log_contains "<-i> </tmp/deploy-test-key>"
 assert_log_contains "test -d '/srv/gec/app'"
 assert_log_contains "process.versions.node"

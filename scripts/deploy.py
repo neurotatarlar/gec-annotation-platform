@@ -25,7 +25,7 @@ def run_local_command(cmd: list[str], **kwargs) -> None:
 def ssh_options(ssh_key: str | None) -> list[str]:
     if not ssh_key:
         return []
-    return ["-i", ssh_key]
+    return ["-o", "IdentitiesOnly=yes", "-i", ssh_key]
 
 
 def run_remote_script(host: str, env: dict[str, str], script: str, ssh_key: str | None = None) -> None:
@@ -265,7 +265,7 @@ def deploy_command(args: argparse.Namespace) -> None:
     target_path = f"{args.host}:{args.app_dir}/app/"
     rsync_cmd = ["rsync", "-az", "--delete"]
     if args.ssh_key:
-        rsync_cmd.extend(["-e", f"ssh -i {shlex.quote(args.ssh_key)}"])
+        rsync_cmd.extend(["-e", f"ssh -o IdentitiesOnly=yes -i {shlex.quote(args.ssh_key)}"])
     rsync_cmd.extend([*rsync_excludes, f"{REPO_ROOT}/", target_path])
     run_local_command(rsync_cmd)
 

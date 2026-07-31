@@ -55,7 +55,7 @@ deploy_target() {
 
 ssh_args() {
   if [[ -n "${DEPLOY_SSH_KEY:-}" ]]; then
-    printf '%s\n' -i "$DEPLOY_SSH_KEY"
+    printf '%s\n' -o IdentitiesOnly=yes -i "$DEPLOY_SSH_KEY"
   fi
 }
 

@@ -51,6 +51,9 @@ jobs:
           install -d -m 700 "$HOME/.ssh"
           deploy_ssh_key="$RUNNER_TEMP/deploy_key"
           (umask 077; printf '%s\n' "$SSH_PRIVATE_KEY" > "$deploy_ssh_key")
+          ssh-keygen -y -f "$deploy_ssh_key" > "$RUNNER_TEMP/deploy_key.pub"
+          echo "Deployment key fingerprint:"
+          ssh-keygen -lf "$RUNNER_TEMP/deploy_key.pub"
           printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
           chmod 600 "$HOME/.ssh/known_hosts"
           printf 'DEPLOY_SSH_KEY=%s\n' "$deploy_ssh_key" >> "$GITHUB_ENV"
