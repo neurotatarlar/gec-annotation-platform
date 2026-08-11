@@ -260,6 +260,7 @@ def deploy_command(args: argparse.Namespace) -> None:
         "--exclude=frontend/node_modules",
         "--exclude=frontend/dist",
         "--exclude=backend/.venv",
+        "--exclude=output",
     ]
 
     target_path = f"{args.host}:{args.app_dir}/app/"
