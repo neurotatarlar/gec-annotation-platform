@@ -1,0 +1,94 @@
+[
+  {
+    "name": "replace delete and insert",
+    "source": "alpha beta gamma",
+    "annotations": [
+      {
+        "id": 1,
+        "start_token": 0,
+        "end_token": 0,
+        "replacement": "ALPHA",
+        "error_type_id": 1,
+        "payload": {
+          "operation": "replace",
+          "before_tokens": ["base-0"],
+          "after_tokens": [{"id": "base-0", "text": "ALPHA", "origin": "base"}],
+          "text_tokens": ["alpha", "beta", "gamma"]
+        }
+      },
+      {
+        "id": 2,
+        "start_token": 1,
+        "end_token": 1,
+        "replacement": null,
+        "error_type_id": 2,
+        "payload": {
+          "operation": "delete",
+          "before_tokens": ["base-1"],
+          "after_tokens": [],
+          "text_tokens": ["alpha", "beta", "gamma"]
+        }
+      },
+      {
+        "id": 3,
+        "start_token": 2,
+        "end_token": 1,
+        "replacement": "new",
+        "error_type_id": 3,
+        "payload": {
+          "operation": "insert",
+          "before_tokens": [],
+          "after_tokens": [{"id": "inserted-1", "text": "new", "origin": "inserted"}],
+          "text_tokens": ["alpha", "beta", "gamma"]
+        }
+      }
+    ],
+    "expected_tokens": ["ALPHA", "new", "gamma"]
+  },
+  {
+    "name": "move source tokens",
+    "source": "alpha beta gamma delta",
+    "annotations": [
+      {
+        "id": 10,
+        "start_token": 0,
+        "end_token": 0,
+        "replacement": "gamma",
+        "error_type_id": 4,
+        "payload": {
+          "operation": "move",
+          "before_tokens": ["base-2"],
+          "after_tokens": [{"id": "base-2", "text": "gamma", "origin": "base"}],
+          "move_from": 2,
+          "move_to": 0,
+          "move_len": 1,
+          "text_tokens": ["alpha", "beta", "gamma", "delta"]
+        }
+      }
+    ],
+    "expected_tokens": ["gamma", "alpha", "beta", "delta"]
+  },
+  {
+    "name": "edit a token after moving it",
+    "source": "alpha beta gamma delta epsilon",
+    "annotations": [
+      {
+        "id": 20,
+        "start_token": 0,
+        "end_token": 1,
+        "replacement": "DELTA",
+        "error_type_id": 1,
+        "payload": {
+          "operation": "move",
+          "before_tokens": ["base-2", "base-3"],
+          "after_tokens": [{"id": "edited-move", "text": "DELTA", "origin": "base"}],
+          "move_from": 2,
+          "move_to": 0,
+          "move_len": 2,
+          "text_tokens": ["alpha", "beta", "gamma", "delta", "epsilon"]
+        }
+      }
+    ],
+    "expected_tokens": ["DELTA", "alpha", "beta", "epsilon"]
+  }
+]

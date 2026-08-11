@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import uuid
@@ -24,6 +25,8 @@ from app.models import (
     CrossValidationResult,
 )
 from app.services.auth import get_current_user, get_db
+from app.services.annotation_saves import sha256_text, sha256_tokens
+from app.services.m2_export import parse_and_apply_m2_block
 
 
 def override_get_db():
@@ -485,3 +488,110 @@ def test_import_export_round_trip_preserves_blocks(client):
     record = next(item for item in records if item["source"].startswith("Rainy day"))
     assert record["edits"]
     assert any(edit["error_type"] == "PUNC" for edit in record["edits"])
+
+
+def test_export_m2_filters_category_and_round_trips(client):
+    with db.SessionLocal() as session:
+        category = Category(name="M2Cat")
+        session.add(category)
+        session.flush()
+        text = TextSample(content="alpha beta", category_id=category.id, required_annotations=1)
+        session.add(text)
+        session.flush()
+        text_id = text.id
+        category_id = category.id
+        error_type = session.query(ErrorType).first()
+        tokens = ["alpha", "beta"]
+        session.add(AnnotationTask(text_id=text.id, annotator_id=TEST_USER_ID, status="submitted"))
+        session.add(
+            Annotation(
+                text_id=text.id,
+                author_id=TEST_USER_ID,
+                start_token=0,
+                end_token=0,
+                replacement="ALPHA",
+                error_type_id=error_type.id,
+                payload={
+                    "operation": "replace",
+                    "before_tokens": ["base-0"],
+                    "after_tokens": [{"id": "base-0", "text": "ALPHA", "origin": "base"}],
+                    "text_sha256": sha256_text(text.content),
+                    "text_tokens": tokens,
+                    "text_tokens_sha256": sha256_tokens(tokens),
+                },
+            )
+        )
+        session.commit()
+
+    resp = client.get(
+        "/api/texts/export",
+        params={"category_ids": str(category_id), "format": "m2"},
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["content-disposition"].endswith('.m2"')
+    assert resp.headers["x-m2-selected-texts"] == "1"
+    assert resp.headers["x-m2-annotation-rows"] == "1"
+    assert resp.headers["x-m2-unattributed-label-edits"] == "0"
+    source, target = parse_and_apply_m2_block(resp.text)
+    assert source == ["alpha", "beta"]
+    assert target == ["ALPHA", "beta"]
+    assert text_id is not None
+
+    audit_resp = client.get(
+        "/api/texts/export",
+        params={"category_ids": str(category_id), "format": "m2-audit"},
+    )
+    assert audit_resp.status_code == 200, audit_resp.text
+    audit = audit_resp.json()
+    assert audit["format"] == "m2-audit-v1"
+    assert audit["m2_sha256"] == hashlib.sha256(resp.content).hexdigest()
+    assert audit["counts"]["selected_texts"] == 1
+    assert audit["label_issues"] == []
+
+
+def test_export_m2_fails_entire_export_on_invalid_snapshot(client):
+    with db.SessionLocal() as session:
+        category = Category(name="InvalidM2Cat")
+        session.add(category)
+        session.flush()
+        category_id = category.id
+        text = TextSample(content="bad snapshot", category_id=category.id, required_annotations=1)
+        session.add(text)
+        session.flush()
+        error_type = session.query(ErrorType).first()
+        session.add(AnnotationTask(text_id=text.id, annotator_id=TEST_USER_ID, status="submitted"))
+        session.add(
+            Annotation(
+                text_id=text.id,
+                author_id=TEST_USER_ID,
+                start_token=0,
+                end_token=0,
+                replacement="BAD",
+                error_type_id=error_type.id,
+                payload={
+                    "operation": "replace",
+                    "before_tokens": ["base-0"],
+                    "after_tokens": [{"id": "base-0", "text": "BAD", "origin": "base"}],
+                    "text_sha256": sha256_text(text.content),
+                    "text_tokens": ["bad", "snapshot"],
+                    "text_tokens_sha256": "invalid",
+                },
+            )
+        )
+        session.commit()
+
+    resp = client.get(
+        "/api/texts/export",
+        params={"category_ids": str(category_id), "format": "m2"},
+    )
+
+    assert resp.status_code == 409
+    assert "token snapshot hash" in resp.json()["detail"]
+    assert not resp.text.startswith("S ")
+
+
+def test_export_rejects_unknown_format(client):
+    resp = client.get("/api/texts/export", params={"format": "csv"})
+
+    assert resp.status_code == 422

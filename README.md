@@ -112,6 +112,29 @@ From `backend/` (venv activated) or remotely with `--database-url`:
 - Export annotations:  
   `python -m app.cli export-annotations output/annotations.json`
 
+## Submitted dataset export
+- `GET /api/texts/export` exports the latest submitted annotation task for each selected text.
+- Use `category_ids=3` to restrict the export to category 3. Multiple ids are comma-separated.
+- The default `format=jsonl` remains backward compatible.
+- `format=m2` returns canonical M2 blocks. Generation fails with HTTP 409 if a persisted source
+  snapshot or hash is missing, inconsistent, or stale, or if parsing the generated M2 does not
+  reconstruct the rendered target exactly.
+- `format=m2-audit` reruns the same validated export and returns a JSON sidecar. Its `m2_sha256`
+  identifies the matching M2 bytes, `counts` summarizes the dataset, and `label_issues` identifies
+  edits exported as `OTHER` because overlapping corrections or repeated-token alignment made the
+  original error label ambiguous.
+
+Example authenticated export:
+```bash
+curl -sS -H "Authorization: Bearer $TOKEN" \
+  "http://localhost:8000/api/texts/export?category_ids=3&format=m2" \
+  -o submitted-category-3.m2
+curl -sS -H "Authorization: Bearer $TOKEN" \
+  "http://localhost:8000/api/texts/export?category_ids=3&format=m2-audit" \
+  -o submitted-category-3.m2.audit.json
+sha256sum submitted-category-3.m2
+```
+
 ## Payout reports API
 - Endpoint: `GET /api/reports/review-totals` (admin/manager token required).
 - Primary metric: `submitted_total` (count of `annotation_tasks` with `status='submitted'`).

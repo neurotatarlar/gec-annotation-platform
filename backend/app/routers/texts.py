@@ -7,8 +7,10 @@ normalizing payloads and token snapshots used by the editor.
 import hashlib
 import json
 import logging
+from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from itertools import combinations
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import PlainTextResponse
@@ -45,6 +47,7 @@ from ..services.auth import get_current_user, get_db
 from ..services.annotation_payloads import summarize_annotations
 from ..services.annotation_rendering import build_export_record, render_corrected_text
 from ..services.annotation_saves import AnnotationSaveError, save_annotation_drafts
+from ..services.m2_export import M2ExportError, build_m2_export
 from ..services.annotation_submissions import (
     AnnotationSubmitError,
     queue_cross_validation,
@@ -655,6 +658,7 @@ def export_submitted_texts(
     category_ids: str | None = Query(None, description="Comma-separated category ids"),
     start: datetime | None = Query(None, description="Start datetime (inclusive)"),
     end: datetime | None = Query(None, description="End datetime (inclusive)"),
+    export_format: Literal["jsonl", "m2", "m2-audit"] = Query("jsonl", alias="format"),
     db: Session = Depends(get_db),
     _: str = Depends(get_current_user),
 ):
@@ -675,28 +679,79 @@ def export_submitted_texts(
 
     tasks = task_query.order_by(AnnotationTask.updated_at.desc(), AnnotationTask.id.desc()).all()
     if not tasks:
-        return PlainTextResponse("", media_type="application/x-jsonlines")
+        if export_format == "m2-audit":
+            empty_result = build_m2_export([])
+            payload = {
+                "format": "m2-audit-v1",
+                "m2_sha256": hashlib.sha256(empty_result.content.encode()).hexdigest(),
+                "counts": asdict(empty_result.audit),
+                "label_issues": [],
+            }
+            return PlainTextResponse(json.dumps(payload), media_type="application/json")
+        media_type = "text/plain" if export_format == "m2" else "application/x-jsonlines"
+        return PlainTextResponse("", media_type=media_type)
 
     anns_by_task = _fetch_annotations_for_tasks(db, tasks)
     tasks_by_text: dict[int, list[AnnotationTask]] = {}
     for task in tasks:
         tasks_by_text.setdefault(task.text_id, []).append(task)
 
-    records: list[str] = []
+    selected_records: list[tuple[TextSample, list[Annotation]]] = []
     for text_id, text_tasks in tasks_by_text.items():
         text = text_tasks[0].text
         if not text:
             continue
+        selected_task = text_tasks[0]
+        selected_records.append((text, anns_by_task.get(selected_task.id) or []))
+
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    if export_format in {"m2", "m2-audit"}:
+        try:
+            result = build_m2_export(selected_records)
+        except M2ExportError as exc:
+            logger.error("M2 export validation failed: %s", exc)
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        audit = result.audit
+        if export_format == "m2-audit":
+            payload = {
+                "format": "m2-audit-v1",
+                "m2_sha256": hashlib.sha256(result.content.encode()).hexdigest(),
+                "counts": asdict(audit),
+                "label_issues": [asdict(issue) for issue in result.label_issues],
+            }
+            return PlainTextResponse(
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                media_type="application/json",
+                headers={
+                    "Content-Disposition": f'attachment; filename="export_{timestamp}.m2.audit.json"'
+                },
+            )
+        return PlainTextResponse(
+            result.content,
+            media_type="text/plain",
+            headers={
+                "Content-Disposition": f'attachment; filename="export_{timestamp}.m2"',
+                "X-M2-Selected-Texts": str(audit.selected_texts),
+                "X-M2-Annotation-Rows": str(audit.annotation_rows),
+                "X-M2-Noop-Texts": str(audit.noop_texts),
+                "X-M2-Edits": str(audit.m2_edits),
+                "X-M2-Other-Edits": str(audit.other_edits),
+                "X-M2-Ambiguous-Label-Edits": str(audit.ambiguous_label_edits),
+                "X-M2-Unattributed-Label-Edits": str(audit.unattributed_label_edits),
+                "X-M2-Multiline-Texts": str(audit.multiline_texts),
+            },
+        )
+
+    records: list[str] = []
+    for text, annotations in selected_records:
         variants: list[dict] = []
-        for task in text_tasks:
-            annotations = anns_by_task.get(task.id) or []
-            variants.append(build_export_record(text, annotations))
+        variants.append(build_export_record(text, annotations))
         chosen = variants[0]
         if len({record["target"] for record in variants}) == 1 and variants:
             chosen = variants[0]
         records.append(json.dumps(chosen, ensure_ascii=False))
 
-    filename = f"export_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.jsonl"
+    filename = f"export_{timestamp}.jsonl"
     return PlainTextResponse(
         "\n".join(records),
         media_type="application/x-jsonlines",
