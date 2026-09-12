@@ -22,7 +22,7 @@ services:
       DATABASE__URL: ${DATABASE__URL:-postgresql+psycopg://postgres:postgres@db:5432/gec}
       SECURITY__SECRET_KEY: ${SECURITY__SECRET_KEY:-local-secret}
     ports:
-      - "8000:8000"
+      - "${BACKEND_PORT:-8000}:8000"
 
   frontend:
     build:
@@ -32,7 +32,7 @@ services:
     depends_on:
       - backend
     ports:
-      - "4173:4173"
+      - "${FRONTEND_PORT:-4173}:4173"
 
 volumes:
   db_data:

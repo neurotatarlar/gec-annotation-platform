@@ -194,6 +194,15 @@ and applies data only from a fully approved, content-addressed manifest.
    The generator validates every proposal against annotation schema v2. Legacy operation graphs
    that cannot be represented safely are rebuilt as source-to-target diffs, marked
    `low` confidence with `diff_reconstructed`, and still require explicit review.
+   Pending generated proposals also receive conservative punctuation-spacing normalization:
+   closing punctuation is attached to the preceding token and separated from following text,
+   while line breaks, numeric separators, possible one-letter abbreviations, special URL/email
+   tokens, and hyphens are protected. Each changed boundary is stored in recovery evidence and in
+   the audit report. Pure spacing operations receive the production `Punctuation` label (ID 4);
+   combined lexical/spacing operations still require explicit label confirmation. Reviewer target
+   overrides and previously approved proposals are never normalized during regeneration. If a
+   normalized target cannot round-trip through canonical operations without changing line layout,
+   the proposal is left untouched and the attempted boundaries are explicitly listed as skipped.
    The audit report lists every text ID requiring uncertainty acknowledgement, label review,
    projection review, or other low-confidence handling. Keep it with the snapshot and bundle.
    Reviewer-confirmed complete targets belong in the optional target-overrides JSON so they survive
@@ -223,6 +232,10 @@ and applies data only from a fully approved, content-addressed manifest.
    API URL is wired automatically:
    ```bash
    make BACKEND_PORT=8001 FRONTEND_PORT=4174 up
+   ```
+   The same port variables work with the Docker stack:
+   ```bash
+   make BACKEND_PORT=8001 FRONTEND_PORT=4174 docker-up
    ```
 4. If any proposals are wrong, download `Download review state` from the review page (or export it
    by CLI), revise the repair algorithm, and pass that artifact into the next build. Approvals are

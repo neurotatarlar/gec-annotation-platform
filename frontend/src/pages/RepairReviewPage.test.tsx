@@ -90,6 +90,36 @@ describe("RepairReviewPage", () => {
     );
   });
 
+  it("shows the audited punctuation-spacing change count", async () => {
+    const normalizedItem = {
+      ...item,
+      recovery_evidence: {
+        ...item.recovery_evidence,
+        whitespace_normalization: {
+          status: "applied",
+          changes: [
+            { rule: "separate_after_closing_punctuation", character_offset: 6, punctuation: "," }
+          ],
+          skipped: []
+        }
+      }
+    };
+    api.get.mockImplementation((url: string) => {
+      if (url === "/api/repairs/batches") return Promise.resolve({ data: [batch] });
+      if (url.includes("/api/repairs/batches/batch-hash/items")) {
+        return Promise.resolve({ data: { items: [normalizedItem], total: 1, next_offset: null } });
+      }
+      if (url === "/api/error-types/") {
+        return Promise.resolve({ data: [{ id: 3, en_name: "Spelling" }] });
+      }
+      throw new Error(`Unhandled GET ${url}`);
+    });
+
+    renderPage();
+    await screen.findByText("Audited punctuation spacing");
+    expect(screen.getByText(/1 token boundaries were normalized/)).toBeInTheDocument();
+  });
+
   it("requires and sends a note for a wrong proposal", async () => {
     renderPage();
     await screen.findByText("Text 520");

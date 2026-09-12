@@ -32,6 +32,7 @@ from .m2_export import M2ExportError, build_m2_export
 from .annotation_rendering import (
     build_tokens_from_fragments,
     is_punct_only,
+    is_special_token,
     render_corrected_text,
     tokenize_to_tokens,
 )
@@ -57,6 +58,7 @@ def _recovery_evidence_hash(evidence: dict[str, object]) -> str:
         "frontend_restored_target",
         "frontend_restored_target_sha256",
         "projection_mismatch",
+        "whitespace_normalization",
     }
     return content_hash(
         {
@@ -65,6 +67,112 @@ def _recovery_evidence_hash(evidence: dict[str, object]) -> str:
             if key != "evidence_hash" and key not in projection_keys
         }
     )
+
+
+_CLOSING_PUNCTUATION = {".", ",", ";", ":", "?", "!"}
+_NUMERIC_SEPARATORS = {".", ",", ":"}
+
+
+def normalize_punctuation_spacing(text: str) -> tuple[str, dict[str, object]]:
+    """Normalize only high-confidence spacing around closing punctuation."""
+    changes: list[dict[str, object]] = []
+    skipped: list[dict[str, object]] = []
+    pattern = re.compile(r"(?P<before>[^\S\r\n]*)(?P<punct>[.,;:?!])(?P<after>[^\S\r\n]*)")
+
+    def replace(match: re.Match[str]) -> str:
+        punctuation = match.group("punct")
+        before = match.group("before")
+        after = match.group("after")
+        punct_offset = match.start("punct")
+        line_start = text.rfind("\n", 0, punct_offset) + 1
+        if line_start > 0 and not text[line_start:punct_offset].strip():
+            skipped.append(
+                {
+                    "rule": "preserve_line_start_punctuation",
+                    "character_offset": punct_offset,
+                    "punctuation": punctuation,
+                }
+            )
+            return match.group(0)
+        chunk_start = punct_offset
+        while chunk_start > 0 and not text[chunk_start - 1].isspace():
+            chunk_start -= 1
+        chunk_end = punct_offset + 1
+        while chunk_end < len(text) and not text[chunk_end].isspace():
+            chunk_end += 1
+        chunk = text[chunk_start:chunk_end]
+        if is_special_token(chunk) or re.search(r"(?:https?://|www\.)", chunk):
+            return match.group(0)
+
+        previous = text[match.start() - 1] if match.start() else ""
+        next_offset = match.end()
+        following = text[next_offset] if next_offset < len(text) else ""
+        desired_before = ""
+        desired_after = after
+        after_rule: str | None = None
+
+        if not following or following in "\r\n":
+            desired_after = after
+        elif is_punct_only(following):
+            desired_after = ""
+            after_rule = "compact_punctuation_sequence"
+        elif (
+            punctuation in _NUMERIC_SEPARATORS
+            and previous.isdigit()
+            and following.isdigit()
+        ):
+            desired_after = ""
+            after_rule = "compact_numeric_separator"
+        else:
+            previous_word = re.search(r"([^\W\d_]+)$", text[: match.start()])
+            if (
+                punctuation == "."
+                and previous_word
+                and len(previous_word.group(1)) == 1
+                and not after
+            ):
+                skipped.append(
+                    {
+                        "rule": "preserve_possible_abbreviation",
+                        "character_offset": punct_offset,
+                        "punctuation": punctuation,
+                    }
+                )
+            else:
+                desired_after = " "
+                after_rule = "separate_after_closing_punctuation"
+
+        if before:
+            changes.append(
+                {
+                    "rule": "attach_closing_punctuation",
+                    "character_offset": punct_offset,
+                    "punctuation": punctuation,
+                    "before": before,
+                    "after": "",
+                }
+            )
+        if desired_after != after and after_rule:
+            changes.append(
+                {
+                    "rule": after_rule,
+                    "character_offset": punct_offset + 1,
+                    "punctuation": punctuation,
+                    "before": after,
+                    "after": desired_after,
+                }
+            )
+        return f"{desired_before}{punctuation}{desired_after}"
+
+    normalized = pattern.sub(replace, text)
+    return normalized, {
+        "version": 1,
+        "status": "applied" if changes else "unchanged",
+        "input_sha256": sha256_text(text),
+        "output_sha256": sha256_text(normalized),
+        "changes": changes,
+        "skipped": skipped,
+    }
 
 
 def annotation_snapshot(annotation: Annotation) -> dict[str, object]:
@@ -665,6 +773,7 @@ def _reconstruct_canonical_diff(
     text_id: int,
     *,
     require_changed_label_review: bool = False,
+    spacing_error_type_id: int | None = None,
 ) -> list[dict[str, object]]:
     source_tokens = tokenize_to_tokens(source)
     target_tokens = tokenize_to_tokens(target)
@@ -705,13 +814,25 @@ def _reconstruct_canonical_diff(
             source_end,
             target_tokens[target_start:target_end],
         )
-        error_type_id = exact_error_type or _nearest_error_type(
-            prior_annotations,
-            source_start,
-            max(source_start + 1, source_end),
-            target_texts[target_start:target_end],
+        spacing_only = (
+            source_texts[source_start:source_end] == target_texts[target_start:target_end]
         )
-        needs_label_review = require_changed_label_review and exact_error_type is None
+        if exact_error_type is not None:
+            error_type_id = exact_error_type
+        elif spacing_error_type_id is not None and spacing_only:
+            error_type_id = spacing_error_type_id
+        else:
+            error_type_id = _nearest_error_type(
+                prior_annotations,
+                source_start,
+                max(source_start + 1, source_end),
+                target_texts[target_start:target_end],
+            )
+        needs_label_review = (
+            require_changed_label_review
+            and exact_error_type is None
+            and not (spacing_error_type_id is not None and spacing_only)
+        )
         detail_payload: dict[str, object] = {
             "schema_version": 2,
             "client_correction_id": f"repair-diff-{text_id}-{index}",
@@ -721,7 +842,13 @@ def _reconstruct_canonical_diff(
             "text_sha256": sha256_text(source),
             "text_tokens": source_texts,
             "text_tokens_sha256": sha256_tokens(source_texts),
-            "source": "repair-manual" if require_changed_label_review else "repair-diff",
+            "source": (
+                "repair-spacing"
+                if spacing_error_type_id is not None and spacing_only
+                else "repair-manual"
+                if require_changed_label_review
+                else "repair-diff"
+            ),
         }
         if needs_label_review:
             detail_payload["label_needs_review"] = True
@@ -853,6 +980,13 @@ def build_repair_bundle(
             sha256_text(frontend_restored) if frontend_restored is not None else None
         )
         recovery_evidence["projection_mismatch"] = projection_mismatch
+        previous = previous_by_key.get((int(record["text_id"]), int(record["task_id"])))
+        preserve_approval = bool(
+            previous
+            and previous.get("status") == "approved"
+            and previous.get("proposed_target") is not None
+            and previous.get("proposed_annotations") is not None
+        )
         proposed_annotations, confidence, risk, explanation = _normalize_candidate_annotations(
             approval_record
         )
@@ -886,17 +1020,6 @@ def build_repair_bundle(
             confidence = "low"
             risk = f"{risk}+reviewer_target"
             explanation = f"{explanation}, reviewer_target"
-        if recovery_evidence.get("possible_deleted_rows"):
-            risk = f"{risk}+approval_state_uncertain"
-            explanation = f"{explanation}, approval_state_uncertain"
-            confidence = "low"
-        previous = previous_by_key.get((int(record["text_id"]), int(record["task_id"])))
-        preserve_approval = bool(
-            previous
-            and previous.get("status") == "approved"
-            and previous.get("proposed_target") is not None
-            and previous.get("proposed_annotations") is not None
-        )
         if preserve_approval:
             if (
                 previous.get("source_sha256") != sha256_text(source)
@@ -917,6 +1040,59 @@ def build_repair_bundle(
             confidence = str(previous.get("confidence") or confidence)
             risk = str(previous.get("risk") or risk)
             explanation = str(previous.get("explanation") or explanation)
+        if preserve_approval:
+            whitespace_audit: dict[str, object] = {
+                "version": 1,
+                "status": "skipped_approved",
+                "input_sha256": sha256_text(proposed),
+                "output_sha256": sha256_text(proposed),
+                "changes": [],
+                "skipped": [],
+            }
+        elif reviewer_target is not None:
+            whitespace_audit = {
+                "version": 1,
+                "status": "skipped_reviewer_target",
+                "input_sha256": sha256_text(proposed),
+                "output_sha256": sha256_text(proposed),
+                "changes": [],
+                "skipped": [],
+            }
+        else:
+            normalized_target, whitespace_audit = normalize_punctuation_spacing(proposed)
+            if normalized_target != proposed:
+                try:
+                    normalized_annotations = _reconstruct_canonical_diff(
+                        source,
+                        normalized_target,
+                        proposed_annotations,
+                        int(record["text_id"]),
+                        require_changed_label_review=True,
+                        spacing_error_type_id=4,
+                    )
+                except AnnotationRepairError as exc:
+                    whitespace_audit["status"] = "skipped_unrepresentable"
+                    whitespace_audit["output_sha256"] = whitespace_audit["input_sha256"]
+                    whitespace_audit["attempted_changes"] = whitespace_audit.pop("changes")
+                    whitespace_audit["changes"] = []
+                    whitespace_audit["skipped"] = [
+                        *(whitespace_audit.get("skipped") or []),
+                        {"rule": "canonical_round_trip_failed", "reason": str(exc)},
+                    ]
+                    risk = f"{risk}+whitespace_normalization_skipped"
+                    explanation = f"{explanation}, whitespace_normalization_skipped"
+                else:
+                    proposed_annotations = normalized_annotations
+                    proposed = normalized_target
+                    risk = f"{risk}+whitespace_normalized"
+                    explanation = f"{explanation}, whitespace_normalized"
+        recovery_evidence["whitespace_normalization"] = whitespace_audit
+        if recovery_evidence.get("possible_deleted_rows"):
+            if "approval_state_uncertain" not in risk:
+                risk = f"{risk}+approval_state_uncertain"
+            if "approval_state_uncertain" not in explanation:
+                explanation = f"{explanation}, approval_state_uncertain"
+            confidence = "low"
         candidate_body = {
             "text_id": record["text_id"],
             "task_id": record["task_id"],
@@ -1004,8 +1180,46 @@ def build_repair_audit_report(bundle: dict[str, object]) -> dict[str, object]:
         ),
         "manual_edit": ids_where(lambda item: "manual_edit" in str(item.get("risk") or "")),
         "reviewer_target": ids_where(lambda item: "reviewer_target" in str(item.get("risk") or "")),
+        "whitespace_normalized": ids_where(
+            lambda item: (item.get("recovery_evidence") or {})
+            .get("whitespace_normalization", {})
+            .get("status")
+            == "applied"
+        ),
+        "whitespace_normalization_skipped": ids_where(
+            lambda item: (item.get("recovery_evidence") or {})
+            .get("whitespace_normalization", {})
+            .get("status")
+            == "skipped_unrepresentable"
+        ),
         "low_confidence": ids_where(lambda item: item.get("confidence") == "low"),
     }
+    whitespace_records = [
+        {
+            "text_id": int(item["text_id"]),
+            **copy.deepcopy(
+                (item.get("recovery_evidence") or {}).get("whitespace_normalization") or {}
+            ),
+        }
+        for item in items
+        if ((item.get("recovery_evidence") or {}).get("whitespace_normalization") or {}).get(
+            "status"
+        )
+        == "applied"
+    ]
+    whitespace_skipped_records = [
+        {
+            "text_id": int(item["text_id"]),
+            **copy.deepcopy(
+                (item.get("recovery_evidence") or {}).get("whitespace_normalization") or {}
+            ),
+        }
+        for item in items
+        if ((item.get("recovery_evidence") or {}).get("whitespace_normalization") or {}).get(
+            "status"
+        )
+        == "skipped_unrepresentable"
+    ]
     body: dict[str, object] = {
         "format": "annotation-repair-audit-report-v1",
         "batch_id": bundle["batch_id"],
@@ -1013,6 +1227,15 @@ def build_repair_audit_report(bundle: dict[str, object]) -> dict[str, object]:
         "categories": {
             name: {"count": len(text_ids), "text_ids": text_ids}
             for name, text_ids in categories.items()
+        },
+        "whitespace_normalization": {
+            "affected_text_count": len(whitespace_records),
+            "changed_boundary_count": sum(
+                len(record.get("changes") or []) for record in whitespace_records
+            ),
+            "records": whitespace_records,
+            "skipped_text_count": len(whitespace_skipped_records),
+            "skipped_records": whitespace_skipped_records,
         },
     }
     body["report_hash"] = content_hash(body)

@@ -10,6 +10,7 @@ os.environ.setdefault("DATABASE__URL", "sqlite:///:memory:")
 os.environ.setdefault("SKIP_CREATE_ALL", "1")
 
 import app.database as db
+import app.services.annotation_repairs as annotation_repairs
 from app.models import (
     Annotation,
     AnnotationRepairApplication,
@@ -34,6 +35,7 @@ from app.services.annotation_repairs import (
     content_hash,
     export_repair_snapshot,
     import_repair_bundle,
+    normalize_punctuation_spacing,
     record_fingerprint,
     revise_repair_proposal,
 )
@@ -54,6 +56,37 @@ TABLES = [
     AnnotationRepairProposalRevision.__table__,
     AnnotationRepairApplication.__table__,
 ]
+
+
+def test_punctuation_spacing_normalization_is_conservative_and_audited():
+    normalized, audit = normalize_punctuation_spacing("Сүз ,икенче.Соң  бар")
+
+    assert normalized == "Сүз, икенче. Соң  бар"
+    assert audit["status"] == "applied"
+    assert [change["rule"] for change in audit["changes"]] == [
+        "attach_closing_punctuation",
+        "separate_after_closing_punctuation",
+        "separate_after_closing_punctuation",
+    ]
+    assert audit["input_sha256"] != audit["output_sha256"]
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ("3 , 4 көн", "3,4 көн"),
+        ("т.д. сүз", "т.д. сүз"),
+        ("Сүз.\nИкенче", "Сүз.\nИкенче"),
+        ("Сүз\n ,икенче", "Сүз\n ,икенче"),
+        ("Сүз ! ?", "Сүз!?"),
+        ("https://example.org/path?q=1.2", "https://example.org/path?q=1.2"),
+        ("Кара:https://example.org/path", "Кара:https://example.org/path"),
+        ("ашарга- эчәргә", "ашарга- эчәргә"),
+    ],
+)
+def test_punctuation_spacing_normalization_protects_ambiguous_boundaries(source, expected):
+    normalized, _ = normalize_punctuation_spacing(source)
+    assert normalized == expected
 
 
 def setup_function():
@@ -355,6 +388,9 @@ def test_reviewer_target_override_is_exact_and_requires_changed_label_review():
     assert item["proposed_target"] == "Gamma beta"
     assert "reviewer_target" in item["risk"]
     assert item["confidence"] == "low"
+    assert item["recovery_evidence"]["whitespace_normalization"]["status"] == (
+        "skipped_reviewer_target"
+    )
     assert any(
         annotation["payload"].get("label_needs_review")
         for annotation in item["proposed_annotations"]
@@ -379,6 +415,9 @@ def test_review_state_preserves_approved_candidate_and_rejects_changed_source_st
     assert unchanged["items"][0]["status"] == "approved"
     assert unchanged["items"][0]["proposed_target"] == "Omega beta"
     assert unchanged["items"][0]["proposed_annotations"] == review_state["items"][0]["proposed_annotations"]
+    assert unchanged["items"][0]["recovery_evidence"]["whitespace_normalization"]["status"] == (
+        "skipped_approved"
+    )
 
     tampered_state = copy.deepcopy(review_state)
     tampered_state["items"][0]["proposed_target"] = "Tampered beta"
@@ -397,6 +436,70 @@ def test_review_state_preserves_approved_candidate_and_rejects_changed_source_st
     )
     with pytest.raises(AnnotationRepairError, match="Approved source state changed"):
         build_repair_bundle(changed_snapshot, review_state)
+
+
+def test_bundle_normalizes_punctuation_spacing_and_assigns_punctuation_label():
+    with db.SessionLocal() as session:
+        seed_legacy_submission(session)
+        text = session.query(TextSample).one()
+        annotation = session.query(Annotation).one()
+        text.content = "Alpha,beta"
+        annotation.payload = {
+            **annotation.payload,
+            "text_sha256": sha256_text(text.content),
+            "text_tokens": ["Alpha", ",", "beta"],
+            "text_tokens_sha256": sha256_tokens(["Alpha", ",", "beta"]),
+        }
+        session.commit()
+        text_id = text.id
+        snapshot = export_repair_snapshot(session, 3)
+
+    item = build_repair_bundle(snapshot)["items"][0]
+
+    assert item["proposed_target"] == "Omega, beta"
+    assert item["recovery_evidence"]["whitespace_normalization"]["status"] == "applied"
+    spacing_operations = [
+        annotation
+        for annotation in item["proposed_annotations"]
+        if annotation["payload"]["source"] == "repair-spacing"
+    ]
+    assert spacing_operations
+    assert all(annotation["error_type_id"] == 4 for annotation in spacing_operations)
+    audit = build_repair_audit_report(build_repair_bundle(snapshot))
+    assert audit["categories"]["whitespace_normalized"]["text_ids"] == [text_id]
+    assert audit["whitespace_normalization"]["changed_boundary_count"] == 1
+
+
+def test_bundle_audits_and_skips_unrepresentable_spacing(monkeypatch):
+    with db.SessionLocal() as session:
+        seed_legacy_submission(session)
+        text = session.query(TextSample).one()
+        annotation = session.query(Annotation).one()
+        text.content = "Alpha,beta"
+        annotation.payload = {
+            **annotation.payload,
+            "text_sha256": sha256_text(text.content),
+            "text_tokens": ["Alpha", ",", "beta"],
+            "text_tokens_sha256": sha256_tokens(["Alpha", ",", "beta"]),
+        }
+        session.commit()
+        snapshot = export_repair_snapshot(session, 3)
+
+    monkeypatch.setattr(
+        annotation_repairs,
+        "_reconstruct_canonical_diff",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AnnotationRepairError("line layout cannot round-trip")
+        ),
+    )
+    item = build_repair_bundle(snapshot)["items"][0]
+    spacing = item["recovery_evidence"]["whitespace_normalization"]
+
+    assert item["proposed_target"] == "Omega,beta"
+    assert spacing["status"] == "skipped_unrepresentable"
+    assert spacing["changes"] == []
+    assert len(spacing["attempted_changes"]) == 1
+    assert spacing["skipped"][-1]["rule"] == "canonical_round_trip_failed"
 
 
 def test_manifest_rejects_an_approved_unlabeled_correction():
@@ -717,10 +820,11 @@ def test_repair_replays_dynamic_coordinates_after_an_earlier_insertion():
     item = build_repair_bundle(repair_snapshot(record))["items"][0]
 
     assert item["proposed_target"] == (
-        "Ул бит сездән яман сүзләр сорамый, жәмәгать.Башта аңлап бетерегез."
-        "Кухняда намаз укырга ярыймы дип сорый.Нигә шуның кадәр ямьсез сүзләр "
+        "Ул бит сездән яман сүзләр сорамый, жәмәгать. Башта аңлап бетерегез. "
+        "Кухняда намаз укырга ярыймы дип сорый. Нигә шуның кадәр ямьсез сүзләр "
         "белән кешегә пычрак атасыз?"
     )
+    assert len(item["recovery_evidence"]["whitespace_normalization"]["changes"]) == 3
     assert "historical_coordinates_replayed" in item["risk"]
     assert "diff_reconstructed" not in item["risk"]
 

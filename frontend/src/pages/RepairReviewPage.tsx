@@ -46,6 +46,18 @@ type RepairItem = {
     projection_mismatch?: boolean;
     backend_restored_target?: string | null;
     frontend_restored_target?: string | null;
+    whitespace_normalization?: {
+      status?: "applied" | "unchanged" | "skipped_approved" | "skipped_reviewer_target" | "skipped_unrepresentable";
+      changes?: Array<{
+        rule: string;
+        character_offset: number;
+        punctuation: string;
+        before?: string;
+        after?: string;
+      }>;
+      skipped?: Array<{ rule: string; character_offset: number; punctuation: string }>;
+      attempted_changes?: Array<{ rule: string }>;
+    };
   };
   uncertainty_acknowledged: boolean;
   candidate_hash: string;
@@ -403,6 +415,27 @@ export const RepairReviewPage = () => {
               )}
             </div>
           </section>
+
+          {item.recovery_evidence.whitespace_normalization?.status === "applied" && (
+            <section className="border-y border-cyan-500/40 bg-cyan-400/10 px-4 py-4 text-cyan-100">
+              <strong>Audited punctuation spacing</strong>
+              <p className="mt-1 text-sm text-cyan-200">
+                {item.recovery_evidence.whitespace_normalization.changes?.length ?? 0} token boundaries
+                were normalized automatically. These changes are included in the proposed render and
+                recorded in the repair audit artifact.
+              </p>
+            </section>
+          )}
+          {item.recovery_evidence.whitespace_normalization?.status === "skipped_unrepresentable" && (
+            <section className="border-y border-amber-500/50 bg-amber-400/10 px-4 py-4 text-amber-100">
+              <strong>Punctuation spacing needs manual review</strong>
+              <p className="mt-1 text-sm text-amber-200">
+                {item.recovery_evidence.whitespace_normalization.attempted_changes?.length ?? 0} candidate
+                boundaries were left unchanged because the canonical operations could not preserve this
+                text exactly.
+              </p>
+            </section>
+          )}
 
           {item.recovery_evidence.possible_deleted_rows && (
             <section className="border-y border-amber-500/50 bg-amber-400/10 px-4 py-4 text-amber-100">

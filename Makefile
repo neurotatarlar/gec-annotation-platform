@@ -129,11 +129,12 @@ docker-migrate:
 
 docker-up: env
 	docker compose down --remove-orphans
+	BACKEND_PORT=$(BACKEND_PORT) FRONTEND_PORT=$(FRONTEND_PORT) VITE_API_URL=http://localhost:$(BACKEND_PORT) docker compose build backend frontend
 	docker compose up db -d
 	docker compose run --rm backend alembic -c alembic.ini upgrade head
-	docker compose up -d --build backend frontend
-	@echo "Backend started: http://localhost:8000"
-	@echo "Frontend started: http://localhost:4173"
+	BACKEND_PORT=$(BACKEND_PORT) FRONTEND_PORT=$(FRONTEND_PORT) VITE_API_URL=http://localhost:$(BACKEND_PORT) docker compose up -d backend frontend
+	@echo "Backend started: http://localhost:$(BACKEND_PORT)"
+	@echo "Frontend started: http://localhost:$(FRONTEND_PORT)"
 
 docker-down:
 	docker compose down
