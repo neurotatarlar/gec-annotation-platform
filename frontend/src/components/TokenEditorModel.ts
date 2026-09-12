@@ -114,6 +114,13 @@ const buildTokenFromText = (
 const getLeadingSpace = (tokens: Token[], index: number): boolean =>
   index === 0 ? false : tokens[index]?.spaceBefore !== false;
 
+const ensureSpaceAfterInsertedRange = (tokens: Token[], start: number, length: number) => {
+  const following = tokens[start + length];
+  if (length > 0 && following && following.kind !== "empty" && following.kind !== "punct") {
+    following.spaceBefore = true;
+  }
+};
+
 const buildSpanKey = (start: number, end: number): string => `${start}-${end}`;
 
 const readExplicitSpace = (fragment: any): boolean | undefined => {
@@ -541,6 +548,7 @@ export const hydrateFromServerAnnotations = ({
       }));
 
       working.splice(insertionIndex, 0, ...movedTokens);
+      ensureSpaceAfterInsertedRange(working, insertionIndex, movedTokens.length);
       typeMap[moveId] = ann?.error_type_id ?? null;
       const spanStart = moveTo;
       const spanEnd = moveTo + Math.max(1, movedTokens.length) - 1;
@@ -560,6 +568,16 @@ export const hydrateFromServerAnnotations = ({
     const endOriginal = typeof ann?.end_token === "number" ? ann.end_token : startOriginal;
     const defaultTargetStart = Math.max(0, Math.min(working.length, startOriginal + offsetAt(startOriginal)));
     let targetStart = defaultTargetStart;
+    if (normalizedOperation !== "insert" && beforeTokensPayload.length) {
+      const preferredRange = findPreferredRangeForOriginalIds(
+        working,
+        beforeTokensPayload,
+        originalIndexById,
+        moveTargetById,
+        startOriginal
+      );
+      if (preferredRange) targetStart = preferredRange.start;
+    }
     if (normalizedOperation === "insert") {
       if (beforeTokensPayload.length === 0) {
         targetStart = findInsertionIndexByOriginalIndex(
@@ -1582,6 +1600,7 @@ const tokenReducer = (state: EditorHistoryState, action: Action): EditorHistoryS
           spaceBefore: idx === 0 ? leadingSpace : tok.spaceBefore,
         }));
         tokens.splice(insertionIndex, 0, ...movedTokens);
+        ensureSpaceAfterInsertedRange(tokens, insertionIndex, movedTokens.length);
         const next: EditorPresentState = { ...state.present, tokens };
         return pushPresent(state, next);
       }
@@ -1618,6 +1637,7 @@ const tokenReducer = (state: EditorHistoryState, action: Action): EditorHistoryS
           spaceBefore: idx === 0 ? leadingSpace : tok.spaceBefore,
         }));
         tokens.splice(insertionIndex, 0, ...movedTokens);
+        ensureSpaceAfterInsertedRange(tokens, insertionIndex, movedTokens.length);
         const cleaned = dropRedundantEmpties(tokens);
         const next: EditorPresentState = { ...state.present, tokens: cleaned };
         return pushPresent(state, next);
@@ -1659,6 +1679,7 @@ const tokenReducer = (state: EditorHistoryState, action: Action): EditorHistoryS
         spaceBefore: idx === 0 ? leadingSpace : tok.spaceBefore,
       }));
       tokens.splice(insertionIndex, 0, ...movedTokens);
+      ensureSpaceAfterInsertedRange(tokens, insertionIndex, movedTokens.length);
       if (groupHistory.size) {
         tokens.forEach((tok) => {
           if (!tok.groupId || tok.previousTokens?.length) return;
@@ -2262,6 +2283,7 @@ export const buildDraftCorrectionsStandalone = async ({
       const moveLength = targetSpan ? targetSpan.end - targetSpan.start + 1 : Math.max(1, beforeIds.length || afterFragments.length || 1);
       const replacement = afterFragments.length ? afterFragments.map((f) => f.text).join(" ").trim() : null;
       const payload: AnnotationDetailPayload = {
+        schema_version: 2,
         text_sha256: textHash,
         text_tokens: textTokensSnapshot,
         text_tokens_sha256: textTokensHash ?? undefined,
@@ -2374,6 +2396,7 @@ export const buildDraftCorrectionsStandalone = async ({
     const spanEnd = beforeIndices.length ? Math.max(...beforeIndices) : insertionIndex;
 
     const payload: AnnotationDetailPayload = {
+      schema_version: 2,
       text_sha256: textHash,
       text_tokens: textTokensSnapshot,
       text_tokens_sha256: textTokensHash ?? undefined,

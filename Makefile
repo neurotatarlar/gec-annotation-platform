@@ -9,6 +9,8 @@ VENV_PIP := $(VENV)/bin/pip
 RUN_DIR := .run
 BACKEND_PID_FILE := $(RUN_DIR)/backend.pid
 FRONTEND_PID_FILE := $(RUN_DIR)/frontend.pid
+BACKEND_PORT ?= 8000
+FRONTEND_PORT ?= 4173
 
 .PHONY: help env backend-env frontend-env install backend-install frontend-install \
 	backend-migrate backend-run frontend-run dev native-start native-stop up down \
@@ -62,10 +64,10 @@ backend-migrate:
 	cd $(BACKEND_DIR) && ../$(VENV)/bin/alembic -c alembic.ini upgrade head
 
 backend-run:
-	cd $(BACKEND_DIR) && ../$(VENV)/bin/uvicorn app.main:app --reload
+	cd $(BACKEND_DIR) && ../$(VENV)/bin/uvicorn app.main:app --reload --port $(BACKEND_PORT)
 
 frontend-run:
-	cd $(FRONTEND_DIR) && npm run dev -- --host
+	cd $(FRONTEND_DIR) && VITE_API_URL=http://localhost:$(BACKEND_PORT) npm run dev -- --host --port $(FRONTEND_PORT)
 
 dev:
 	@trap 'kill 0' EXIT; \
@@ -75,10 +77,10 @@ dev:
 
 native-start:
 	@mkdir -p $(RUN_DIR)
-	@(cd $(BACKEND_DIR) && nohup ../$(VENV)/bin/uvicorn app.main:app --reload > ../$(RUN_DIR)/backend.log 2>&1 & echo $$! > ../$(BACKEND_PID_FILE))
-	@(cd $(FRONTEND_DIR) && nohup npm run dev -- --host > ../$(RUN_DIR)/frontend.log 2>&1 & echo $$! > ../$(FRONTEND_PID_FILE))
-	@echo "Backend started: http://localhost:8000"
-	@echo "Frontend started: http://localhost:4173"
+	@(cd $(BACKEND_DIR); nohup ../$(VENV)/bin/uvicorn app.main:app --port $(BACKEND_PORT) > ../$(RUN_DIR)/backend.log 2>&1 & echo $$! > ../$(BACKEND_PID_FILE))
+	@(cd $(FRONTEND_DIR); VITE_API_URL=http://localhost:$(BACKEND_PORT) nohup npm run dev -- --host --port $(FRONTEND_PORT) > ../$(RUN_DIR)/frontend.log 2>&1 & echo $$! > ../$(FRONTEND_PID_FILE))
+	@echo "Backend started: http://localhost:$(BACKEND_PORT)"
+	@echo "Frontend started: http://localhost:$(FRONTEND_PORT)"
 	@echo "Logs: $(RUN_DIR)/backend.log, $(RUN_DIR)/frontend.log"
 
 native-stop:

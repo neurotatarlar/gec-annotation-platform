@@ -138,6 +138,82 @@ jobs:
       - name: Pytest
         run: python -m pytest -q
 
+  backend-migrations:
+    name: PostgreSQL migrations
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.backend_runtime == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: gec_migrations
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d gec_migrations"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE__URL: postgresql+psycopg://postgres:postgres@localhost:5432/gec_migrations
+      SECURITY__SECRET_KEY: migration-test-secret
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+            backend/pyproject.toml
+
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Upgrade and rerun production taxonomy migration
+        run: |
+          alembic -c alembic.ini upgrade head
+          alembic -c alembic.ini downgrade 20260812_01_repair_proposal_revisions
+          alembic -c alembic.ini upgrade head
+
+      - name: Verify production taxonomy
+        run: |
+          python - <<'PY'
+          import importlib.util
+          from pathlib import Path
+
+          from app.database import SessionLocal
+          from app.models import ErrorType
+
+          path = Path("alembic/versions/20260812_02_sync_production_error_types.py")
+          spec = importlib.util.spec_from_file_location("production_error_types", path)
+          migration = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(migration)
+
+          with SessionLocal() as session:
+              actual = [
+                  {
+                      key: getattr(error_type, key)
+                      for key in (*migration.COLUMNS, "is_active")
+                  }
+                  for error_type in session.query(ErrorType).order_by(ErrorType.id)
+              ]
+          assert actual == migration.ROWS
+          PY
+
   frontend-tests:
     name: Frontend tests (all except TokenEditor)
     needs: changes

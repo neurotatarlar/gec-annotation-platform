@@ -28,6 +28,10 @@ export interface AnnotationSavePayload {
   annotations: AnnotationDraft[];
   client_version: number;
   deleted_ids?: number[];
+  schema_version?: number;
+  replace_existing?: boolean;
+  expected_target?: string;
+  expected_target_sha256?: string;
 }
 
 export type SaveStatus = { state: "idle" | "saving" | "saved" | "error"; unsaved: boolean };
@@ -65,6 +69,7 @@ export interface TokenFragmentPayload {
 }
 
 export interface AnnotationDetailPayload {
+  schema_version?: number;
   text_sha256?: string | null;
   operation: "replace" | "delete" | "insert" | "move" | "noop";
   before_tokens: string[];

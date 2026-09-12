@@ -31,6 +31,7 @@ describe("useSaveController", () => {
         lastSavedSignatureRef,
         formatError: (err) => String(err),
         setActionError: () => {},
+        expectedTargetText: "hi world",
       })
     );
 
@@ -41,6 +42,7 @@ describe("useSaveController", () => {
     });
 
     expect(post).toHaveBeenCalledTimes(1);
+    expect(post.mock.calls[0][1].expected_target).toBe("hi world");
   });
 
   it("autosaves with the latest payload when metadata changes before the timer fires", async () => {
@@ -78,6 +80,7 @@ describe("useSaveController", () => {
           lastSavedSignatureRef,
           formatError: (err) => String(err),
           setActionError: () => {},
+          expectedTargetText: "hi world",
         }),
       { initialProps: { tokens: ["hello"], buildAnnotationsPayload: buildPayloadA } }
     );

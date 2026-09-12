@@ -2,7 +2,12 @@ import fs from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
-import { hydrateFromServerAnnotations, tokenizeToTokens } from "./TokenEditorModel";
+import {
+  buildTextFromTokensWithBreaks,
+  computeLineBreaksFromText,
+  hydrateFromServerAnnotations,
+  tokenizeToTokens
+} from "./TokenEditorModel";
 
 type ProductionRecord = {
   id: number;
@@ -26,7 +31,10 @@ describe.skipIf(!inputPath || !outputPath)("production annotation rendering pari
             .filter((token) => token.kind !== "empty")
             .map((token) => token.text)
         : tokenizeToTokens(record.source).map((token) => token.text);
-      return { id: record.id, target_tokens: targetTokens };
+      const target = hydrated
+        ? buildTextFromTokensWithBreaks(hydrated.present.tokens, computeLineBreaksFromText(record.source))
+        : buildTextFromTokensWithBreaks(tokenizeToTokens(record.source), computeLineBreaksFromText(record.source));
+      return { id: record.id, target, target_tokens: targetTokens };
     });
     fs.writeFileSync(outputPath!, JSON.stringify(projected));
     expect(projected).toHaveLength(records.length);

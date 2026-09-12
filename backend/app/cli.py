@@ -14,6 +14,18 @@ from .config import get_settings
 from .database import configure_engine, session_scope
 from .models import Annotation, Category, TextSample, User
 from .services import auth as auth_service
+from .services.annotation_repairs import (
+    AnnotationRepairError,
+    apply_manifest,
+    build_approved_manifest,
+    build_repair_audit_report,
+    build_repair_bundle,
+    build_review_state,
+    export_repair_snapshot,
+    import_repair_bundle,
+    read_json,
+    write_json,
+)
 
 cli = typer.Typer(help="Admin CLI for GEC annotation platform")
 
@@ -89,6 +101,22 @@ def create_user(
         typer.echo(f"Created user with username '{username}'{'' if not full_name else '(' + full_name +')'} and role '{'admin' if admin else 'annotator'}'")
 
 
+@cli.command(name="set-user-role")
+def set_user_role(
+    username: str = typer.Option(..., "--username", "-u"),
+    role: str = typer.Option(..., "--role", help="One of annotator, manager, or admin"),
+):
+    """Change an existing user's role."""
+    if role not in {"annotator", "manager", "admin"}:
+        raise typer.BadParameter("role must be annotator, manager, or admin")
+    with session_scope() as session:
+        user = session.query(User).filter(User.username == username).one_or_none()
+        if not user:
+            raise typer.BadParameter(f"User '{username}' does not exist")
+        user.role = role
+        typer.echo(f"Updated '{username}' to role '{role}'")
+
+
 @cli.command()
 def import_texts(json_path: Path):
     """Import texts from a JSON object {category, required_annotations, content:[...]}."""
@@ -151,6 +179,163 @@ def export_annotations(output: Path):
         ]
         output.write_text(json.dumps(payload, ensure_ascii=False, indent=2))
         typer.echo(f"Exported {len(payload)} annotations to {output}")
+
+
+@cli.command(name="export-repair-snapshot")
+def export_annotation_repair_snapshot(
+    category_id: int = typer.Option(..., "--category-id", min=1),
+    output: Path = typer.Option(..., "--output", "-o"),
+):
+    """Export the exact latest-submitted dataset state needed for offline repair."""
+    with session_scope() as session:
+        snapshot = export_repair_snapshot(session, category_id)
+    write_json(output, snapshot)
+    typer.echo(f"Exported {len(snapshot['records'])} repair records to {output}")
+
+
+@cli.command(name="build-repair-bundle")
+def build_annotation_repair_bundle(
+    snapshot_path: Path = typer.Argument(..., exists=True, readable=True),
+    output: Path = typer.Option(..., "--output", "-o"),
+    previous_manifest: Optional[Path] = typer.Option(None, "--previous-manifest"),
+    frontend_projection: Optional[Path] = typer.Option(
+        None,
+        "--frontend-projection",
+        exists=True,
+        readable=True,
+        help="Exact targets produced by AnnotationProductionParity.test.ts",
+    ),
+    target_overrides: Optional[Path] = typer.Option(
+        None,
+        "--target-overrides",
+        exists=True,
+        readable=True,
+        help="Reviewer-confirmed targets as a JSON object or a {targets: {...}} object",
+    ),
+):
+    """Create deterministic canonical proposals from a production snapshot."""
+    try:
+        previous = read_json(previous_manifest) if previous_manifest else None
+        snapshot = read_json(snapshot_path)
+        projections = None
+        if frontend_projection:
+            projection_rows = json.loads(frontend_projection.read_text())
+            projections = {int(row["id"]): str(row["target"]) for row in projection_rows}
+        overrides = None
+        if target_overrides:
+            override_payload = json.loads(target_overrides.read_text())
+            override_rows = override_payload.get("targets", override_payload)
+            overrides = {int(text_id): str(target) for text_id, target in override_rows.items()}
+        bundle = build_repair_bundle(
+            snapshot,
+            previous,
+            projections,
+            overrides,
+            require_frontend_projection=snapshot.get("format") == "annotation-repair-snapshot-v2",
+        )
+    except AnnotationRepairError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    write_json(output, bundle)
+    typer.echo(f"Built repair batch {bundle['batch_id']} with {len(bundle['items'])} items")
+
+
+@cli.command(name="audit-repair-bundle")
+def audit_annotation_repair_bundle(
+    bundle_path: Path = typer.Argument(..., exists=True, readable=True),
+    output: Path = typer.Option(..., "--output", "-o"),
+):
+    """Summarize review-risk categories and their text IDs."""
+    try:
+        report = build_repair_audit_report(read_json(bundle_path))
+    except AnnotationRepairError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    write_json(output, report)
+    typer.echo(f"Audited {report['item_count']} repair items to {output}")
+
+
+@cli.command(name="build-repair-parity-input")
+def build_repair_parity_input(
+    snapshot_path: Path = typer.Argument(..., exists=True, readable=True),
+    output: Path = typer.Option(..., "--output", "-o"),
+):
+    """Extract approval-time rows for exact frontend rendering projection."""
+    snapshot = read_json(snapshot_path)
+    if snapshot.get("format") != "annotation-repair-snapshot-v2":
+        raise typer.BadParameter("Approval-time parity input requires snapshot v2")
+    rows = [
+        {
+            "id": int(record["text_id"]),
+            "source": str(record["source"]),
+            "annotations": record.get("approval_annotations") or [],
+        }
+        for record in snapshot.get("records") or []
+    ]
+    write_json(output, rows)
+    typer.echo(f"Extracted {len(rows)} approval-time records to {output}")
+
+
+@cli.command(name="import-repair-bundle")
+def import_annotation_repair_bundle(bundle_path: Path = typer.Argument(..., exists=True, readable=True)):
+    """Import an offline bundle into the local review queue."""
+    try:
+        with session_scope() as session:
+            batch = import_repair_bundle(session, read_json(bundle_path))
+            batch_id = batch.id
+            count = batch.item_count
+    except AnnotationRepairError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    typer.echo(f"Imported repair batch {batch_id} with {count} items")
+
+
+@cli.command(name="export-repair-manifest")
+def export_annotation_repair_manifest(
+    batch_id: str = typer.Option(..., "--batch-id"),
+    output: Path = typer.Option(..., "--output", "-o"),
+):
+    """Export a manifest only after every review item is approved."""
+    try:
+        with session_scope() as session:
+            manifest = build_approved_manifest(session, batch_id)
+    except AnnotationRepairError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    write_json(output, manifest)
+    typer.echo(f"Exported approved manifest {manifest['manifest_hash']} to {output}")
+
+
+@cli.command(name="export-repair-review-state")
+def export_annotation_repair_review_state(
+    batch_id: str = typer.Option(..., "--batch-id"),
+    output: Path = typer.Option(..., "--output", "-o"),
+):
+    """Export partial decisions so unchanged approvals survive regeneration."""
+    try:
+        with session_scope() as session:
+            review_state = build_review_state(session, batch_id)
+    except AnnotationRepairError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    write_json(output, review_state)
+    typer.echo(f"Exported review state {review_state['review_state_hash']} to {output}")
+
+
+@cli.command(name="apply-repair-manifest")
+def apply_annotation_repair_manifest(
+    manifest_path: Path = typer.Argument(..., exists=True, readable=True),
+    dry_run: bool = typer.Option(True, "--dry-run/--apply"),
+    confirm_hash: Optional[str] = typer.Option(None, "--confirm-hash"),
+    receipt_output: Optional[Path] = typer.Option(None, "--receipt-output"),
+):
+    """Verify or atomically apply a fully approved repair manifest."""
+    manifest = read_json(manifest_path)
+    if not dry_run and confirm_hash != manifest.get("manifest_hash"):
+        raise typer.BadParameter("--confirm-hash must equal the manifest hash when using --apply")
+    try:
+        with session_scope() as session:
+            receipt = apply_manifest(session, manifest, dry_run=dry_run)
+    except AnnotationRepairError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    if receipt_output:
+        write_json(receipt_output, receipt)
+    typer.echo(json.dumps(receipt, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

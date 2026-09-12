@@ -12,3 +12,5 @@ frontend/dist
 .DS_Store
 package-lock.json
 commands.txt
+output/
+.codex

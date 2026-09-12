@@ -52,6 +52,7 @@ export const useAnnotationPayloadBuilders = ({
         annotationDeleteMap: annotationDeleteMap.current,
         includeDeletedIds: true,
         allowUnassigned: true,
+        includeClientCorrectionId: true,
       }),
     [annotationDeleteMap, buildBaseInput]
   );

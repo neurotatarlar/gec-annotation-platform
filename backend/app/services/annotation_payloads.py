@@ -2,6 +2,7 @@
 Pure helpers for validating and normalizing annotation payloads.
 """
 
+import re
 from typing import Any
 
 from pydantic import BaseModel
@@ -37,6 +38,61 @@ def validate_annotation_payload(payload: dict) -> None:
     before_tokens = payload.get("before_tokens", [])
     if not isinstance(before_tokens, list):
         raise AnnotationPayloadError("before_tokens must be a list")
+
+
+def validate_canonical_annotation_payload(
+    payload: dict,
+    *,
+    start_token: int,
+    end_token: int,
+    token_count: int,
+) -> None:
+    """Validate the durable v2 contract used by current editor saves."""
+    validate_annotation_payload(payload)
+    if payload.get("schema_version") != 2:
+        raise AnnotationPayloadError("Canonical saves require payload schema_version 2")
+    correction_id = payload.get("client_correction_id")
+    if not isinstance(correction_id, str) or not correction_id.strip():
+        raise AnnotationPayloadError("Canonical corrections require client_correction_id")
+
+    before_tokens = payload.get("before_tokens") or []
+    if len(set(before_tokens)) != len(before_tokens):
+        raise AnnotationPayloadError("before_tokens must be unique")
+    before_indices: list[int] = []
+    for token_id in before_tokens:
+        match = re.fullmatch(r"base-(\d+)", str(token_id))
+        if not match:
+            raise AnnotationPayloadError("Canonical before_tokens must use base-N ids")
+        index = int(match.group(1))
+        if index >= token_count:
+            raise AnnotationPayloadError("before_tokens contains an out-of-range token id")
+        before_indices.append(index)
+
+    operation = payload["operation"]
+    if operation == "move":
+        move_from = payload.get("move_from")
+        move_to = payload.get("move_to")
+        move_len = payload.get("move_len")
+        if not all(isinstance(value, int) for value in (move_from, move_to, move_len)):
+            raise AnnotationPayloadError("Canonical moves require move_from, move_to, and move_len")
+        if move_len < 1 or move_from < 0 or move_from + move_len > token_count:
+            raise AnnotationPayloadError("Canonical move source is out of range")
+        if move_to < 0 or move_to > token_count:
+            raise AnnotationPayloadError("Canonical move destination is out of range")
+        if before_indices != list(range(move_from, move_from + move_len)):
+            raise AnnotationPayloadError("Canonical move before_tokens must match move source")
+        if start_token != move_to or end_token != move_to + move_len - 1:
+            raise AnnotationPayloadError("Canonical move span must match its destination")
+    elif operation in {"replace", "delete"}:
+        if not before_indices:
+            raise AnnotationPayloadError(f"Canonical {operation} requires before_tokens")
+        if start_token != min(before_indices) or end_token != max(before_indices):
+            raise AnnotationPayloadError(f"Canonical {operation} span must match before_tokens")
+    elif operation == "insert":
+        if start_token != end_token or start_token < 0 or start_token > token_count:
+            raise AnnotationPayloadError("Canonical insert position is out of range")
+    elif operation == "noop" and (before_tokens or payload.get("after_tokens")):
+        raise AnnotationPayloadError("Canonical noop payload must not contain token edits")
 
 
 def normalize_token_fragment(token: object) -> tuple:

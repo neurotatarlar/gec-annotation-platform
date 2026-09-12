@@ -107,6 +107,20 @@ def get_seed_ids():
         return text.id, et.id
 
 
+def test_development_cors_accepts_configurable_local_frontend_port(client):
+    response = client.request(
+        "OPTIONS",
+        "/api/auth/token",
+        headers={
+            "Origin": "http://localhost:4174",
+            "Access-Control-Request-Method": "POST",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://localhost:4174"
+
+
 def test_save_annotations_stores_snapshot_and_replacement(client):
     text_id, et_id = get_seed_ids()
     payload = {
@@ -483,7 +497,7 @@ def test_save_annotations_deletes_by_id(client):
         assert len(remaining) == 0
 
 
-def test_save_annotations_deletes_other_author_annotations(client):
+def test_save_annotations_cannot_delete_other_author_annotations(client):
     text_id, et_id = get_seed_ids()
     other_id = uuid.uuid4()
     with db.SessionLocal() as session:
@@ -510,10 +524,10 @@ def test_save_annotations_deletes_other_author_annotations(client):
     assert resp.status_code == 200, resp.text
     with db.SessionLocal() as session:
         remaining = session.query(Annotation).filter_by(id=ann_id).one_or_none()
-        assert remaining is None
+        assert remaining is not None
 
 
-def test_save_annotations_deletes_other_author_and_keeps_own(client):
+def test_save_annotations_preserves_other_author_and_keeps_own(client):
     text_id, et_id = get_seed_ids()
     other_id = uuid.uuid4()
     with db.SessionLocal() as session:
@@ -562,13 +576,13 @@ def test_save_annotations_deletes_other_author_and_keeps_own(client):
     resp = client.post(f"/api/texts/{text_id}/annotations", json=payload)
     assert resp.status_code == 200, resp.text
     with db.SessionLocal() as session:
-        assert session.query(Annotation).filter_by(id=other_ann.id).one_or_none() is None
+        assert session.query(Annotation).filter_by(id=other_ann.id).one_or_none() is not None
         kept = session.query(Annotation).filter_by(id=own_ann.id).one_or_none()
         assert kept is not None
         assert kept.replacement == "keep"
 
 
-def test_save_annotations_does_not_duplicate_other_author_entries(client):
+def test_save_annotations_keeps_an_independent_copy_of_submitted_entries(client):
     text_id, et_id = get_seed_ids()
     other_id = uuid.uuid4()
     with db.SessionLocal() as session:
@@ -626,10 +640,10 @@ def test_save_annotations_does_not_duplicate_other_author_entries(client):
         by_other = session.query(Annotation).filter_by(text_id=text_id, author_id=other_id).all()
         by_self = session.query(Annotation).filter_by(text_id=text_id, author_id=TEST_USER_ID).all()
         assert len(by_other) == 1
-        assert len(by_self) == 1
+        assert len(by_self) == 2
 
 
-def test_save_annotations_overwrites_other_author_on_change(client):
+def test_save_annotations_does_not_overwrite_other_author_on_change(client):
     text_id, et_id = get_seed_ids()
     other_id = uuid.uuid4()
     with db.SessionLocal() as session:
@@ -671,12 +685,12 @@ def test_save_annotations_overwrites_other_author_on_change(client):
     assert resp.status_code == 200, resp.text
     with db.SessionLocal() as session:
         anns = session.query(Annotation).filter_by(text_id=text_id).all()
-        assert len(anns) == 1
-        assert anns[0].author_id == TEST_USER_ID
-        assert anns[0].replacement == "hey"
+        assert len(anns) == 2
+        own = next(ann for ann in anns if ann.author_id == TEST_USER_ID)
+        assert own.replacement == "hey"
 
 
-def test_save_annotations_skips_other_author_when_id_matches_unchanged(client):
+def test_save_annotations_ignores_foreign_id_and_creates_own_copy(client):
     text_id, et_id = get_seed_ids()
     other_id = uuid.uuid4()
     with db.SessionLocal() as session:
@@ -718,15 +732,15 @@ def test_save_annotations_skips_other_author_when_id_matches_unchanged(client):
     }
     resp = client.post(f"/api/texts/{text_id}/annotations", json=payload)
     assert resp.status_code == 200, resp.text
-    assert resp.json() == []
+    assert len(resp.json()) == 1
     with db.SessionLocal() as session:
         by_other = session.query(Annotation).filter_by(text_id=text_id, author_id=other_id).all()
         by_self = session.query(Annotation).filter_by(text_id=text_id, author_id=TEST_USER_ID).all()
         assert len(by_other) == 1
-        assert len(by_self) == 0
+        assert len(by_self) == 1
 
 
-def test_save_annotations_overwrites_other_author_when_id_matches_change(client):
+def test_save_annotations_does_not_transfer_foreign_id_when_payload_changes(client):
     text_id, et_id = get_seed_ids()
     other_id = uuid.uuid4()
     with db.SessionLocal() as session:
@@ -770,16 +784,16 @@ def test_save_annotations_overwrites_other_author_when_id_matches_change(client)
     assert resp.status_code == 200, resp.text
     data = resp.json()
     assert len(data) == 1
-    assert data[0]["id"] == other_ann.id
+    assert data[0]["id"] != other_ann.id
     assert data[0]["author_id"] == str(TEST_USER_ID)
     with db.SessionLocal() as session:
         anns = session.query(Annotation).filter_by(text_id=text_id).all()
-        assert len(anns) == 1
-        assert anns[0].author_id == TEST_USER_ID
-        assert anns[0].replacement == "hey"
+        assert len(anns) == 2
+        own = next(ann for ann in anns if ann.author_id == TEST_USER_ID)
+        assert own.replacement == "hey"
 
 
-def test_save_annotations_prefers_exact_match_among_other_duplicates(client):
+def test_save_annotations_does_not_deduplicate_across_authors(client):
     text_id, et_id = get_seed_ids()
     other_a = uuid.uuid4()
     other_b = uuid.uuid4()
@@ -834,15 +848,15 @@ def test_save_annotations_prefers_exact_match_among_other_duplicates(client):
     }
     resp = client.post(f"/api/texts/{text_id}/annotations", json=payload)
     assert resp.status_code == 200, resp.text
-    assert resp.json() == []
+    assert len(resp.json()) == 1
     with db.SessionLocal() as session:
         by_self = session.query(Annotation).filter_by(text_id=text_id, author_id=TEST_USER_ID).all()
-        assert len(by_self) == 0
+        assert len(by_self) == 1
         by_other = session.query(Annotation).filter_by(text_id=text_id).all()
-        assert len(by_other) == 2
+        assert len(by_other) == 3
 
 
-def test_save_annotations_overwrites_first_non_matching_duplicate(client):
+def test_save_annotations_never_overwrites_foreign_duplicates(client):
     text_id, et_id = get_seed_ids()
     other_a = uuid.uuid4()
     other_b = uuid.uuid4()
@@ -901,11 +915,11 @@ def test_save_annotations_overwrites_first_non_matching_duplicate(client):
     assert resp.status_code == 200, resp.text
     with db.SessionLocal() as session:
         all_anns = session.query(Annotation).filter_by(text_id=text_id).order_by(Annotation.id).all()
-        assert len(all_anns) == 2
+        assert len(all_anns) == 3
         by_self = [ann for ann in all_anns if ann.author_id == TEST_USER_ID]
         assert len(by_self) == 1
         assert by_self[0].replacement == "hola"
-        assert by_self[0].id == ann_first.id
+        assert by_self[0].id not in {ann_first.id, ann_second.id}
 
 
 def test_save_annotations_conflicts_on_stale_version(client):

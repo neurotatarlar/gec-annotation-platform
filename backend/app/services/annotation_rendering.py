@@ -638,12 +638,29 @@ def apply_annotations(tokens: list[dict], annotations: list[object]) -> list[dic
                     {str(label) for label in moved_token.get("annotation_labels", [])} | {annotation_label}
                 )
                 if index == 0:
-                    moved_token["space_before"] = leading_space
+                    explicit_space = (
+                        after_fragments[0].get(
+                            "space_before",
+                            after_fragments[0].get("spaceBefore"),
+                        )
+                        if after_fragments and isinstance(after_fragments[0], dict)
+                        else None
+                    )
+                    moved_token["space_before"] = (
+                        explicit_space if isinstance(explicit_space, bool) else leading_space
+                    )
                 previous = moved_token.get("previous_tokens")
                 if not previous and history:
                     moved_token["previous_tokens"] = [_clone_token(item) for item in history]
                 moved.append(moved_token)
             working[insertion_index:insertion_index] = moved
+            following_index = insertion_index + len(moved)
+            if (
+                moved
+                and following_index < len(working)
+                and working[following_index].get("kind") not in {"empty", "punct"}
+            ):
+                working[following_index]["space_before"] = True
             move_target_by_id[move_id] = (move_to, move_to + max(1, len(moved)) - 1)
             if has_original_ids:
                 offset_deltas.append((move_from, 1 - move_len))
@@ -655,6 +672,16 @@ def apply_annotations(tokens: list[dict], annotations: list[object]) -> list[dic
         end_value = getattr(ann, "end_token", None)
         end_original = end_value if isinstance(end_value, int) else start_original
         target_start = clamp_index(start_original + offset_at(start_original))
+        if operation != "insert" and before_ids:
+            preferred = _find_preferred_range(
+                working,
+                before_ids,
+                original_index_by_id,
+                move_target_by_id,
+                start_original,
+            )
+            if preferred:
+                target_start = preferred[0]
         if operation == "insert":
             if not before_ids:
                 target_start = _find_insertion_index(

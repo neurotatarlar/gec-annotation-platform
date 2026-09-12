@@ -87,6 +87,7 @@ class TokenFragmentPayload(BaseModel):
 
 
 class AnnotationDetailPayload(BaseModel):
+    schema_version: int = 1
     text_sha256: Optional[str] = None  # hash of the full source text to guard against drift
     operation: Literal["replace", "delete", "insert", "move", "noop"] = "replace"
     before_tokens: list[str] = Field(default_factory=list)
@@ -95,6 +96,10 @@ class AnnotationDetailPayload(BaseModel):
     text_tokens_sha256: Optional[str] = None
     note: Optional[str] = None
     source: Optional[str] = None  # e.g., "import", "manual"
+    client_correction_id: Optional[str] = None
+    move_from: Optional[int] = None
+    move_to: Optional[int] = None
+    move_len: Optional[int] = None
 
     model_config = ConfigDict(extra="allow")  # keep backward compatibility with arbitrary payloads
 
@@ -118,6 +123,10 @@ class AnnotationSaveRequest(BaseModel):
     annotations: list[AnnotationPayload]
     client_version: int = 0
     deleted_ids: list[int] = Field(default_factory=list)
+    schema_version: int = 1
+    replace_existing: bool = False
+    expected_target: Optional[str] = None
+    expected_target_sha256: Optional[str] = None
 
 
 class AnnotationRenderPayload(BaseModel):

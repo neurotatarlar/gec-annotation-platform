@@ -15,6 +15,8 @@
 - Prefer one normalized draft-correction representation and derive UI, sidebar, render payloads, and save payloads from it.
 - Keep annotation serialization and hydration symmetric: every saved annotation shape should round-trip through reload without changing meaning.
 - Keep operation semantics explicit: `replace`, `delete`, `insert`, `move`, and `noop` should not be inferred from visual styling alone.
+- Keep annotator correction sets independent. A save may replace the current annotator's full draft, but must not transfer, overwrite, or delete another annotator's rows.
+- New annotation writes must use the canonical v2 contract: deterministic `base-N` source identities, stable correction IDs, complete move coordinates, and verified source snapshots.
 - Avoid adding new localStorage-backed annotation state. Local storage is acceptable for small UI preferences only.
 - Add regression tests before changing token editing, spacing, move/delete/insert behavior, autosave, hydration, or submit flow.
 - For risky annotation changes, verify backend tests, frontend token editor tests, and a production frontend build before deployment.

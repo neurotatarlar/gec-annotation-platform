@@ -695,6 +695,11 @@ export const TokenEditor: React.FC<{
     annotationDeleteMap,
   });
 
+  const localCorrectedText = useMemo(
+    () => buildTextFromTokensWithBreaks(tokens, lineBreaks),
+    [tokens, lineBreaks]
+  );
+
   const { saveAnnotations } = useSaveController({
     tokens: history.present.tokens,
     buildAnnotationsPayload,
@@ -708,6 +713,7 @@ export const TokenEditor: React.FC<{
     setActionError,
     onSaveStatusChange,
     statusTrigger: lastDecision,
+    expectedTargetText: localCorrectedText,
   });
 
   const { handleSubmit, isSubmitting } = useAnnotationSubmitAction({
@@ -721,11 +727,6 @@ export const TokenEditor: React.FC<{
     setActionMessage,
     formatError,
   });
-
-  const localCorrectedText = useMemo(
-    () => buildTextFromTokensWithBreaks(tokens, lineBreaks),
-    [tokens, lineBreaks]
-  );
 
   const {
     correctedText,

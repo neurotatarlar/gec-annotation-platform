@@ -13,9 +13,10 @@ from .annotation_payloads import (
     AnnotationPayloadError,
     derive_replacement,
     ensure_payload_dict,
-    payload_signature,
+    validate_canonical_annotation_payload,
     validate_annotation_payload,
 )
+from .annotation_rendering import render_corrected_text
 
 
 class AnnotationSaveError(ValueError):
@@ -34,21 +35,6 @@ def sha256_text(text: str) -> str:
 def sha256_tokens(tokens: list[str]) -> str:
     joined = "\u241f".join(tokens)  # unit separator to minimize collision with token text
     return sha256_text(joined)
-
-
-def annotation_matches(
-    candidate: Annotation,
-    expected_sig: tuple,
-    expected_replacement: str | None,
-    expected_error_type: int | None,
-) -> bool:
-    if (candidate.replacement or None) != (expected_replacement or None):
-        return False
-    if candidate.error_type_id != expected_error_type:
-        return False
-    candidate_payload = ensure_payload_dict(candidate.payload)
-    candidate_sig = payload_signature(candidate_payload, candidate.replacement)
-    return candidate_sig == expected_sig
 
 
 def ensure_payload_text_identity(payload: dict, text: TextSample) -> None:
@@ -79,6 +65,23 @@ def save_annotation_drafts(
     author_id: Any,
     request: AnnotationSaveRequest,
 ) -> list[Annotation]:
+    if request.schema_version == 2 and (
+        request.expected_target is not None or request.expected_target_sha256
+    ):
+        rendered_target = render_corrected_text(text.content or "", request.annotations)
+        target_differs = (
+            request.expected_target is not None and rendered_target != request.expected_target
+        )
+        hash_differs = (
+            request.expected_target_sha256 is not None
+            and sha256_text(rendered_target) != request.expected_target_sha256
+        )
+        if target_differs or hash_differs:
+            raise AnnotationSaveError(
+                409,
+                "Client and server corrected text differ. Reload the text before saving.",
+            )
+
     existing = (
         db.query(Annotation)
         .filter(Annotation.text_id == text.id, Annotation.author_id == author_id)
@@ -99,6 +102,7 @@ def save_annotation_drafts(
             db.query(Annotation)
             .filter(
                 Annotation.text_id == text.id,
+                Annotation.author_id == author_id,
                 Annotation.id.in_(deleted_ids),
             )
             .delete(synchronize_session=False)
@@ -113,17 +117,12 @@ def save_annotation_drafts(
         )
     existing_by_id = {annotation.id: annotation for annotation in existing}
     existing_by_span = {(annotation.start_token, annotation.end_token): annotation for annotation in existing}
-    other_existing = (
-        db.query(Annotation)
-        .filter(Annotation.text_id == text.id, Annotation.author_id != author_id)
-        .all()
-    )
-    other_by_id = {annotation.id: annotation for annotation in other_existing}
-    other_by_span: dict[tuple[int, int], list[Annotation]] = {}
-    for annotation in other_existing:
-        other_by_span.setdefault((annotation.start_token, annotation.end_token), []).append(annotation)
-    for group in other_by_span.values():
-        group.sort(key=lambda ann: ann.id)
+    existing_by_client_id = {
+        str((annotation.payload or {}).get("client_correction_id")): annotation
+        for annotation in existing
+        if (annotation.payload or {}).get("client_correction_id")
+    }
+    seen_client_ids: set[str] = set()
 
     for item in request.annotations:
         if item.id and item.id in deleted_ids:
@@ -131,6 +130,13 @@ def save_annotation_drafts(
         payload = ensure_payload_dict(item.payload)
         try:
             validate_annotation_payload(payload)
+            if request.schema_version == 2:
+                validate_canonical_annotation_payload(
+                    payload,
+                    start_token=item.start_token,
+                    end_token=item.end_token,
+                    token_count=len(payload.get("text_tokens") or []),
+                )
         except AnnotationPayloadError as exc:
             raise AnnotationSaveError(400, str(exc)) from exc
 
@@ -140,6 +146,13 @@ def save_annotation_drafts(
         annotation = None
         if item.id:
             annotation = existing_by_id.get(item.id)
+        client_correction_id = payload.get("client_correction_id")
+        if client_correction_id:
+            if client_correction_id in seen_client_ids:
+                raise AnnotationSaveError(400, "Duplicate client_correction_id in save request")
+            seen_client_ids.add(client_correction_id)
+            if not annotation:
+                annotation = existing_by_client_id.get(str(client_correction_id))
         if not annotation:
             annotation = existing_by_span.get((item.start_token, item.end_token))
 
@@ -153,47 +166,23 @@ def save_annotation_drafts(
             saved.append(annotation)
             continue
 
-        payload_sig = payload_signature(payload, replacement)
-        other_annotation = other_by_id.get(item.id) if item.id else None
-        if not other_annotation:
-            candidates = other_by_span.get((item.start_token, item.end_token), [])
-            if candidates:
-                match = next(
-                    (
-                        candidate
-                        for candidate in candidates
-                        if annotation_matches(candidate, payload_sig, replacement, item.error_type_id)
-                    ),
-                    None,
-                )
-                if match:
-                    continue
-                other_annotation = candidates[0]
-        if other_annotation:
-            if annotation_matches(other_annotation, payload_sig, replacement, item.error_type_id):
-                continue
-            other_annotation.author_id = author_id
-            other_annotation.start_token = item.start_token
-            other_annotation.end_token = item.end_token
-            other_annotation.replacement = replacement
-            other_annotation.payload = payload
-            other_annotation.error_type_id = item.error_type_id
-            other_annotation.version += 1
-            annotation = other_annotation
-            existing_by_id[annotation.id] = annotation
-            existing_by_span[(annotation.start_token, annotation.end_token)] = annotation
-        else:
-            annotation = Annotation(
-                text_id=text.id,
-                author_id=author_id,
-                start_token=item.start_token,
-                end_token=item.end_token,
-                replacement=replacement,
-                payload=payload,
-                error_type_id=item.error_type_id,
-            )
-            db.add(annotation)
+        annotation = Annotation(
+            text_id=text.id,
+            author_id=author_id,
+            start_token=item.start_token,
+            end_token=item.end_token,
+            replacement=replacement,
+            payload=payload,
+            error_type_id=item.error_type_id,
+        )
+        db.add(annotation)
         saved.append(annotation)
+
+    if request.schema_version == 2 and request.replace_existing:
+        retained_ids = {annotation.id for annotation in saved if annotation.id is not None}
+        for annotation in existing:
+            if annotation.id not in retained_ids and annotation not in saved:
+                db.delete(annotation)
 
     db.flush()
     for ann in saved:

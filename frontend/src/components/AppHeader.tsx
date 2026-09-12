@@ -18,6 +18,7 @@ interface Profile {
   username: string;
   full_name?: string | null;
   id?: string;
+  role?: string;
 }
 
 export const AppHeader = () => {
@@ -180,6 +181,14 @@ export const AppHeader = () => {
         >
           {t("common.settings")}
         </Link>
+        {profile?.role === "admin" || profile?.role === "manager" ? (
+          <Link
+            to="/repair-review"
+            className="rounded-lg border border-slate-600 px-4 py-2 text-sm text-slate-100 hover:border-emerald-400 hover:text-emerald-100"
+          >
+            Repair review
+          </Link>
+        ) : null}
         <button
           className="rounded-lg border border-emerald-500/60 px-4 py-2 text-sm font-semibold text-emerald-100 hover:bg-emerald-500/10"
           onClick={() => setShowExport(true)}

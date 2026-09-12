@@ -75,7 +75,7 @@ Use either the native path (`make install` then `make up`) or the Docker path (`
 
 ## Database & migrations
 - Alembic migrations live in `backend/alembic/`; run `alembic -c alembic.ini upgrade head` whenever the schema changes.
-- `20240903_02_seed_error_types.py` and `20240903_04_seed_error_type_hotkeys.py` seed the default error palette and hotkeys—keep them applied for a usable UI.
+- `20240903_02_seed_error_types.py` and `20240903_04_seed_error_type_hotkeys.py` seed the original default palette. `20260812_02_sync_production_error_types.py` replaces those definitions with the ID-stable VPS taxonomy. It relocates only recognized legacy `noop`/`CapitalLowerLetter` references before upserting, and is a no-op when the production taxonomy is already present.
 - The FastAPI app also calls `Base.metadata.create_all` for convenience; migrations are still the source of truth for schema and seed data.
 
 ## Admin CLI
@@ -112,6 +112,13 @@ From `backend/` (venv activated) or remotely with `--database-url`:
 - Export annotations:  
   `python -m app.cli export-annotations output/annotations.json`
 
+Current editor saves use annotation payload schema v2. Source token identities are deterministic
+(`base-N`), moves include `move_from`, `move_to`, and `move_len`, and each correction has a stable
+`client_correction_id`. The backend treats each annotator's draft as an independent full snapshot;
+it never transfers or deletes another annotator's rows. Legacy payloads remain readable so that old
+submissions can be audited and repaired, but category exports should not be published until legacy
+rows have passed the repair workflow below.
+
 ## Submitted dataset export
 - `GET /api/texts/export` exports the latest submitted annotation task for each selected text.
 - Use `category_ids=3` to restrict the export to category 3. Multiple ids are comma-separated.
@@ -134,6 +141,128 @@ curl -sS -H "Authorization: Bearer $TOKEN" \
   -o submitted-category-3.m2.audit.json
 sha256sum submitted-category-3.m2
 ```
+
+## Reviewed legacy annotation repair
+
+The repair workflow never changes live annotations during candidate generation or review. It
+operates on the latest submitted task per category-3 text, stores local review decisions separately,
+and applies data only from a fully approved, content-addressed manifest.
+
+1. Deploy the repair-capable application normally, then download an immutable production snapshot:
+   ```bash
+   export DEPLOY_SSH_HOST=82.202.143.151
+   export DEPLOY_SSH_USER=root
+   export DEPLOY_SSH_KEY="$HOME/.ssh/sber_cloud_acc_1"
+   scripts/repair_workflow.sh snapshot output/category-3-repair-snapshot.json
+   ```
+2. Extract approval-time rows, project them through the frontend, verify exact rendering parity,
+   and build the deterministic proposal bundle locally:
+   ```bash
+   cd backend
+   ../.venv/bin/python -m app.cli build-repair-parity-input \
+     ../output/category-3-repair-snapshot.json \
+     -o ../output/category-3-approval-parity-input.json
+   cd ../frontend
+   ANNOTATION_PARITY_INPUT=../output/category-3-approval-parity-input.json \
+   ANNOTATION_PARITY_OUTPUT=../output/category-3-approval-frontend.json \
+     npm test -- --run src/components/AnnotationProductionParity.test.ts
+   cd ..
+   .venv/bin/python scripts/audit_annotation_parity.py \
+     output/category-3-approval-parity-input.json \
+     output/category-3-approval-frontend.json \
+     output/category-3-approval-parity-report.json \
+     --allow-mismatches-for-review
+   cd backend
+   ../.venv/bin/python -m app.cli build-repair-bundle \
+     ../output/category-3-repair-snapshot.json \
+     --frontend-projection ../output/category-3-approval-frontend.json \
+     --target-overrides ../output/category-3-reviewer-targets.json \
+     -o ../output/category-3-repair-bundle.json
+   ../.venv/bin/python -m app.cli audit-repair-bundle \
+     ../output/category-3-repair-bundle.json \
+     -o ../output/category-3-repair-audit.json
+   cd ..
+   ```
+   Omit `--target-overrides` until `category-3-reviewer-targets.json` contains reviewer-confirmed
+   complete targets.
+   Snapshot v2 restores each surviving annotation from its latest version at or before task
+   submission, excludes rows created later, and retains today's fingerprint as the apply lock.
+   Legacy coordinates are replayed in operation-creation order because the historical editor saved
+   positions in its changing token array. This replay uses token identities and edit chronology, not
+   linguistic guesses. Raw frontend/backend stored-row projections remain visible as evidence and
+   exact projection mismatches force low-confidence review.
+   The generator validates every proposal against annotation schema v2. Legacy operation graphs
+   that cannot be represented safely are rebuilt as source-to-target diffs, marked
+   `low` confidence with `diff_reconstructed`, and still require explicit review.
+   The audit report lists every text ID requiring uncertainty acknowledgement, label review,
+   projection review, or other low-confidence handling. Keep it with the snapshot and bundle.
+   Reviewer-confirmed complete targets belong in the optional target-overrides JSON so they survive
+   proposal regeneration. Changed operations remain blocked until their labels are confirmed.
+3. Start the local Docker environment, import the bundle, and ensure the reviewer is an admin:
+   ```bash
+   make docker-up
+   docker compose cp output/category-3-repair-bundle.json backend:/tmp/repair-bundle.json
+   docker compose exec backend python -m app.cli import-repair-bundle /tmp/repair-bundle.json
+   docker compose exec backend python -m app.cli set-user-role --username rinat --role admin
+   ```
+   Open `http://localhost:4173/repair-review`. The source, raw stored-row projections, historically
+   replayed submission render, and proposed repair are stacked vertically for direct comparison.
+   Projection mismatches show both backend and frontend raw projections. Records with post-submission activity
+   require explicit uncertainty acknowledgement because deleted rows cannot be ruled out.
+   `Skip for now` moves a pending item to the end of the
+   current filtered review queue without changing its backend status, so it remains pending and
+   appears again later. If a proposed render is wrong, double-click it or select `Edit proposal`,
+   edit the complete target, and save. The backend
+   rebuilds canonical v2 operations from the immutable source and verifies that they reproduce the
+   exact edited target. Changed operation labels are highlighted and must be explicitly saved before
+   approval. `Reset generated` restores revision 1. Every saved target, label update, and restore is
+   retained as an immutable proposal revision. `Approve` certifies the visible target, correction
+   boundaries, and labels; `Wrong` remains available for cases that cannot be repaired in place.
+
+   For native services when the default ports are occupied, use configurable ports; the frontend
+   API URL is wired automatically:
+   ```bash
+   make BACKEND_PORT=8001 FRONTEND_PORT=4174 up
+   ```
+4. If any proposals are wrong, download `Download review state` from the review page (or export it
+   by CLI), revise the repair algorithm, and pass that artifact into the next build. Approvals are
+   retained only where the candidate hash is unchanged; wrong and changed proposals reopen as
+   pending.
+   ```bash
+   docker compose exec backend python -m app.cli export-repair-review-state \
+     --batch-id BATCH_HASH -o /tmp/repair-review-state.json
+   docker compose cp backend:/tmp/repair-review-state.json output/repair-review-state.json
+   cd backend
+   ../.venv/bin/python -m app.cli build-repair-bundle \
+     ../output/category-3-repair-snapshot.json \
+     --previous-manifest ../output/repair-review-state.json \
+     -o ../output/category-3-repair-bundle-v2.json
+   cd ..
+   ```
+5. Once all records are approved, download the manifest from the review page or export it by CLI:
+   ```bash
+   docker compose exec backend python -m app.cli export-repair-manifest \
+     --batch-id BATCH_HASH -o /tmp/approved-repair.json
+   docker compose cp backend:/tmp/approved-repair.json output/approved-repair.json
+   ```
+6. Verify against the unchanged VPS database, then apply only after checking the displayed hash:
+   ```bash
+   scripts/repair_workflow.sh dry-run output/approved-repair.json
+   export REPAIR_CONFIRM_HASH=MANIFEST_HASH_FROM_DRY_RUN
+   scripts/repair_workflow.sh apply output/approved-repair.json
+   ```
+
+The apply command creates a database backup, verifies every task, source, annotation ID, version,
+and payload fingerprint, and aborts the complete batch on any mismatch. Application is atomic and
+records before/after annotation snapshots and M2 hashes plus a receipt. Re-export M2 and its audit
+sidecar after application; the new M2 hash must match the receipt and its target text must match the
+approved review manifest. Repair snapshots, bundles, manifests, and receipts belong under ignored
+`output/` and must not be committed.
+
+Current schema-v2 editor saves include the corrected text visible in the browser and its SHA-256
+when Web Crypto is available. The backend independently renders the submitted operations and
+rejects a mismatch before writing, in addition to validating stable `base-N` identities and
+complete operation coordinates.
 
 ## Payout reports API
 - Endpoint: `GET /api/reports/review-totals` (admin/manager token required).
@@ -162,6 +291,7 @@ curl -sS -H "Authorization: Bearer $TOKEN" \
 - Frontend: `cd frontend && npm test`
 - Backend: `cd backend && pytest` (after `pip install -r requirements-dev.txt`)
 - Deployment workflow orchestration: `make deploy-test` (uses mocked SSH/curl commands and does not contact the server)
+- CI also upgrades an empty PostgreSQL 15 database to Alembic head, reruns the latest data migration, and verifies that IDs `1`–`28` remain stable.
 
 ## Coding conventions
 - Python: 4-space indentation; Ruff enforces a 100-character line length in `backend/pyproject.toml`. Keep route handlers thin, keep Pydantic schemas typed, and move business logic into `backend/app/services/`.

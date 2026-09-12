@@ -54,7 +54,7 @@ export const useAnnotationsLoader = ({
         let promise = promiseRef.current;
         if (!promise || promiseTextIdRef.current !== textId) {
           promiseTextIdRef.current = textId;
-          promise = get(`/api/texts/${textId}/annotations`, { params: { all_authors: true } });
+          promise = get(`/api/texts/${textId}/annotations`);
           promiseRef.current = promise;
         }
         const res = await promise;

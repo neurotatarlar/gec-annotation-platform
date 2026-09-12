@@ -6,7 +6,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { MutableRefObject } from "react";
 
 import { AnnotationDraft, AnnotationSavePayload, SaveStatus } from "../types";
-import { shouldSkipSave } from "../components/TokenEditorModel";
+import { computeSha256, shouldSkipSave } from "../components/TokenEditorModel";
 
 type UseSaveControllerArgs = {
   tokens: unknown[];
@@ -22,6 +22,7 @@ type UseSaveControllerArgs = {
   onSaveStatusChange?: (status: SaveStatus) => void;
   statusTrigger?: unknown;
   autosaveDelayMs?: number;
+  expectedTargetText: string;
 };
 
 export const useSaveController = ({
@@ -38,6 +39,7 @@ export const useSaveController = ({
   onSaveStatusChange,
   statusTrigger,
   autosaveDelayMs = 800,
+  expectedTargetText,
 }: UseSaveControllerArgs) => {
   const [isAutosaving, setIsAutosaving] = useState(false);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
@@ -75,11 +77,18 @@ export const useSaveController = ({
     const payload: AnnotationSavePayload = {
       annotations,
       client_version: serverAnnotationVersion,
+      schema_version: 2,
+      replace_existing: true,
+      expected_target: expectedTargetText,
     };
     if (deletedIds.length) {
       payload.deleted_ids = deletedIds;
     }
     const request = (async () => {
+      const expectedTargetHash = await computeSha256(expectedTargetText);
+      if (expectedTargetHash) {
+        payload.expected_target_sha256 = expectedTargetHash;
+      }
       const response = await post(`/api/texts/${textId}/annotations`, payload);
       lastSavedSignatureRef.current = nextSignature;
       const items = Array.isArray(response.data) ? response.data : [];
@@ -109,6 +118,7 @@ export const useSaveController = ({
   }, [
     annotationIdMap,
     buildAnnotationsPayload,
+    expectedTargetText,
     lastSavedSignatureRef,
     post,
     serverAnnotationVersion,

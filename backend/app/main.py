@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .database import engine
 from .models import Base
-from .routers import auth, categories, dashboard, error_types, reports, texts
+from .routers import auth, categories, dashboard, error_types, repairs, reports, texts
 from .config import get_settings
 
 # Allow skipping table creation in test environments (e.g., sqlite without JSONB).
@@ -24,6 +24,8 @@ allow_origin_regex = None
 if any(origin == "*" for origin in allowed_origins):
     allow_origin_regex = ".*"
     allowed_origins = []
+elif settings.environment == "development":
+    allow_origin_regex = r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$"
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
@@ -40,6 +42,7 @@ app.include_router(error_types.router)
 app.include_router(texts.router)
 app.include_router(dashboard.router)
 app.include_router(reports.router)
+app.include_router(repairs.router)
 
 
 @app.get("/health")
