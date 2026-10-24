@@ -11,7 +11,6 @@ import { CategoriesPage } from "./pages/CategoriesPage";
 import { LoginPage } from "./pages/LoginPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { DashboardPage } from "./pages/DashboardPage";
-import { RepairReviewPage } from "./pages/RepairReviewPage";
 
 const PrivateLayout = () => {
   const { token } = useAuth();
@@ -36,7 +35,6 @@ function App() {
         <Route path="/dashboard" element={<DashboardPage />} />
         <Route path="/annotate/:textId" element={<AnnotationPage />} />
         <Route path="/settings" element={<SettingsPage />} />
-        <Route path="/repair-review" element={<RepairReviewPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

@@ -1,7 +1,7 @@
 """Synchronize error types with the production taxonomy.
 
 Revision ID: 20260812_02_sync_production_error_types
-Revises: 20260812_01_repair_proposal_revisions
+Revises: 20250603_01_nullable_annotation_error_type
 Create Date: 2026-08-12 12:00:00.000000
 """
 
@@ -14,7 +14,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 revision = "20260812_02_sync_production_error_types"
-down_revision = "20260812_01_repair_proposal_revisions"
+down_revision = "20250603_01_nullable_annotation_error_type"
 branch_labels = None
 depends_on = None
 
