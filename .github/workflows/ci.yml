@@ -185,8 +185,8 @@ jobs:
 
       - name: Upgrade and rerun production taxonomy migration
         run: |
-          alembic -c alembic.ini upgrade head
-          alembic -c alembic.ini downgrade 20250603_01_nullable_annotation_error_type
+          alembic -c alembic.ini upgrade 20260812_02_sync_production_error_types
+          alembic -c alembic.ini downgrade 20260812_01_repair_proposal_revisions
           alembic -c alembic.ini upgrade head
 
       - name: Verify production taxonomy

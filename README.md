@@ -76,6 +76,7 @@ Use either the native path (`make install` then `make up`) or the Docker path (`
 ## Database & migrations
 - Alembic migrations live in `backend/alembic/`; run `alembic -c alembic.ini upgrade head` whenever the schema changes.
 - `20240903_02_seed_error_types.py` and `20240903_04_seed_error_type_hotkeys.py` seed the original default palette. `20260812_02_sync_production_error_types.py` replaces those definitions with the ID-stable VPS taxonomy. It relocates only recognized legacy `noop`/`CapitalLowerLetter` references before upserting, and is a no-op when the production taxonomy is already present.
+- `20261024_01_drop_annotation_repair_tables.py` removes the four retired recovery tables and their review/audit data. Back up the database before upgrading. Historical migrations remain so existing databases can upgrade without restamping. This cleanup cannot be downgraded; restore a backup to recover the removed data.
 - The FastAPI app also calls `Base.metadata.create_all` for convenience; migrations are still the source of truth for schema and seed data.
 
 ## Admin CLI
