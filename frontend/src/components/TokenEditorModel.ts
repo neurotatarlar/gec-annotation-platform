@@ -19,6 +19,10 @@ export type Token = {
   kind: TokenKind;
   selected: boolean;
   spaceBefore?: boolean;
+  lineBreaksBefore?: number;
+  whitespaceBefore?: string;
+  insertionAnchor?: string[];
+  insertionIndex?: number;
   baseIndex?: number;
   previousTokens?: Token[];
   groupId?: string;
@@ -152,6 +156,8 @@ export const buildTokenFragment = (tok: Token): TokenFragmentPayload => {
   if (typeof tok.spaceBefore === "boolean") {
     fragment.space_before = tok.spaceBefore;
   }
+  if (typeof tok.lineBreaksBefore === "number") fragment.line_breaks_before = tok.lineBreaksBefore;
+  if (typeof tok.whitespaceBefore === "string") fragment.whitespace_before = tok.whitespaceBefore;
   return fragment;
 };
 
@@ -451,6 +457,16 @@ export const hydrateFromServerAnnotations = ({
   const baseTokens = snapshotTokens?.length
     ? buildTokensFromSnapshot(snapshotTokens, initialText)
     : tokenizeToTokens(initialText);
+  if (items.some(ann => serverPayload(ann).preserve_source_layout)) {
+    let cursor = 0;
+    baseTokens.forEach(token => {
+      const start = initialText.indexOf(token.text, cursor);
+      if (start < 0) throw new Error("Source layout snapshot does not match source");
+      token.lineBreaksBefore = (initialText.slice(cursor, start).match(/\n/g) ?? []).length;
+      token.whitespaceBefore = initialText.slice(cursor, start);
+      cursor = start + token.text.length;
+    });
+  }
   const originalById = new Map<string, Token>();
   const originalIndexById = new Map<string, number>();
   baseTokens.forEach((tok, idx) => {
@@ -487,7 +503,7 @@ export const hydrateFromServerAnnotations = ({
         sourceEnd = matchedRange.end;
         moveLen = sourceEnd - sourceStart + 1;
       }
-      const moveId = `move-${createId()}`;
+      const moveId = typeof payload.client_correction_id === "string" ? payload.client_correction_id : `move-${createId()}`;
 
       const rawMovedTokensFromPayload = afterRaw.length ? buildTokensFromFragments(afterRaw, "", undefined) : [];
       let useSourceSlice = hasOriginalIds || Boolean(matchedRange);
@@ -539,7 +555,7 @@ export const hydrateFromServerAnnotations = ({
         id: createId(),
         groupId: `move-dest-${moveId}`,
         moveId,
-        spaceBefore: idx === 0 ? leadingSpace : tok.spaceBefore,
+        spaceBefore: idx === 0 ? (readExplicitSpace(afterRaw[0]) ?? leadingSpace) : tok.spaceBefore,
         previousTokens: tok.previousTokens?.length
           ? cloneTokens(tok.previousTokens)
           : historyTokens.length
@@ -650,12 +666,12 @@ export const hydrateFromServerAnnotations = ({
             }));
           })()
         : [];
-    const previousBase = previousRaw.length ? previousRaw : mappedHistory.length ? mappedHistory : fallbackHistory;
+    const previousBase = normalizedOperation === "insert" ? [] : previousRaw.length ? previousRaw : mappedHistory.length ? mappedHistory : fallbackHistory;
     const previous =
       normalizedOperation === "insert" && previousBase.length === 0 ? [makeEmptyPlaceholder([])] : previousBase;
     const afterRaw = afterTokensPayload;
     const replacementText = ann?.replacement ? String(ann.replacement) : "";
-    const groupId = createId();
+    const groupId = typeof payload.client_correction_id === "string" ? payload.client_correction_id : createId();
     const cardType = ann?.error_type_id ?? null;
 
     const newTokens: Token[] = [];
@@ -670,6 +686,7 @@ export const hydrateFromServerAnnotations = ({
           groupId,
           selected: false,
           previousTokens: cloneTokens(previous),
+          ...(normalizedOperation === "insert" ? { insertionAnchor: beforeTokensPayload, insertionIndex: startOriginal } : {}),
         });
       });
     }
@@ -1204,7 +1221,13 @@ export const buildTokensFromFragments = (
     const origin = originOverride ?? (frag?.origin === "inserted" ? "inserted" : undefined);
     const explicitSpace = readExplicitSpace(frag);
     const baseTokens = tokenizeEditedText(text);
+    const layout = typeof (frag as TokenFragmentPayload).line_breaks_before === "number";
+    let textCursor = 0;
     baseTokens.forEach((tok, idx) => {
+      const textStart = text.indexOf(tok.text, textCursor);
+      const gap = text.slice(textCursor, textStart);
+      const lineBreaks = (gap.match(/\n/g) ?? []).length;
+      textCursor = textStart + tok.text.length;
       let spaceBefore = tok.spaceBefore;
       if (idx === 0) {
         if (explicitSpace !== undefined) {
@@ -1223,6 +1246,10 @@ export const buildTokensFromFragments = (
         id: createId(),
         origin,
         spaceBefore,
+        ...(layout ? { lineBreaksBefore: idx === 0 ? (frag as TokenFragmentPayload).line_breaks_before : lineBreaks } : {}),
+        ...(typeof (frag as TokenFragmentPayload).whitespace_before === "string" ? {
+          whitespaceBefore: idx === 0 ? (frag as TokenFragmentPayload).whitespace_before : gap
+        } : {}),
       });
     });
   });
@@ -2006,7 +2033,30 @@ const reducer = (state: EditorHistoryState, action: Action): EditorHistoryState 
 
 export const tokenEditorReducer = reducer;
 
+export const explicitLineBreaks = (tokens: Token[]): number[] | null => {
+  if (!tokens.some(token => typeof token.lineBreaksBefore === "number")) return null;
+  const breaks: number[] = [];
+  let visible = 0;
+  tokens.forEach(token => {
+    if (token.kind === "empty") return;
+    for (let n = 0; n < (token.lineBreaksBefore ?? 0); n++) breaks.push(visible);
+    visible++;
+  });
+  return breaks;
+};
+
 const formatTokensWithBreaks = (tokens: Token[], breaks: number[] = []) => {
+  if (explicitLineBreaks(tokens) !== null) {
+    let result = "";
+    tokens.forEach(token => {
+      if (token.kind === "empty" || !token.text) return;
+      if (typeof token.whitespaceBefore === "string") result += token.whitespaceBefore;
+      else if (token.lineBreaksBefore) result += "\n".repeat(token.lineBreaksBefore);
+      else if (result && token.spaceBefore !== false) result += " ";
+      result += token.text;
+    });
+    return result;
+  }
   const breakCounts = new Map<number, number>();
   breaks.forEach((idx) => {
     breakCounts.set(idx, (breakCounts.get(idx) ?? 0) + 1);
@@ -2284,6 +2334,7 @@ export const buildDraftCorrectionsStandalone = async ({
       const replacement = afterFragments.length ? afterFragments.map((f) => f.text).join(" ").trim() : null;
       const payload: AnnotationDetailPayload = {
         schema_version: 2,
+        ...(originalTokens.some(t => typeof t.lineBreaksBefore === "number") ? { preserve_source_layout: true } : {}),
         text_sha256: textHash,
         text_tokens: textTokensSnapshot,
         text_tokens_sha256: textTokensHash ?? undefined,
@@ -2376,6 +2427,7 @@ export const buildDraftCorrectionsStandalone = async ({
     }
 
     const anchorIds =
+      operation === "insert" && currentVisible[0]?.insertionAnchor ? currentVisible[0].insertionAnchor :
       operation === "insert" && beforeIds.length === 0 && card.rangeStart > 0
         ? (() => {
             const anchorToken = tokens[card.rangeStart - 1];
@@ -2391,12 +2443,14 @@ export const buildDraftCorrectionsStandalone = async ({
       : payloadBeforeIds
           .map((id) => originalIndexById.get(id))
           .filter((idx): idx is number => idx !== undefined);
-    const insertionIndex = findInsertionIndex(card.rangeStart, card.rangeEnd);
+    const insertionIndex = operation === "insert" && currentVisible[0]?.insertionIndex !== undefined
+      ? currentVisible[0].insertionIndex : findInsertionIndex(card.rangeStart, card.rangeEnd);
     const spanStart = beforeIndices.length ? Math.min(...beforeIndices) : insertionIndex;
     const spanEnd = beforeIndices.length ? Math.max(...beforeIndices) : insertionIndex;
 
     const payload: AnnotationDetailPayload = {
       schema_version: 2,
+      ...(originalTokens.some(t => typeof t.lineBreaksBefore === "number") ? { preserve_source_layout: true } : {}),
       text_sha256: textHash,
       text_tokens: textTokensSnapshot,
       text_tokens_sha256: textTokensHash ?? undefined,

@@ -161,7 +161,17 @@ def resolve_tokens_snapshot_for_source(source: str, annotations: Iterable[object
             snapshot = [str(token) for token in maybe_tokens if token is not None]
             break
     if snapshot:
-        return build_tokens_from_snapshot(snapshot, source)
+        tokens = build_tokens_from_snapshot(snapshot, source)
+        if any(coerce_payload(getattr(ann, "payload", None)).get("preserve_source_layout") for ann in annotations):
+            cursor = 0
+            for token in tokens:
+                start = source.find(token["text"], cursor)
+                if start < 0:
+                    raise ValueError("Source layout snapshot does not match source")
+                token["line_breaks_before"] = source[cursor:start].count("\n")
+                token["whitespace_before"] = source[cursor:start]
+                cursor = start + len(token["text"])
+        return tokens
     return tokenize_to_tokens(source)
 
 
@@ -210,7 +220,13 @@ def build_tokens_from_fragments(
             if isinstance(frag.get("spaceBefore"), bool):
                 explicit_space = frag.get("spaceBefore")
         base_tokens = tokenize_edited_text(text)
+        layout = isinstance(frag, dict) and isinstance(frag.get("line_breaks_before"), int)
+        text_cursor = 0
         for idx, tok in enumerate(base_tokens):
+            text_start = text.index(tok["text"], text_cursor)
+            gap = text[text_cursor:text_start]
+            line_breaks = gap.count("\n")
+            text_cursor = text_start + len(tok["text"])
             space_before = tok["space_before"]
             if idx == 0:
                 if explicit_space is not None:
@@ -227,6 +243,8 @@ def build_tokens_from_fragments(
                     "kind": tok["kind"],
                     "space_before": space_before,
                     "origin": "inserted" if isinstance(frag, dict) and frag.get("origin") == "inserted" else None,
+                    **({"line_breaks_before": frag["line_breaks_before"] if idx == 0 else line_breaks} if layout else {}),
+                    **({"whitespace_before": frag["whitespace_before"] if idx == 0 else gap} if "whitespace_before" in frag else {}),
                 }
             )
     return built
@@ -241,6 +259,20 @@ def get_leading_space(tokens: list[dict], index: int) -> bool:
 
 
 def build_text_from_tokens_with_breaks(tokens: list[dict], breaks: list[int]) -> str:
+    if any("line_breaks_before" in token for token in tokens):
+        result = ""
+        for token in tokens:
+            if token.get("kind") == "empty" or not token.get("text"):
+                continue
+            count = token.get("line_breaks_before", 0)
+            if "whitespace_before" in token:
+                result += token["whitespace_before"]
+            elif count:
+                result += "\n" * count
+            elif result and token.get("space_before") is not False:
+                result += " "
+            result += token["text"]
+        return result
     break_counts: dict[int, int] = {}
     for idx in breaks:
         break_counts[idx] = break_counts.get(idx, 0) + 1
@@ -731,7 +763,7 @@ def apply_annotations(tokens: list[dict], annotations: list[object]) -> list[dic
             if count:
                 start_index = min(max(0, start_original), max(0, len(base_tokens) - count))
                 fallback_history = [_clone_token(token) for token in base_tokens[start_index : start_index + count]]
-        previous = previous_raw or mapped_history or fallback_history
+        previous = [] if operation == "insert" else previous_raw or mapped_history or fallback_history
         if operation == "insert" and not previous:
             previous = [{"id": create_id(), "text": "⬚", "kind": "empty", "previous_tokens": []}]
         replacement_text = getattr(ann, "replacement", None) or ""

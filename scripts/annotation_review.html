@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Annotation review</title>
+<style>
+:root{color-scheme:light;--ink:#213c36;--muted:#6c7770;--paper:#f7f6f1;--line:#dfE4da;--teal:#197365;--red:#a04d50;--amber:#95621a}
+*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:14px/1.5 system-ui,-apple-system,sans-serif}button,input,select,textarea{font:inherit}button,a,select{touch-action:manipulation}button{cursor:pointer;border:1px solid var(--line);border-radius:8px;padding:9px 14px;background:#fff;color:var(--ink);font-weight:600}button:hover{border-color:var(--teal);background:#f3faf6}button:disabled{opacity:.45;cursor:default}button:focus-visible,a:focus-visible,select:focus-visible,textarea:focus-visible{outline:3px solid #62b9a6;outline-offset:3px}a{color:var(--teal)}.primary{background:var(--teal);border-color:var(--teal);color:white}.primary:hover{background:#125d51;color:white}.ghost{background:transparent}.small{padding:6px 10px;font-size:12px}.shell{max-width:1600px;margin:auto;padding:30px 40px 100px}.top{display:flex;align-items:center;justify-content:space-between;gap:20px}.eyebrow{font-size:11px;font-weight:750;text-transform:uppercase;letter-spacing:.14em;color:var(--muted)}h1{font-size:30px;letter-spacing:-1px;margin:8px 0 4px;font-weight:650}h2{font-size:15px;margin:0}.subtitle{color:var(--muted);margin:0}.pill{display:inline-flex;align-items:center;gap:7px;background:#eaf0e7;padding:6px 11px;border-radius:30px;font-size:12px;white-space:nowrap}.dot{height:7px;width:7px;background:var(--teal);border-radius:50%}.toolbar{margin:25px 0 20px;display:flex;align-items:center;justify-content:space-between;gap:15px;padding-top:18px;border-top:1px solid var(--line)}.segmented{display:flex;gap:4px;padding:4px;background:#eaece4;border-radius:10px}.segmented button{border:0;background:transparent;padding:6px 12px;font-size:12px}.segmented button.active{background:white;box-shadow:0 1px 4px #143b2620}.legend{display:flex;gap:16px;color:var(--muted);font-size:12px}.swatch{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px}.workspace{display:grid;grid-template-columns:minmax(0,1fr) 350px;gap:22px;align-items:start}.panels{display:grid;grid-template-columns:1fr 1fr;gap:18px}.panel{background:white;border:1px solid var(--line);border-radius:14px;overflow:hidden}.panel-head{display:flex;align-items:center;justify-content:space-between;padding:17px 20px;border-bottom:1px solid var(--line);gap:10px}.panel-tag{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.08em}.proposed{border-top:3px solid var(--teal)}.passage{white-space:pre-wrap;overflow-wrap:anywhere;font-family:Georgia,"Times New Roman",serif;font-size:22px;line-height:1.95;padding:24px;margin:0;min-height:405px}.mark{border-radius:4px;cursor:pointer;box-decoration-break:clone;-webkit-box-decoration-break:clone;padding:2px 0}.before{background:#faeaea;color:#824445;text-decoration:line-through;text-decoration-color:#b6797b80}.after{background:#e2f2e6;color:#22573e}.mark.selected{outline:2px solid var(--teal);outline-offset:3px}.mark.pending{border-bottom:2px dashed #83a88a}.mark.rejected{background:#f0f1ed;text-decoration:none;color:var(--muted)}.pin{font:700 10px system-ui;vertical-align:super;background:#f2f0e8;border-radius:4px;margin:0 3px;padding:2px 4px;color:var(--teal);text-decoration:none;display:inline-block}.insertion{font:700 12px system-ui;padding:1px 4px;border:1px dashed #b58d55;background:#fff3db;color:#946324}.note-box{margin-top:18px;border:1px solid var(--line);border-radius:12px;padding:18px;background:#f0f1e9}.note-box label{font-weight:600;display:block;margin-bottom:8px}textarea,select{border:1px solid #cdd6ca;border-radius:8px;padding:10px;background:white;color:var(--ink);width:100%}textarea{resize:vertical;min-height:76px;line-height:1.6}.note-box textarea{min-height:65px;font-size:13px}.hint{font-size:12px;color:var(--muted);margin:8px 0 0}.sidebar{background:#fbfcf8;border:1px solid var(--line);border-radius:14px;overflow:hidden}.sidebar-title{padding:18px;border-bottom:1px solid var(--line)}.progress{height:4px;background:#e4e9df;border-radius:8px;margin-top:12px;overflow:hidden}.progress span{display:block;height:100%;background:var(--teal);transition:width .2s}.correction{padding:16px 18px;border-bottom:1px solid var(--line)}.correction:last-child{border:0}.correction.selected{background:white;box-shadow:inset 3px 0 var(--teal)}.correction-head{display:flex;align-items:flex-start;gap:10px;cursor:pointer;width:100%;background:none;border:0;border-radius:0;text-align:left;padding:0;font-weight:400}.correction-head:hover{background:none}.number{flex-shrink:0;width:24px;height:24px;border-radius:50%;display:grid;place-items:center;background:#ebeee5;color:#667463;font:600 12px system-ui}.selected .number{background:var(--teal);color:white}.correction-name{flex:1;min-width:0;font-weight:600;font-size:13px}.status-label{font-size:11px;color:var(--muted);margin-top:3px;font-weight:400}.status-label.accepted{color:var(--teal)}.status-label.rejected{color:var(--red)}.edit-detail{display:none;padding:15px 0 0}.selected .edit-detail{display:block}.field-label{font-size:11px;color:var(--muted);font-weight:650;display:block;margin:12px 0 5px}.edit-detail textarea{font:16px/1.6 Georgia,serif;min-height:64px}.old-span{font-family:Georgia,serif;font-size:16px;color:#8c5050;background:#fbefec;border-radius:6px;padding:9px;white-space:pre-wrap;overflow-wrap:anywhere}.edit-detail select{font-size:12px}.decision-buttons{display:flex;gap:8px;margin-top:14px}.decision-buttons button{flex:1;font-size:12px;padding:8px 4px}.decision-buttons .is-accepted{border-color:var(--teal);background:#e1f0e6;color:#1e6551}.decision-buttons .is-rejected{border-color:#bc7e7e;background:#faecea;color:#994c4c}.uncertain{background:#fff3d9;border:1px solid #eddbb3;border-radius:7px;padding:9px 11px;font-size:12px;color:#825d1f;margin-bottom:12px}.evidence{margin-top:12px;font-size:11px;color:var(--muted)}.evidence pre{white-space:pre-wrap;overflow-wrap:anywhere;font:11px/1.5 monospace}.footer{position:fixed;bottom:0;left:0;right:0;z-index:5;background:#fffffff2;backdrop-filter:blur(14px);border-top:1px solid var(--line)}.footer-inner{max-width:1600px;margin:auto;padding:14px 40px;display:flex;align-items:center;justify-content:space-between;gap:15px}.footer-actions{display:flex;gap:10px}.save-status{font-size:12px;color:var(--muted)}.save-status.error{color:#a03f3f}.kbd{font:10px monospace;padding:2px 5px;border:1px solid var(--line);border-radius:4px;background:white;color:var(--muted)}.empty{padding:60px;text-align:center}.overview{margin-top:16px;color:var(--muted);font-size:12px}.clean .before,.clean .after,.clean .rejected{background:transparent;color:inherit;text-decoration:none;border:0}.clean .pin,.clean .insertion{display:none}.clean .mark.selected{outline:0}.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)}
+.move-explanation{font-size:12px;color:var(--teal);background:#eaf4ef;border-radius:7px;padding:10px;margin:0 0 12px}
+.move-line{font:15px/1.8 Georgia,serif;overflow-wrap:anywhere;white-space:pre-wrap;background:#f6f7f2;border:1px solid var(--line);border-radius:7px;padding:10px}
+.move-line mark{background:#e0efdf;color:#22573e;border-radius:3px;padding:2px 0}
+.move-before mark{background:#f9e4e2;color:#824445;text-decoration:line-through}
+@media(min-width:1450px){.passage{font-size:24px}}@media(max-width:1150px){.panels{grid-template-columns:1fr}.passage{min-height:0;font-size:21px}.shell{padding:25px 24px 100px}.footer-inner{padding:14px 24px}}@media(max-width:760px){.workspace{grid-template-columns:1fr}.top{align-items:flex-start}h1{font-size:25px}.legend,.shortcut-help{display:none}.shell{padding:20px 15px 125px}.footer-inner{padding:12px 15px;flex-wrap:wrap}.footer-actions{margin-left:auto}.passage{padding:20px;font-size:20px}.top .pill{font-size:10px}.toolbar{margin-top:18px}.sidebar{order:-1}.edit-detail textarea{min-height:58px}}
+</style>
+</head>
+<body>
+<main class="shell" id="app">
+  <div class="top"><div><a href="/" class="eyebrow" style="text-decoration:none">Tatar GEC / Manual review</a><h1 id="title">Loading text…</h1><p class="subtitle" id="subtitle">Review the original intent, one correction at a time.</p></div><span class="pill"><span class="dot"></span><span id="state">Unconfirmed</span></span></div>
+  <div class="toolbar"><div class="segmented" aria-label="Text view"><button id="changes-view" class="active" aria-pressed="true">Show changes</button><button id="clean-view" aria-pressed="false">Clean text</button></div><div class="legend"><span><i class="swatch" style="background:#f4d5d5"></i>Original span</span><span><i class="swatch" style="background:#c9e6d0"></i>Proposed change</span><span>Dashed = awaiting review</span></div><div><button id="smaller" class="small ghost" aria-label="Smaller text">A−</button> <button id="larger" class="small ghost" aria-label="Larger text">A+</button></div></div>
+  <div class="workspace"><div><div class="panels" id="panels"><section class="panel"><div class="panel-head"><h2>Original text</h2><span class="panel-tag">Immutable source</span></div><p class="passage" id="source" lang="tt"></p></section><section class="panel proposed"><div class="panel-head"><h2>Corrected text</h2><span class="panel-tag" id="preview-tag">Proposal</span></div><p class="passage" id="target" lang="tt"></p></section></div><p class="overview">Click any highlighted span to inspect its correction. Rejected changes return to the original text.</p><div class="note-box"><label for="note">Review notes <span style="font-weight:400;color:var(--muted)">(optional)</span></label><textarea id="note" placeholder="Record a question or explain a decision…"></textarea><p class="hint" id="context"></p></div></div><aside class="sidebar" aria-label="Correction review"><div class="sidebar-title"><div style="display:flex;justify-content:space-between;gap:12px"><h2>Corrections</h2><span id="count" class="save-status"></span></div><div class="progress"><span id="progress" style="width:0"></span></div></div><div id="corrections"></div></aside></div>
+</main>
+<footer class="footer"><div class="footer-inner"><div><div class="save-status" id="save-status" role="status" aria-live="polite">Loading…</div><div class="hint shortcut-help"><span class="kbd">← →</span> Navigate &nbsp; <span class="kbd">A</span> Accept &nbsp; <span class="kbd">R</span> Reject &nbsp; <span class="kbd">Ctrl S</span> Save draft</div></div><div class="footer-actions"><button id="undo" class="ghost" disabled>Undo</button><button id="save">Save draft</button><button id="confirm" class="primary" disabled>Confirm text</button></div></div></footer>
+<script>
+'use strict';
+const textId=Number(location.pathname.match(/\/text\/(\d+)\.html/)[1]);
+const $=id=>document.getElementById(id);
+const esc=value=>String(value).replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+let data,caseHash,saved=null,edits=[],selected=0,dirty=false,saving=false,undo=[],fontSize=null;
+const snapshot=()=>({edits:structuredClone(edits),note:$('note').value,selected});
+function checkpoint(){undo.push(snapshot());if(undo.length>80)undo.shift();$('undo').disabled=false;}
+function setDirty(){dirty=true;$('state').textContent='Unsaved changes';$('save-status').className='save-status';$('save-status').textContent='Unsaved · save a draft to keep your work';}
+function savedEdits(corrections){
+  const byId=new Map(corrections.map(edit=>[edit.id,edit]));
+  if(corrections.length!==data.corrections.length||byId.size!==corrections.length||data.corrections.some(c=>!byId.has(c.id)))throw new Error('Saved correction IDs do not match this case');
+  return data.corrections.map(c=>structuredClone(byId.get(c.id)));
+}
+function caseSpans(){
+  return data.corrections.flatMap((c,index)=>[
+    {...c,index,primary:true},
+    ...(c.linked_removals||[]).map(span=>({...span,index,primary:false}))
+  ]).sort((a,b)=>a.start-b.start||a.end-b.end);
+}
+function targetText(){
+  const chars=Array.from(data.source);let result='',cursor=0;
+  caseSpans().forEach(c=>{
+    const edit=edits[c.index];
+    result+=chars.slice(cursor,c.start).join('')+(edit.status==='rejected'?chars.slice(c.start,c.end).join(''):c.primary?edit.replacement:'');
+    cursor=c.end;
+  });
+  return result+chars.slice(cursor).join('');
+}
+function renderPassages(){
+  const chars=Array.from(data.source);let source='',target='',cursor=0;
+  caseSpans().forEach(c=>{
+    const i=c.index,edit=edits[i],plain=esc(chars.slice(cursor,c.start).join(''));
+    const cls=`mark ${i===selected?'selected ':''}${edit.status}`;
+    const original=chars.slice(c.start,c.end).join('');
+    const moving=Boolean(data.corrections[i].linked_removals?.length);
+    const pin=`<sup class="pin">${i+1}${moving?' · '+(c.primary?'to':'from'):''}</sup>`;
+    const replacement=edit.status==='rejected'?original:c.primary?edit.replacement:'';
+    source+=plain+`<span class="${cls} before" data-index="${i}" tabindex="0" role="button" aria-label="Inspect correction ${i+1}">${original?esc(original):'<span class="insertion">+</span>'}${pin}</span>`;
+    target+=plain+`<span class="${cls} after" data-index="${i}" tabindex="0" role="button" aria-label="Inspect correction ${i+1}">${esc(replacement)||`<span class="insertion">${moving?(c.primary?'not inserted':'moved from here'):'deleted'}</span>`}${pin}</span>`;
+    cursor=c.end;
+  });
+  const rest=esc(chars.slice(cursor).join(''));$('source').innerHTML=source+rest;$('target').innerHTML=target+rest;
+  const resolved=edits.filter(e=>e.status!=='pending').length;
+  $('count').textContent=`${resolved} / ${edits.length} reviewed`;
+  $('progress').style.width=`${edits.length?resolved/edits.length*100:100}%`;
+  $('confirm').disabled=saving||resolved!==edits.length;
+  $('confirm').title=resolved!==edits.length?'Accept or reject every correction first':'Confirm this target and its labels';
+  $('preview-tag').textContent=resolved===edits.length?'Reviewed preview':'Proposal';
+  data.corrections.forEach((c,i)=>{const context=$(`move-context-${i}`);if(context)context.innerHTML=moveComparison(c,i);});
+}
+function moveComparison(c,i){
+  const chars=Array.from(data.source);
+  const spans=[{...c,primary:true},...c.linked_removals.map(span=>({...span,primary:false}))]
+    .sort((a,b)=>a.start-b.start||a.end-b.end);
+  let start=Math.min(...spans.map(span=>span.start));
+  let end=Math.max(...spans.map(span=>span.end));
+  while(start>0&&!/[.!?\n]/.test(chars[start-1]))start--;
+  while(start<chars.length&&/\s/.test(chars[start]))start++;
+  while(end<chars.length&&!/[.!?\n]/.test(chars[end]))end++;
+  if(end<chars.length)end++;
+  function line(apply){
+    let result='',cursor=start;
+    spans.forEach(span=>{
+      result+=esc(chars.slice(cursor,span.start).join(''));
+      const original=chars.slice(span.start,span.end).join('');
+      const text=apply?(span.primary?edits[i].replacement:''):original;
+      result+=text?(apply===span.primary?`<mark>${esc(text)}</mark>`:esc(text)):'';
+      cursor=span.end;
+    });
+    return result+esc(chars.slice(cursor,end).join(''));
+  }
+  return `<p class="move-explanation">Word move: the text can stay identical while its position changes.</p>
+    <div class="field-label">BEFORE — ORIGINAL POSITION</div><div class="move-line move-before" lang="tt">${line(false)}</div>
+    <div class="field-label">AFTER — PROPOSED POSITION</div><div class="move-line move-after" lang="tt">${line(true)}</div>
+    <p class="hint">Only this move is applied here. The main preview combines all corrections.</p>`;
+}
+function renderCards(){
+  const labels=data.error_types.map(t=>`<option value="${t.id}">${esc(t.tt_name||t.en_name)} · ${esc(t.en_name)} (#${t.id})</option>`).join('');
+  $('corrections').innerHTML=data.corrections.map((c,i)=>{
+    const moving=Boolean(c.linked_removals?.length);
+    const original=moving?`<div id="move-context-${i}">${moveComparison(c,i)}</div>`:
+      `<label class="field-label">ORIGINAL</label><div class="old-span" lang="tt">${esc(c.original)||'∅ — insertion between words'}</div>`;
+    return `<section class="correction ${selected===i?'selected':''}" data-card="${i}">
+      <button class="correction-head" data-select="${i}" aria-expanded="${selected===i}">
+        <span class="number">${i+1}</span><span class="correction-name">${esc(c.title)}
+        <span class="status-label ${edits[i].status}" style="display:block">${edits[i].status==='pending'?'Awaiting your decision':edits[i].status==='accepted'?'✓ Accepted':'× Rejected'}</span></span>
+        <span style="color:var(--muted)">${selected===i?'−':'+'}</span>
+      </button>
+      <div class="edit-detail">
+        ${c.uncertainty?`<div class="uncertain">${esc(c.uncertainty)}</div>`:''}${original}
+        <label class="field-label" for="replacement-${i}">${moving?'MOVED TEXT':'REPLACEMENT'} <span style="font-weight:400">· editable</span></label>
+        <textarea id="replacement-${i}" data-replacement="${i}" lang="tt" spellcheck="false">${esc(edits[i].replacement)}</textarea>
+        <label class="field-label" for="label-${i}">ERROR TYPE</label><select id="label-${i}" data-label="${i}">${labels}</select>
+        <div class="decision-buttons">
+          <button data-decision="accepted" data-index="${i}" class="${edits[i].status==='accepted'?'is-accepted':''}" aria-pressed="${edits[i].status==='accepted'}">✓ Accept</button>
+          <button data-decision="rejected" data-index="${i}" class="${edits[i].status==='rejected'?'is-rejected':''}" aria-pressed="${edits[i].status==='rejected'}">× Reject</button>
+        </div>
+        <details class="evidence"><summary>Saved evidence</summary><pre>${esc(c.evidence||'Manually prepared proposal')}</pre></details>
+      </div>
+    </section>`;
+  }).join('');
+  edits.forEach((e,i)=>{$(`label-${i}`).value=String(e.error_type_id);});
+}
+function select(index){selected=(index+edits.length)%edits.length;renderCards();renderPassages();}
+function decide(index,status){
+  checkpoint();
+  edits[index].status=edits[index].status===status?'pending':status;
+  selected=index;
+  const advance=status==='accepted'&&edits[index].status==='accepted';
+  if(advance){
+    selected=-1;
+    for(let offset=1;offset<edits.length;offset++){
+      const next=(index+offset)%edits.length;
+      if(edits[next].status==='pending'){selected=next;break;}
+    }
+  }
+  setDirty();renderCards();renderPassages();
+  if(advance){
+    const next=selected<0?$('confirm'):$('corrections').querySelector(`[data-select="${selected}"]`);
+    next.focus({preventScroll:true});
+    next.scrollIntoView({block:'nearest',behavior:'smooth'});
+  }
+}
+async function save(state){if(saving||!data)return;saving=true;$('app').inert=true;$('undo').disabled=true;$('save').disabled=true;renderPassages();$('save-status').textContent='Saving locally…';try{const response=await fetch(`/api/cases/${textId}/decision`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({case_hash:caseHash,previous_revision:saved?.revision??null,state,corrections:edits,target:targetText(),note:$('note').value})});const body=await response.json();if(!response.ok)throw new Error(body.error||'Save failed');saved=body;edits=savedEdits(body.corrections);$('note').value=body.note;dirty=false;$('state').textContent=state==='confirmed'?'Confirmed locally':'Draft saved';$('save-status').className='save-status';$('save-status').textContent=`${state==='confirmed'?'Confirmed':'Draft saved'} locally · revision ${body.revision} · ${new Date(body.saved_at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}`;renderCards();}catch(error){$('save-status').className='save-status error';$('save-status').textContent=error.message;}finally{saving=false;$('app').inert=false;$('undo').disabled=!undo.length;$('save').disabled=false;renderPassages();}}
+async function init(){try{const response=await fetch(`/api/cases/${textId}`);const body=await response.json();if(!response.ok)throw new Error(body.error);data=body.case;caseHash=body.case_hash;saved=body.saved;if(saved&&saved.case_hash!==caseHash)throw new Error('This case changed since its saved review. Ask Codex to reconcile it before editing.');edits=saved?savedEdits(saved.corrections):data.corrections.map(c=>({id:c.id,status:'pending',replacement:c.replacement,error_type_id:c.error_type_id}));$('note').value=saved?.note||'';$('title').textContent=`Text ${textId}`;document.title=`Text ${textId} · Annotation review`;$('subtitle').textContent=`${data.ordinal} of ${data.total} texts · ${edits.length} saved corrections · click a change to inspect it`;$('context').textContent=data.context||'';$('state').textContent=saved?(saved.state==='confirmed'?'Confirmed locally':'Draft saved'):'Unconfirmed';$('save-status').textContent=saved?`Loaded saved ${saved.state} · revision ${saved.revision}`:'No decisions saved · your source snapshot is preserved';renderCards();renderPassages();}catch(error){$('app').innerHTML=`<div class="empty"><h1>Unable to open this case</h1><p>${esc(error.message)}</p></div>`;$('save-status').textContent='Review unavailable';$('save').disabled=true;}}
+$('corrections').addEventListener('click',event=>{const button=event.target.closest('button');if(!button)return;if(button.dataset.select!==undefined)select(Number(button.dataset.select));else if(button.dataset.decision)decide(Number(button.dataset.index),button.dataset.decision);});
+$('corrections').addEventListener('input',event=>{const input=event.target;if(input.dataset.replacement!==undefined){checkpoint();const i=Number(input.dataset.replacement);edits[i].replacement=input.value;edits[i].status='pending';setDirty();renderPassages();const card=$('corrections').querySelector(`[data-card="${i}"]`);card.querySelector('.status-label').textContent='Awaiting your decision';card.querySelector('.status-label').className='status-label';card.querySelectorAll('[data-decision]').forEach(b=>{b.className='';b.setAttribute('aria-pressed','false');});}});
+$('corrections').addEventListener('change',event=>{if(event.target.dataset.label!==undefined){checkpoint();const i=Number(event.target.dataset.label);edits[i].error_type_id=Number(event.target.value);edits[i].status='pending';setDirty();renderCards();renderPassages();}});
+$('panels').addEventListener('click',event=>{const mark=event.target.closest('[data-index]');if(mark)select(Number(mark.dataset.index));});
+$('panels').addEventListener('keydown',event=>{const mark=event.target.closest('[data-index]');if(mark&&(event.key==='Enter'||event.key===' ')){event.preventDefault();select(Number(mark.dataset.index));}});
+$('note').addEventListener('input',setDirty);
+$('save').onclick=()=>save('draft');$('confirm').onclick=()=>save('confirmed');$('undo').onclick=()=>{const before=undo.pop();if(!before)return;edits=before.edits;selected=before.selected;$('note').value=before.note;setDirty();renderCards();renderPassages();$('undo').disabled=!undo.length;};
+function setClean(clean){$('panels').classList.toggle('clean',clean);$('clean-view').classList.toggle('active',clean);$('changes-view').classList.toggle('active',!clean);$('clean-view').setAttribute('aria-pressed',String(clean));$('changes-view').setAttribute('aria-pressed',String(!clean));}$('clean-view').onclick=()=>setClean(true);$('changes-view').onclick=()=>setClean(false);
+function resize(delta){fontSize=Math.max(16,Math.min(34,(fontSize||parseFloat(getComputedStyle($('source')).fontSize))+delta));document.querySelectorAll('.passage').forEach(p=>p.style.fontSize=`${fontSize}px`);}$('smaller').onclick=()=>resize(-2);$('larger').onclick=()=>resize(2);
+document.addEventListener('keydown',event=>{if(saving)return;if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='s'){event.preventDefault();save('draft');return;}if(event.target.closest('input,textarea,select')||!edits.length)return;if(event.key==='ArrowRight'){event.preventDefault();select(selected+1);}if(event.key==='ArrowLeft'){event.preventDefault();select(selected<0?edits.length-1:selected-1);}if(event.key.toLowerCase()==='a')decide(selected,'accepted');if(event.key.toLowerCase()==='r')decide(selected,'rejected');});
+window.addEventListener('beforeunload',event=>{if(dirty){event.preventDefault();event.returnValue='';}});
+init();
+</script>
+</body>
+</html>

@@ -595,3 +595,38 @@ def test_export_rejects_unknown_format(client):
     resp = client.get("/api/texts/export", params={"format": "csv"})
 
     assert resp.status_code == 422
+
+
+def test_annotation_review_requires_admin(client):
+    response = client.get('/api/texts/1/annotation-review')
+    assert response.status_code == 403
+
+
+def test_annotation_review_keeps_author_sets_separate_without_writing(client):
+    other_id = uuid.uuid4()
+    with db.SessionLocal() as session:
+        sample = session.query(TextSample).filter_by(content='hello world').one()
+        tid = sample.id
+        label = session.query(ErrorType).one()
+        session.add(User(id=other_id,username='other',password_hash='x',role='annotator',is_active=True))
+        session.add(AnnotationTask(text_id=tid,annotator_id=other_id,status='in_progress'))
+        session.add(Annotation(text_id=tid,author_id=other_id,start_token=1,end_token=1,
+            replacement='earth',error_type_id=label.id,payload={'operation':'replace',
+            'before_tokens':['base-1'],'text_tokens':['hello','world'],
+            'after_tokens':[{'id':'other-edit','text':'earth','origin':'inserted','space_before':True}]}))
+        session.commit()
+        before = [(a.id,a.author_id,a.version,a.payload)for a in session.query(Annotation).order_by(Annotation.id)]
+        before_tasks = [(t.id,t.status,t.updated_at)for t in session.query(AnnotationTask).order_by(AnnotationTask.id)]
+    app.dependency_overrides[get_current_user] = lambda: User(id=TEST_USER_ID,username='tester',password_hash='x',role='admin',is_active=True)
+    response = client.get(f'/api/texts/{tid}/annotation-review')
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data['default_author_id'] == str(TEST_USER_ID)
+    authors = {a['author_id']:a for a in data['authors']}
+    assert authors[str(TEST_USER_ID)]['target'] == 'hi world'
+    assert authors[str(other_id)]['target'] == 'hello earth'
+    assert authors[str(other_id)]['username'] == 'other'
+    assert authors[str(TEST_USER_ID)]['annotations'][0]['error_type_name'] == 'ART'
+    with db.SessionLocal() as session:
+        assert before == [(a.id,a.author_id,a.version,a.payload)for a in session.query(Annotation).order_by(Annotation.id)]
+        assert before_tasks == [(t.id,t.status,t.updated_at)for t in session.query(AnnotationTask).order_by(AnnotationTask.id)]

@@ -1,4 +1,17 @@
 {
+  "annotationReview": {
+    "viewAll": "Review all annotators",
+    "title": "Annotation review",
+    "readOnly": "Read-only · each author’s saved corrections are shown separately.",
+    "editMine": "Edit my annotations",
+    "author": "Annotator",
+    "refresh": "Refresh",
+    "original": "Original",
+    "corrected": "Corrected",
+    "corrections": "Corrections",
+    "empty": "No saved corrections in this set.",
+    "loadError": "Could not load saved annotations."
+  },
   "annotation": {
     "addToken": "Add token",
     "baseTokensTitle": "Original tokens",

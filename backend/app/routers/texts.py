@@ -43,9 +43,9 @@ from ..schemas.common import (
     TextImportResponse,
     TextRead,
 )
-from ..services.auth import get_current_user, get_db
+from ..services.auth import get_current_user, get_db, require_admin
 from ..services.annotation_payloads import summarize_annotations
-from ..services.annotation_rendering import build_export_record, render_corrected_text
+from ..services.annotation_rendering import build_export_record, render_corrected_text, resolve_label
 from ..services.annotation_saves import AnnotationSaveError, save_annotation_drafts
 from ..services.m2_export import M2ExportError, build_m2_export
 from ..services.annotation_submissions import (
@@ -287,6 +287,56 @@ def get_next_text(
     )
     db.commit()
     return TextAssignmentResponse(text=text, annotations=annotations, lock_expires_at=now + LOCK_DURATION)
+
+
+@router.get("/{text_id}/annotation-review")
+def review_annotations(
+    text_id: int,
+    db: Session = Depends(get_db),
+    _: object = Depends(require_admin),
+):
+    """Read each author's saved set independently, without creating or saving a draft."""
+    sample = db.get(TextSample, text_id)
+    if sample is None:
+        raise HTTPException(status_code=404, detail="Text not found")
+    annotations = (
+        db.query(Annotation)
+        .options(joinedload(Annotation.author), joinedload(Annotation.error_type))
+        .filter(Annotation.text_id == text_id)
+        .order_by(Annotation.id)
+        .all()
+    )
+    tasks = (
+        db.query(AnnotationTask)
+        .options(joinedload(AnnotationTask.annotator))
+        .filter(AnnotationTask.text_id == text_id)
+        .order_by(AnnotationTask.updated_at.desc(), AnnotationTask.id.desc())
+        .all()
+    )
+    users = {str(task.annotator_id): task.annotator for task in tasks}
+    users.update({str(ann.author_id): ann.author for ann in annotations})
+    tasks_by_author = {str(task.annotator_id): task for task in tasks}
+    default_author_id = next(
+        (str(task.annotator_id) for task in tasks if task.status == "submitted"),
+        str(annotations[0].author_id) if annotations else next(iter(users), None),
+    )
+    authors = []
+    for author_id, user in users.items():
+        rows = [ann for ann in annotations if str(ann.author_id) == author_id]
+        task = tasks_by_author.get(author_id)
+        authors.append({
+            "author_id": author_id,
+            "username": user.username,
+            "full_name": user.full_name,
+            "task_status": task.status if task else None,
+            "target": render_corrected_text(sample.content or "", rows),
+            "annotations": [
+                {**AnnotationRead.model_validate(ann).model_dump(mode="json"),
+                 "error_type_name": resolve_label(ann)} for ann in rows
+            ],
+        })
+    return {"text_id": text_id, "source": sample.content or "",
+            "default_author_id": default_author_id, "authors": authors}
 
 
 @router.get("/{text_id}/annotations", response_model=list[AnnotationRead])

@@ -7,6 +7,7 @@ import { useParams, useSearchParams } from "react-router-dom";
 
 import { useAuthedApi } from "../api/client";
 import { TokenEditor } from "../components/TokenEditor";
+import { AnnotationReviewPanel } from "../components/AnnotationReviewPanel";
 import { useI18n } from "../context/I18nContext";
 import { useSaveStatus } from "../context/SaveStatusContext";
 import { TextData } from "../types";
@@ -16,10 +17,10 @@ export const AnnotationPage: React.FC = () => {
   const { textId } = useParams();
   const api = useAuthedApi();
   const { t } = useI18n();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const focusActionParam = searchParams.get("focusAction");
   const focusAction = focusActionParam === "skip" || focusActionParam === "trash" || focusActionParam === "submit" ? focusActionParam : undefined;
-  const { data: profile } = useQuery<{ id: string }>({
+  const { data: profile, isLoading: profileLoading, isError: profileError } = useQuery<{ id: string; role?: string }>({
     queryKey: ["me"],
     queryFn: async () => {
       const response = await api.get("/api/auth/me");
@@ -42,23 +43,32 @@ export const AnnotationPage: React.FC = () => {
     return <p className="p-6 text-slate-200">{t("annotation.textTitle", { id: "?" })}</p>;
   }
 
-  if (isLoading) {
+  if (isLoading || profileLoading) {
     return <p className="p-6 text-slate-200">{t("common.loading")}</p>;
   }
 
-  if (isError || !data) {
+  if (isError || profileError || !data || !profile) {
     return <p className="p-6 text-rose-200">Failed to load text.</p>;
   }
 
-  return (
+  if ((profile.role === "admin" || profile.role === "manager") && searchParams.get("mode") !== "edit") {
+    return <AnnotationReviewPanel key={data.id} textId={data.id} />;
+  }
+
+  return <>
+    {(profile.role === "admin" || profile.role === "manager") && <button
+      className="mb-3 self-start rounded-lg border border-slate-600 px-3 py-2 text-slate-100"
+      onClick={() => { const params = new URLSearchParams(searchParams); params.delete("mode"); setSearchParams(params); }}>
+      {t("annotationReview.viewAll")}
+    </button>}
     <AnnotationScreen
       textId={data.id}
       categoryId={data.category_id}
       content={data.content}
       highlightAction={focusAction}
-      currentUserId={profile?.id}
+      currentUserId={profile.id}
     />
-  );
+  </>;
 };
 
 export default AnnotationPage;

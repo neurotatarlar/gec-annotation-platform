@@ -258,3 +258,31 @@ def test_canonical_full_snapshot_replaces_only_current_author_rows():
         assert own[0].replacement == "hi"
         assert own[0].payload["client_correction_id"] == "correction-1"
         assert len(foreign_rows) == 1
+
+
+def test_canonical_same_span_corrections_keep_their_client_identity():
+    with db.SessionLocal() as session:
+        text, error_type = seed_text(session)
+        rows = []
+        for cid, value in [('first', 'hi'), ('second', 'hey')]:
+            payload = canonical_payload(correction_id=cid)
+            payload['after_tokens'][0]['text'] = value
+            row = Annotation(text_id=text.id, author_id=AUTHOR_ID, start_token=0,
+                             end_token=0, replacement=value, error_type_id=error_type.id,
+                             payload=payload)
+            session.add(row)
+            rows.append(row)
+        session.commit()
+        ids = [row.id for row in rows]
+        request_rows = []
+        for cid, value in [('first', 'hello'), ('second', 'greetings')]:
+            payload = canonical_payload(correction_id=cid)
+            payload['after_tokens'][0]['text'] = value
+            # An older span-keyed frontend map can point both corrections at the same id.
+            request_rows.append(dict(id=ids[1], start_token=0, end_token=0,
+                                     replacement=value, error_type_id=error_type.id, payload=payload))
+        request = AnnotationSaveRequest(schema_version=2, replace_existing=True,
+                                        annotations=request_rows)
+        saved = save_annotation_drafts(session, text, AUTHOR_ID, request)
+        assert [row.id for row in saved] == ids
+        assert [row.replacement for row in saved] == ['hello', 'greetings']

@@ -118,6 +118,14 @@ Current editor saves use annotation payload schema v2. Source token identities a
 `client_correction_id`. The backend treats each annotator's draft as an independent full snapshot;
 it never transfers or deletes another annotator's rows. Legacy payloads remain readable for auditing old submissions.
 
+## Reviewing other annotators
+
+Administrators and managers opening `/annotate/:textId` see a read-only review panel by default.
+It loads `/api/texts/:textId/annotation-review`, keeps each author's saved set separate, and
+selects the latest submitted set initially. The author selector shows other saved sets with
+their corrected text and error types. Reviewing never saves, submits, or transfers annotations.
+“Edit my annotations” opens the signed-in user's independent editor with `?mode=edit`.
+
 ## Submitted dataset export
 - `GET /api/texts/export` exports the latest submitted annotation task for each selected text.
 - Use `category_ids=3` to restrict the export to category 3. Multiple ids are comma-separated.
@@ -145,6 +153,64 @@ Current schema-v2 editor saves include the corrected text visible in the browser
 when Web Crypto is available. The backend independently renders the submitted operations and
 rejects a mismatch before writing, in addition to validating stable `base-N` identities and
 complete operation coordinates.
+
+For restored annotations that must preserve literal paragraph layout, payloads may set
+`preserve_source_layout: true`. Source gaps are then hydrated from the verified source snapshot;
+after-token fragments carry `line_breaks_before` and optional literal `whitespace_before`.
+Both renderers preserve these fields through reload and canonical serialization, so adding or
+removing words does not relocate paragraph breaks by token count. Legacy payloads retain their
+existing rendering behavior. Run the backend annotation tests, frontend token editor tests,
+and a production frontend build before deploying changes to this contract.
+
+## Reviewed training snapshots
+
+A verified manual-review training package uses UTF-8 JSONL with `id`, `source`, `target`, and
+`corrections` per text. Each correction retains its reviewed error type and zero-based Unicode
+code-point source span (`start` inclusive, `end` exclusive). Move/compound corrections also carry
+`linked_removals`; applying the primary replacement and linked removals together must reproduce
+`target` exactly. This character-span format is distinct from the normal API export's token edits.
+
+Include only texts with at least one accepted correction, preserving rejected spans as original text.
+Select the confirmed text/author pairs explicitly: the normal submitted export omits texts with
+`trash` or `skipped` workflow states, which can include texts later confirmed during manual review.
+Compare the exported production source, target, and error types with the confirmed decisions,
+then independently apply the exported character edits to verify every target. JSONL preserves
+literal spacing and paragraph breaks; optional M2 conversion normalizes layout and may produce
+`OTHER` labels when alignment cannot preserve a unique error type. Keep its label-issue audit.
+Private cases, decisions, export packages, and verification reports remain in ignored `output/`.
+
+## Local manual annotation review
+
+For reviewing individual records together, run:
+
+```bash
+python scripts/annotation_review.py --data-dir output/manual-review --port 8765
+```
+
+Open `http://127.0.0.1:8765/`. Each prepared `cases/text-ID.json` has a separate `/text/ID.html`
+page with highlighted source spans, proposed replacements, editable error types, and per-correction
+review decisions. Cases contain explicit source character spans supplied during manual review;
+the tool does not infer historical intent. Accept opens the next undecided correction; after the last
+acceptance, the panel collapses and focuses Confirm text. Moves can link an insertion and source
+removal to one decision. Move cards show the original and proposed positions in sentence context,
+with matching From/To markers in the text panels. Accept or reject every correction before confirming a text.
+Drafts and confirmations are validated and saved by the local server under `decisions/`, with an
+immutable JSON copy of each revision under `history/`. Reload uses the saved response. The server
+binds to localhost, expires idle connections after two seconds so browser preconnections cannot
+block review pages, does not contact production, and does not modify the annotation database.
+Private case data and decisions stay under ignored `output/`. Run its focused checks with
+`python -m unittest discover -s scripts/tests -p 'test_annotation_review.py'` and
+`node scripts/tests/annotation_review_ui.test.mjs` (uses the frontend development dependencies).
+
+For assistant-assisted batch review, assess 25 source records per pass. Automatically confirm a
+whole text only when every saved correction has clear source evidence, meaning, operation, and
+error type. Leave the entire text as a draft with all corrections pending if any edit is uncertain;
+flag newly noticed unannotated errors for human review. Preserve existing confirmations and drafts.
+Record automatic confirmation explicitly in the decision note, validate all source spans and row
+coverage, and verify saved targets against their immutable revision history. Keep the local policy
+in `output/manual-review/review-policy.json` and batch reports and review links under
+`output/manual-review/batches/`. This workflow uses explicitly prepared cases and the existing
+save validator; it does not infer corrections automatically or write to the production database.
 
 ## Payout reports API
 - Endpoint: `GET /api/reports/review-totals` (admin/manager token required).

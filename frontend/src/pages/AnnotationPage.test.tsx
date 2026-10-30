@@ -75,3 +75,28 @@ describe("AnnotationPage", () => {
     });
   });
 });
+
+it("lets an admin review each author's corrections without mounting the editor or saving", async () => {
+  mockGet.mockReset();
+  mockPost.mockReset();
+  mockGet.mockImplementation((url: string) => {
+    if (url === '/api/auth/me') return Promise.resolve({data:{id:'rinat-id',role:'admin'}});
+    if (url === '/api/texts/1') return Promise.resolve({data:{id:1,category_id:3,content:'original'}});
+    if (url === '/api/texts/1/annotation-review') return Promise.resolve({data:{text_id:1,source:'original',default_author_id:'rafida-id',authors:[
+      {author_id:'rafida-id',username:'rafida',full_name:'Рәфидә',task_status:'submitted',target:'Rafida corrected',annotations:[{id:1,start_token:0,end_token:0,replacement:'Rafida corrected',error_type_name:'Spelling',payload:{operation:'replace',before_tokens:['base-0'],text_tokens:['original']}}]},
+      {author_id:'rinat-id',username:'rinat',full_name:'Ринат',task_status:'submitted',target:'Rinat corrected',annotations:[]}
+    ]}});
+    return Promise.resolve({data:[]});
+  });
+  mockPost.mockClear();
+  const client=new QueryClient({defaultOptions:{queries:{retry:false,gcTime:0}}});
+  renderWithClient(client,'/annotate/1?focusAction=submit');
+  await screen.findByText('Rafida corrected', {selector:'p'});
+  expect(screen.getByText('Spelling')).toBeInTheDocument();
+  const selector=screen.getByLabelText('annotationReview.author');
+  const {fireEvent}=await import('@testing-library/react');
+  fireEvent.change(selector,{target:{value:'rinat-id'}});
+  await screen.findByText('Rinat corrected');
+  expect(mockGet.mock.calls.some(([url])=>url==='/api/texts/1/annotations')).toBe(false);
+  expect(mockPost).not.toHaveBeenCalled();
+});

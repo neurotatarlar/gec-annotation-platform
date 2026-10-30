@@ -144,9 +144,11 @@ def save_annotation_drafts(
         replacement = derive_replacement(item.replacement, payload)
 
         annotation = None
-        if item.id:
-            annotation = existing_by_id.get(item.id)
         client_correction_id = payload.get("client_correction_id")
+        if request.schema_version == 2 and client_correction_id:
+            annotation = existing_by_client_id.get(str(client_correction_id))
+        if not annotation and item.id:
+            annotation = existing_by_id.get(item.id)
         if client_correction_id:
             if client_correction_id in seen_client_ids:
                 raise AnnotationSaveError(400, "Duplicate client_correction_id in save request")

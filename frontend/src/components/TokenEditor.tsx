@@ -49,6 +49,7 @@ import {
   Token,
   buildLineBreakMetadata,
   computeLineBreaksFromText,
+  explicitLineBreaks,
   deriveLineStartIndices,
   buildTextFromTokensWithBreaks,
   deriveCorrectionByIndex,
@@ -235,8 +236,8 @@ export const TokenEditor: React.FC<{
   }, [selection]);
   const [hasLoadedAnnotations, setHasLoadedAnnotations] = useState(false);
   const lineBreaks = useMemo(
-    () => computeLineBreaksFromText(initialText),
-    [initialText]
+    () => explicitLineBreaks(history.present.tokens) ?? computeLineBreaksFromText(initialText),
+    [initialText, history.present.tokens]
   );
   const { lineBreakCountMap } = useMemo(
     () => buildLineBreakMetadata(lineBreaks),
