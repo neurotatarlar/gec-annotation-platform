@@ -43,7 +43,7 @@ from ..schemas.common import (
     TextImportResponse,
     TextRead,
 )
-from ..services.auth import get_current_user, get_db, require_admin
+from ..services.auth import get_current_user, get_db
 from ..services.annotation_payloads import summarize_annotations
 from ..services.annotation_rendering import build_export_record, render_corrected_text, resolve_label
 from ..services.annotation_saves import AnnotationSaveError, save_annotation_drafts
@@ -293,7 +293,7 @@ def get_next_text(
 def review_annotations(
     text_id: int,
     db: Session = Depends(get_db),
-    _: object = Depends(require_admin),
+    _: object = Depends(get_current_user),
 ):
     """Read each author's saved set independently, without creating or saving a draft."""
     sample = db.get(TextSample, text_id)

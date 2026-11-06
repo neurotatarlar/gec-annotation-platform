@@ -23,6 +23,7 @@ type UseSaveControllerArgs = {
   statusTrigger?: unknown;
   autosaveDelayMs?: number;
   expectedTargetText: string;
+  enabled?: boolean;
 };
 
 export const useSaveController = ({
@@ -40,6 +41,7 @@ export const useSaveController = ({
   statusTrigger,
   autosaveDelayMs = 800,
   expectedTargetText,
+  enabled = true,
 }: UseSaveControllerArgs) => {
   const [isAutosaving, setIsAutosaving] = useState(false);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
@@ -49,6 +51,7 @@ export const useSaveController = ({
   const inFlightPromiseRef = useRef<Promise<void> | null>(null);
 
   const saveAnnotations = useCallback(async () => {
+    if (!enabled) return;
     const annotations = await buildAnnotationsPayload();
     const embeddedDeletedIds = Array.isArray((annotations as any).deleted_ids)
       ? ((annotations as any).deleted_ids as number[])
@@ -116,6 +119,7 @@ export const useSaveController = ({
       }
     }
   }, [
+    enabled,
     annotationIdMap,
     buildAnnotationsPayload,
     expectedTargetText,
@@ -127,7 +131,7 @@ export const useSaveController = ({
   ]);
 
   useEffect(() => {
-    if (process.env.NODE_ENV === "test") return;
+    if (!enabled || process.env.NODE_ENV === "test") return;
     if (!tokens.length) return;
     if (!autosaveInitializedRef.current) {
       autosaveInitializedRef.current = true;
@@ -157,7 +161,7 @@ export const useSaveController = ({
         window.clearTimeout(timer);
       }
     };
-  }, [autosaveDelayMs, formatError, saveAnnotations, setActionError, tokens]);
+  }, [enabled, autosaveDelayMs, formatError, saveAnnotations, setActionError, tokens]);
 
   const lastEmittedStatus = useRef<SaveStatus | null>(null);
   useEffect(() => {

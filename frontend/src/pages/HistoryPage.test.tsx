@@ -62,7 +62,7 @@ describe("HistoryPage", () => {
     expect(await screen.findByText("demo preview")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "history.open" }));
-    expect(mockNavigate).toHaveBeenCalledWith("/annotate/42");
+    expect(mockNavigate).toHaveBeenCalledWith("/annotate/42?view=review");
   });
 
   it("refresh button triggers refetch", async () => {

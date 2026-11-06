@@ -8,6 +8,7 @@ import { SelectionRange } from "./useEditorUIState";
 type DeleteRangeContext = { range: [number, number]; anchorIndex?: number };
 
 type UseTokenEditorKeyboardShortcutsArgs = {
+  enabled?: boolean;
   editingRange: SelectionRange | null;
   editText: string;
   selectionRef: RefObject<SelectionRange>;
@@ -34,6 +35,7 @@ const isEditableInputTarget = (target: HTMLElement | null) =>
   (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || (target as HTMLInputElement).isContentEditable);
 
 export const useTokenEditorKeyboardShortcuts = ({
+  enabled = true,
   editingRange,
   editText,
   selectionRef,
@@ -55,6 +57,7 @@ export const useTokenEditorKeyboardShortcuts = ({
   startEdit,
 }: UseTokenEditorKeyboardShortcutsArgs) => {
   useEffect(() => {
+    if (!enabled) return;
     const handler = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       const isInput = isEditableInputTarget(target);
@@ -155,7 +158,7 @@ export const useTokenEditorKeyboardShortcuts = ({
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [
-    beginEdit,
+    enabled,    beginEdit,
     cancelEdit,
     cancelFlag,
     closeClearConfirm,

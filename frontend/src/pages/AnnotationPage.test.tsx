@@ -91,12 +91,9 @@ it("lets an admin review each author's corrections without mounting the editor o
   mockPost.mockClear();
   const client=new QueryClient({defaultOptions:{queries:{retry:false,gcTime:0}}});
   renderWithClient(client,'/annotate/1?focusAction=submit');
-  await screen.findByText('Rafida corrected', {selector:'p'});
+  await screen.findByTestId('combined-token-review');
   expect(screen.getByText('Spelling')).toBeInTheDocument();
-  const selector=screen.getByLabelText('annotationReview.author');
-  const {fireEvent}=await import('@testing-library/react');
-  fireEvent.change(selector,{target:{value:'rinat-id'}});
-  await screen.findByText('Rinat corrected');
+  expect(screen.getByTestId('combined-token-review')).toBeInTheDocument();
   expect(mockGet.mock.calls.some(([url])=>url==='/api/texts/1/annotations')).toBe(false);
-  expect(mockPost).not.toHaveBeenCalled();
+  expect(mockPost.mock.calls.filter(([url])=>!url.endsWith('/render'))).toHaveLength(0);
 });

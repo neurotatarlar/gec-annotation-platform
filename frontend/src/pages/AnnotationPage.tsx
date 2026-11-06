@@ -7,7 +7,7 @@ import { useParams, useSearchParams } from "react-router-dom";
 
 import { useAuthedApi } from "../api/client";
 import { TokenEditor } from "../components/TokenEditor";
-import { AnnotationReviewPanel } from "../components/AnnotationReviewPanel";
+import { CombinedReviewEditor } from "../components/CombinedReviewEditor";
 import { useI18n } from "../context/I18nContext";
 import { useSaveStatus } from "../context/SaveStatusContext";
 import { TextData } from "../types";
@@ -16,6 +16,7 @@ import { TextData } from "../types";
 export const AnnotationPage: React.FC = () => {
   const { textId } = useParams();
   const api = useAuthedApi();
+  const { status } = useSaveStatus();
   const { t } = useI18n();
   const [searchParams, setSearchParams] = useSearchParams();
   const focusActionParam = searchParams.get("focusAction");
@@ -51,16 +52,16 @@ export const AnnotationPage: React.FC = () => {
     return <p className="p-6 text-rose-200">Failed to load text.</p>;
   }
 
-  if ((profile.role === "admin" || profile.role === "manager") && searchParams.get("mode") !== "edit") {
-    return <AnnotationReviewPanel key={data.id} textId={data.id} />;
+  if (searchParams.get("mode") !== "edit" && (searchParams.get("view") === "review" || focusAction)) {
+    return <CombinedReviewEditor key={data.id} textId={data.id} categoryId={data.category_id} source={data.content} currentUserId={profile.id} />;
   }
 
   return <>
-    {(profile.role === "admin" || profile.role === "manager") && <button
+    <button disabled={status?.unsaved || status?.state === "saving"}
       className="mb-3 self-start rounded-lg border border-slate-600 px-3 py-2 text-slate-100"
-      onClick={() => { const params = new URLSearchParams(searchParams); params.delete("mode"); setSearchParams(params); }}>
+      onClick={() => { const params = new URLSearchParams(searchParams); params.delete("mode"); params.set("view", "review"); setSearchParams(params); }}>
       {t("annotationReview.viewAll")}
-    </button>}
+    </button>
     <AnnotationScreen
       textId={data.id}
       categoryId={data.category_id}

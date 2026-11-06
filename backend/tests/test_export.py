@@ -597,9 +597,9 @@ def test_export_rejects_unknown_format(client):
     assert resp.status_code == 422
 
 
-def test_annotation_review_requires_admin(client):
+def test_annotation_review_is_available_to_annotators(client):
     response = client.get('/api/texts/1/annotation-review')
-    assert response.status_code == 403
+    assert response.status_code == 200
 
 
 def test_annotation_review_keeps_author_sets_separate_without_writing(client):

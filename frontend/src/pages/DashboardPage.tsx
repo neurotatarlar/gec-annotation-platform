@@ -451,7 +451,7 @@ export const DashboardPage = () => {
         <div className="table-cell px-3 py-2 align-middle text-right">
           <button
             type="button"
-            onClick={() => navigate(`/annotate/${item.text_id}${focusAction ? `?focusAction=${focusAction}` : ""}`)}
+            onClick={() => navigate(`/annotate/${item.text_id}?view=review${focusAction ? `&focusAction=${focusAction}` : ""}`)}
             className="rounded-lg border border-emerald-400/50 bg-emerald-500/10 px-3 py-1 text-xs font-semibold text-emerald-100 transition hover:border-emerald-300 hover:bg-emerald-500/20"
           >
             {t("history.open")}

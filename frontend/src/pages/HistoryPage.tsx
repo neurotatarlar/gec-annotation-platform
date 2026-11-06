@@ -81,7 +81,7 @@ export const HistoryPage = () => {
                   </div>
                   <button
                     className="rounded-lg border border-emerald-400/50 px-3 py-1 text-xs text-emerald-100"
-                    onClick={() => navigate(`/annotate/${item.text_id}`)}
+                    onClick={() => navigate(`/annotate/${item.text_id}?view=review`)}
                   >
                     {t("history.open")}
                   </button>

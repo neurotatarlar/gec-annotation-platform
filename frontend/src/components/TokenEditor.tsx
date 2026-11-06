@@ -3,6 +3,7 @@
  * Coordinates selection, drag-and-drop, hotkeys, and error type badges while rendering token
  * groups. Acts as the view layer over TokenEditorModel state and related hooks.
  */
+import { CombinedTokenReview, ReviewAuthor } from "./CombinedTokenReview";
 import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useLocation, useNavigate } from "react-router-dom";
@@ -97,6 +98,9 @@ export const TokenEditor: React.FC<{
   highlightAction?: "skip" | "trash" | "submit";
   currentUserId?: string | null;
   onSaveStatusChange?: (status: SaveStatus) => void;
+  reviewAuthors?: ReviewAuthor[];
+  reviewAnnotations?: any[];
+  readOnly?: boolean;
 }> = ({
   initialText,
   textId,
@@ -104,18 +108,29 @@ export const TokenEditor: React.FC<{
   highlightAction,
   currentUserId,
   onSaveStatusChange,
+  reviewAuthors, reviewAnnotations, readOnly = false,
 }) => {
   const { t, locale } = useI18n();
-  const { get, post } = useAuthedApi();
+  const api = useAuthedApi();
+  const get = useCallback((url: string, options?: any) => reviewAnnotations && url.endsWith('/annotations')
+    ? Promise.resolve({data:reviewAnnotations}) : api.get(url, options), [api.get, reviewAnnotations]);
+  const post = useCallback((url: string, payload?: any, options?: any) => {
+    if(readOnly && !url.endsWith('/render')) return Promise.reject(new Error('Read-only review'));
+    return api.post(url,payload,options);
+  },[api.post,readOnly]);
   const navigate = useNavigate();
   const location = useLocation();
   const queryClient = useQueryClient();
 
-  const [history, dispatch] = useReducer(tokenEditorReducer, {
+  const [history, editorDispatch] = useReducer(tokenEditorReducer, {
     past: [],
     present: { originalTokens: [], tokens: [], operations: [] },
     future: [],
   });
+
+  const dispatch = useCallback((action: any) => {
+    if(!readOnly || action.type === 'INIT_FROM_TEXT' || action.type === 'INIT_FROM_STATE') editorDispatch(action);
+  },[readOnly]);
 
   // Selection and editing UI state (kept outside history) is driven by a state machine.
   const {
@@ -456,7 +471,7 @@ export const TokenEditor: React.FC<{
     setLastDecision,
   });
 
-  const { beginEdit, commitEdit, cancelEdit } = useTokenInlineEdit({
+  const { beginEdit: editableBeginEdit, commitEdit, cancelEdit } = useTokenInlineEdit({
     tokens,
     hasSelection,
     selection,
@@ -523,6 +538,8 @@ export const TokenEditor: React.FC<{
       dispatch({ type: "MOVE_SELECTED_TOKENS", fromStart, fromEnd, toIndex }),
   });
 
+  const beginEdit: typeof editableBeginEdit = (...args) => { if (!readOnly) editableBeginEdit(...args); };
+
   const { handleTokenClick } = useTokenSelectionHandlers({
     tokens,
     selectionRef,
@@ -566,6 +583,7 @@ export const TokenEditor: React.FC<{
   });
 
   useTokenEditorKeyboardShortcuts({
+    enabled: !readOnly,
     editingRange,
     editText,
     selectionRef,
@@ -715,6 +733,7 @@ export const TokenEditor: React.FC<{
     onSaveStatusChange,
     statusTrigger: lastDecision,
     expectedTargetText: localCorrectedText,
+    enabled: !readOnly,
   });
 
   const { handleSubmit, isSubmitting } = useAnnotationSubmitAction({
@@ -784,10 +803,11 @@ export const TokenEditor: React.FC<{
 
   const handleTypePick = useCallback(
     (typeId: number) => {
+      if (readOnly) return;
       applyTypeToSelection(typeId);
       triggerTypeFlash(typeId);
     },
-    [applyTypeToSelection, triggerTypeFlash]
+    [readOnly, applyTypeToSelection, triggerTypeFlash]
   );
 
   useErrorTypeHotkeys(errorTypes, handleTypePick);
@@ -803,7 +823,7 @@ export const TokenEditor: React.FC<{
         <div style={mainColumnStyle}>
           {/* Token workspace */}
           <div style={workspaceStyle}>
-            <div style={actionBarStyle}>
+            <fieldset disabled={readOnly} style={{...actionBarStyle,border:0,margin:0,padding:0,minWidth:0}}>
               <div style={toolbarRowStyle}>
                 {toolbarButton(t("tokenEditor.undo"), performUndo, history.past.length === 0, "Ctrl+Z", "↺")}
                 {toolbarButton(t("tokenEditor.redo"), performRedo, history.future.length === 0, "Ctrl+Y", "↻")}
@@ -944,7 +964,7 @@ export const TokenEditor: React.FC<{
                   <option value="none">{t("common.none") ?? "None"}</option>
                 </select>
               </div>
-            </div>
+            </fieldset>
           </div>
           <div style={actionFeedbackStyle}>
             {(actionMessage || actionError) && (
@@ -1075,7 +1095,7 @@ export const TokenEditor: React.FC<{
           )}
         </div>
 
-        <TokenRow
+        {readOnly && reviewAuthors && reviewAuthors.length > 1 ? <CombinedTokenReview source={initialText} authors={reviewAuthors}/> : <TokenRow
           tokens={tokens}
           renderTokenGroups={renderTokenGroups}
           rowRef={tokenRowRef}
@@ -1083,8 +1103,8 @@ export const TokenEditor: React.FC<{
           showSpinner={isRenderPending}
           onDragOver={handleRowDragOver}
           onDrop={handleRowDrop}
-        />
-        <TokenEditorErrorTypePanel
+        />}
+        <fieldset disabled={readOnly} style={{border:0,padding:0,margin:0}}><TokenEditorErrorTypePanel
           groupedErrorTypes={groupedErrorTypes}
           errorTypesError={errorTypesError}
           isLoadingErrorTypes={isLoadingErrorTypes}
@@ -1093,7 +1113,7 @@ export const TokenEditor: React.FC<{
           onTypePick={handleTypePick}
           onOpenSettings={handleOpenSettings}
           t={t}
-        />
+        /></fieldset>
         </div>
 
       </div>

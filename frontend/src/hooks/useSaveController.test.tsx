@@ -100,3 +100,10 @@ describe("useSaveController", () => {
     process.env.NODE_ENV = originalEnv;
   });
 });
+
+it('never builds or posts a draft when review saving is disabled', async () => {
+ const build=vi.fn(async()=>[]);const post=vi.fn();
+ const h=renderHook(()=>useSaveController({enabled:false,tokens:['hello'],buildAnnotationsPayload:build,post,textId:1,serverAnnotationVersion:0,setServerAnnotationVersion:vi.fn(),annotationIdMap:{current:new Map()},lastSavedSignatureRef:{current:null},formatError:String,setActionError:vi.fn(),expectedTargetText:'hello'}));
+ await act(async()=>{await h.result.current.saveAnnotations();});
+ expect(build).not.toHaveBeenCalled();expect(post).not.toHaveBeenCalled();
+});
