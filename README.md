@@ -181,39 +181,6 @@ literal spacing and paragraph breaks; optional M2 conversion normalizes layout a
 `OTHER` labels when alignment cannot preserve a unique error type. Keep its label-issue audit.
 Private cases, decisions, export packages, and verification reports remain in ignored `output/`.
 
-## Local manual annotation review
-
-For reviewing individual records together, run:
-
-```bash
-python scripts/annotation_review.py --data-dir output/manual-review --port 8765
-```
-
-Open `http://127.0.0.1:8765/`. Each prepared `cases/text-ID.json` has a separate `/text/ID.html`
-page with highlighted source spans, proposed replacements, editable error types, and per-correction
-review decisions. Cases contain explicit source character spans supplied during manual review;
-the tool does not infer historical intent. Accept opens the next undecided correction; after the last
-acceptance, the panel collapses and focuses Confirm text. Moves can link an insertion and source
-removal to one decision. Move cards show the original and proposed positions in sentence context,
-with matching From/To markers in the text panels. Accept or reject every correction before confirming a text.
-Drafts and confirmations are validated and saved by the local server under `decisions/`, with an
-immutable JSON copy of each revision under `history/`. Reload uses the saved response. The server
-binds to localhost, expires idle connections after two seconds so browser preconnections cannot
-block review pages, does not contact production, and does not modify the annotation database.
-Private case data and decisions stay under ignored `output/`. Run its focused checks with
-`python -m unittest discover -s scripts/tests -p 'test_annotation_review.py'` and
-`node scripts/tests/annotation_review_ui.test.mjs` (uses the frontend development dependencies).
-
-For assistant-assisted batch review, assess 25 source records per pass. Automatically confirm a
-whole text only when every saved correction has clear source evidence, meaning, operation, and
-error type. Leave the entire text as a draft with all corrections pending if any edit is uncertain;
-flag newly noticed unannotated errors for human review. Preserve existing confirmations and drafts.
-Record automatic confirmation explicitly in the decision note, validate all source spans and row
-coverage, and verify saved targets against their immutable revision history. Keep the local policy
-in `output/manual-review/review-policy.json` and batch reports and review links under
-`output/manual-review/batches/`. This workflow uses explicitly prepared cases and the existing
-save validator; it does not infer corrections automatically or write to the production database.
-
 ## Payout reports API
 - Endpoint: `GET /api/reports/review-totals` (admin/manager token required).
 - Primary metric: `submitted_total` (count of `annotation_tasks` with `status='submitted'`).
