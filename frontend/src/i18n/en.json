@@ -1,8 +1,10 @@
 {
   "annotationReview": {
+    "alternatives": "Other versions",
+    "unplaced": "Saved position unavailable",
     "viewAll": "Review all annotators",
     "title": "Annotation review",
-    "readOnly": "Read-only · each author’s saved corrections are shown separately.",
+    "readOnly": "Read-only",
     "editMine": "Edit my annotations",
     "author": "Annotator",
     "refresh": "Refresh",

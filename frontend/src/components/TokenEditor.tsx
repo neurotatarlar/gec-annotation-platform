@@ -823,8 +823,8 @@ export const TokenEditor: React.FC<{
         <div style={mainColumnStyle}>
           {/* Token workspace */}
           <div style={workspaceStyle}>
-            <fieldset disabled={readOnly} style={{...actionBarStyle,border:0,margin:0,padding:0,minWidth:0}}>
-              <div style={toolbarRowStyle}>
+            <fieldset style={{...actionBarStyle,border:0,margin:0,padding:0,minWidth:0}}>
+              <div style={{...toolbarRowStyle,...(readOnly?{display:"none"}:{})}}>
                 {toolbarButton(t("tokenEditor.undo"), performUndo, history.past.length === 0, "Ctrl+Z", "↺")}
                 {toolbarButton(t("tokenEditor.redo"), performRedo, history.future.length === 0, "Ctrl+Y", "↻")}
                 {toolbarButton(t("tokenEditor.delete"), handleDeleteSelection, !hasSelectionTokens, "Del", "🗑️")}
@@ -1095,7 +1095,7 @@ export const TokenEditor: React.FC<{
           )}
         </div>
 
-        {readOnly && reviewAuthors && reviewAuthors.length > 1 ? <CombinedTokenReview source={initialText} authors={reviewAuthors}/> : <TokenRow
+        {readOnly && reviewAuthors && reviewAuthors.length > 0 ? <CombinedTokenReview source={initialText} authors={reviewAuthors} errorTypes={errorTypes} tokenFontSize={tokenFontSize} tokenGap={tokenGap} t={t}/> : <TokenRow
           tokens={tokens}
           renderTokenGroups={renderTokenGroups}
           rowRef={tokenRowRef}
@@ -1104,7 +1104,7 @@ export const TokenEditor: React.FC<{
           onDragOver={handleRowDragOver}
           onDrop={handleRowDrop}
         />}
-        <fieldset disabled={readOnly} style={{border:0,padding:0,margin:0}}><TokenEditorErrorTypePanel
+        <fieldset disabled={readOnly} style={{border:0,padding:0,margin:0,...(readOnly?{display:"none"}:{})}}><TokenEditorErrorTypePanel
           groupedErrorTypes={groupedErrorTypes}
           errorTypesError={errorTypesError}
           isLoadingErrorTypes={isLoadingErrorTypes}

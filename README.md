@@ -122,7 +122,8 @@ it never transfers or deletes another annotator's rows. Legacy payloads remain r
 
 All signed-in annotators can inspect saved corrections using the familiar token workspace.
 Manzara and history links open combined read-only review; overlapping author alternatives are
-stacked inline with names and error badges. The existing corrected-text preview shows the latest
+shown with the shared annotation chips and error badges. Identical edits are grouped; attribution
+and differing versions appear on hover or click. Manzara carries the opened author into review. The existing corrected-text preview shows the latest
 submitted author's version, without constructing a merged target. Newly assigned texts open the
 usual independent editor. The review/edit toggle switches between saved review and one's own
 annotations; review never saves or submits. Restored persistence and layout handling remain active.

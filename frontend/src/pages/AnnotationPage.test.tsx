@@ -92,7 +92,7 @@ it("lets an admin review each author's corrections without mounting the editor o
   const client=new QueryClient({defaultOptions:{queries:{retry:false,gcTime:0}}});
   renderWithClient(client,'/annotate/1?focusAction=submit');
   await screen.findByTestId('combined-token-review');
-  expect(screen.getByText('Spelling')).toBeInTheDocument();
+  expect(screen.getByTitle('Spelling')).toBeInTheDocument();
   expect(screen.getByTestId('combined-token-review')).toBeInTheDocument();
   expect(mockGet.mock.calls.some(([url])=>url==='/api/texts/1/annotations')).toBe(false);
   expect(mockPost.mock.calls.filter(([url])=>!url.endsWith('/render'))).toHaveLength(0);
