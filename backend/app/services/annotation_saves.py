@@ -3,6 +3,7 @@ Database workflow for saving annotation drafts.
 """
 
 import hashlib
+from copy import deepcopy
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -59,12 +60,21 @@ def ensure_payload_text_identity(payload: dict, text: TextSample) -> None:
         payload["text_tokens_sha256"] = sha256_tokens([str(t) for t in payload["text_tokens"]])
 
 
-def save_annotation_drafts(
+def _save_annotation_drafts(
     db: Session,
     text: TextSample,
     author_id: Any,
     request: AnnotationSaveRequest,
 ) -> list[Annotation]:
+    # Serialize saves for this source, including first saves where no annotation rows exist.
+    db.query(TextSample).filter(
+        TextSample.id == text.id
+    ).populate_existing().with_for_update().one()
+    requested_target = (
+        render_corrected_text(text.content or "", request.annotations)
+        if request.schema_version == 2
+        else None
+    )
     if request.schema_version == 2 and (
         request.expected_target is not None or request.expected_target_sha256
     ):
@@ -89,11 +99,17 @@ def save_annotation_drafts(
     )
     server_version = max((ann.version for ann in existing), default=0)
     client_version = request.client_version or 0
-    if client_version and client_version < server_version:
+    if (request.schema_version == 2 and existing and client_version != server_version) or (
+        request.schema_version != 2 and client_version and client_version < server_version
+    ):
         raise AnnotationSaveError(
             409,
             "Client version is stale. Reload annotations before saving.",
         )
+    # Empty drafts have no row carrying a revision. Preserve the browser's revision
+    # after clearing a draft so subsequent edits can continue without a reload.
+    if request.schema_version == 2 and not existing:
+        server_version = max(server_version, client_version)
 
     saved: list[Annotation] = []
     deleted_ids = set(request.deleted_ids or [])
@@ -116,16 +132,24 @@ def save_annotation_drafts(
             .all()
         )
     existing_by_id = {annotation.id: annotation for annotation in existing}
-    existing_by_span = {(annotation.start_token, annotation.end_token): annotation for annotation in existing}
+    existing_by_span = {
+        (annotation.start_token, annotation.end_token): annotation for annotation in existing
+    }
     existing_by_client_id = {
         str((annotation.payload or {}).get("client_correction_id")): annotation
         for annotation in existing
         if (annotation.payload or {}).get("client_correction_id")
     }
+    if request.schema_version == 2:
+        identities = [(a.payload or {}).get("client_correction_id") for a in existing]
+        identities = [cid for cid in identities if cid]
+        if len(identities) != len(set(identities)):
+            raise AnnotationSaveError(409, "Persisted correction identities are duplicated")
     seen_client_ids: set[str] = set()
+    expected_rows: dict[str, dict] = {}
 
     for item in request.annotations:
-        if item.id and item.id in deleted_ids:
+        if request.schema_version != 2 and item.id and item.id in deleted_ids:
             continue
         payload = ensure_payload_dict(item.payload)
         try:
@@ -145,18 +169,33 @@ def save_annotation_drafts(
 
         annotation = None
         client_correction_id = payload.get("client_correction_id")
-        if request.schema_version == 2 and client_correction_id:
-            annotation = existing_by_client_id.get(str(client_correction_id))
-        if not annotation and item.id:
-            annotation = existing_by_id.get(item.id)
         if client_correction_id:
             if client_correction_id in seen_client_ids:
                 raise AnnotationSaveError(400, "Duplicate client_correction_id in save request")
             seen_client_ids.add(client_correction_id)
+        if request.schema_version == 2:
+            annotation = existing_by_client_id.get(client_correction_id)
+            # Explicit ids may upgrade a legacy row, but cannot rename another v2 correction.
+            legacy = existing_by_id.get(item.id) if item.id else None
+            if not annotation and legacy and not (legacy.payload or {}).get("client_correction_id"):
+                if legacy in saved:
+                    raise AnnotationSaveError(409, "A legacy correction was referenced twice")
+                annotation = legacy
+            expected_rows[client_correction_id] = deepcopy(
+                {
+                    "start_token": item.start_token,
+                    "end_token": item.end_token,
+                    "replacement": replacement,
+                    "payload": payload,
+                    "error_type_id": item.error_type_id,
+                }
+            )
+        else:
+            annotation = existing_by_id.get(item.id) if item.id else None
+            if not annotation and client_correction_id:
+                annotation = existing_by_client_id.get(client_correction_id)
             if not annotation:
-                annotation = existing_by_client_id.get(str(client_correction_id))
-        if not annotation:
-            annotation = existing_by_span.get((item.start_token, item.end_token))
+                annotation = existing_by_span.get((item.start_token, item.end_token))
 
         if annotation:
             annotation.start_token = item.start_token
@@ -164,7 +203,9 @@ def save_annotation_drafts(
             annotation.replacement = replacement
             annotation.payload = payload
             annotation.error_type_id = item.error_type_id
-            annotation.version += 1
+            annotation.version = (
+                server_version + 1 if request.schema_version == 2 else annotation.version + 1
+            )
             saved.append(annotation)
             continue
 
@@ -176,6 +217,7 @@ def save_annotation_drafts(
             replacement=replacement,
             payload=payload,
             error_type_id=item.error_type_id,
+            version=server_version + 1 if request.schema_version == 2 else 1,
         )
         db.add(annotation)
         saved.append(annotation)
@@ -187,6 +229,39 @@ def save_annotation_drafts(
                 db.delete(annotation)
 
     db.flush()
+    if request.schema_version == 2:
+        persisted = (
+            db.query(Annotation)
+            .filter(Annotation.text_id == text.id, Annotation.author_id == author_id)
+            .populate_existing()
+            .all()
+        )
+        relevant = (
+            persisted
+            if request.replace_existing
+            else [a for a in persisted if a.id in {x.id for x in saved}]
+        )
+        actual_rows = {}
+        for row in relevant:
+            cid = (row.payload or {}).get("client_correction_id")
+            if cid in actual_rows:
+                raise AnnotationSaveError(409, "Persisted correction identities are duplicated")
+            actual_rows[cid] = {
+                key: getattr(row, key)
+                for key in ("start_token", "end_token", "replacement", "payload", "error_type_id")
+            }
+        if actual_rows != expected_rows:
+            raise AnnotationSaveError(409, "Persisted corrections differ from the save request")
+        target_rows = (
+            persisted
+            if request.replace_existing
+            or request.expected_target is not None
+            or request.expected_target_sha256
+            else relevant
+        )
+        actual_target = render_corrected_text(text.content or "", target_rows)
+        if actual_target != requested_target:
+            raise AnnotationSaveError(409, "Persisted corrected text differs from the save request")
     for ann in saved:
         db.add(
             AnnotationVersion(
@@ -204,3 +279,14 @@ def save_annotation_drafts(
 
     db.commit()
     return saved
+
+
+def save_annotation_drafts(
+    db: Session, text: TextSample, author_id: Any, request: AnnotationSaveRequest
+) -> list[Annotation]:
+    """Save atomically; validation failures must never leave a partial draft."""
+    try:
+        return _save_annotation_drafts(db, text, author_id, request)
+    except Exception:
+        db.rollback()
+        raise

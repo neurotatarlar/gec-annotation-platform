@@ -116,7 +116,9 @@ From `backend/` (venv activated) or remotely with `--database-url`:
 Current editor saves use annotation payload schema v2. Source token identities are deterministic
 (`base-N`), moves include `move_from`, `move_to`, and `move_len`, and each correction has a stable
 `client_correction_id`. The backend treats each annotator's draft as an independent full snapshot;
-it never transfers or deletes another annotator's rows. Legacy payloads remain readable for auditing old submissions.
+it never transfers or deletes another annotator's rows. V2 saves match stable correction identities,
+not source positions. Before committing, the backend reloads the persisted rows and verifies
+correction contents and corrected text; mismatches roll back the entire save. Legacy payloads remain readable for auditing old submissions.
 
 ## Reviewing other annotators
 
